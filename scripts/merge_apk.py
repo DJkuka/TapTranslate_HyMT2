@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -125,6 +126,162 @@ def patch_dispatcher(base: Path) -> None:
 
     path.write_text(text, encoding="utf-8")
 
+
+def patch_picker_callbacks(base: Path) -> None:
+    """Launch the SAF picker from all four real translation-engine selectors."""
+    specs = [
+        (
+            "smali_classes3/sh/l.smali",
+            "    :cond_0\n    const/4 p4, 0x1",
+            [
+                '    iget-object v1, p1, Lcom/tap_to_translate/snap_translate/domain/main/widgets/custom/WidgetChooseTranslation;->d:Ljava/util/ArrayList;',
+                '    invoke-virtual {v1, p3}, Ljava/util/ArrayList;->get(I)Ljava/lang/Object;',
+                '    move-result-object v1',
+                '    check-cast v1, Ljava/lang/String;',
+                '    const-string v2, "TapTranslateHyMT2"',
+                '    invoke-static {v2, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I',
+                '    const-string v2, "Hy-MT2 Offline"',
+                '    invoke-virtual {v1, v2}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z',
+                '    move-result v2',
+                '    if-eqz v2, :hymt2_picker_done_sh_l',
+                '    iget-object v3, p0, Lsh/l;->b:Lcom/tap_to_translate/snap_translate/domain/main/widgets/custom/WidgetChooseTranslation;',
+                '    invoke-virtual {v3}, Landroid/view/View;->getContext()Landroid/content/Context;',
+                '    move-result-object v3',
+                '    invoke-static {v3}, Lcom/tap_to_translate/snap_translate/hymt2/HyMT2Launcher;->openIfModelMissing(Landroid/content/Context;)V',
+                '    :hymt2_picker_done_sh_l',
+            ],
+            "WidgetChooseTranslation Spinner callback",
+        ),
+        (
+            "smali_classes3/mh/e.smali",
+            "    invoke-static {p1, v3}, Lqh/n;->b(Ljava/lang/Object;Ljava/lang/String;)V\n\n    sget-object v3, Lyh/h;->b:Ljava/util/HashSet;",
+            [
+                '    const-string v3, "TapTranslateHyMT2"',
+                '    invoke-static {v3, p1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I',
+                '    const-string v3, "Hy-MT2 Offline"',
+                '    invoke-virtual {p1, v3}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z',
+                '    move-result v3',
+                '    if-eqz v3, :hymt2_picker_done_mh_e',
+                '    iget-object v4, p0, Lmh/e;->b:Lmh/l;',
+                '    invoke-virtual {v4}, Landroidx/fragment/app/Fragment;->getContext()Landroid/content/Context;',
+                '    move-result-object v3',
+                '    invoke-static {v3}, Lcom/tap_to_translate/snap_translate/hymt2/HyMT2Launcher;->openIfModelMissing(Landroid/content/Context;)V',
+                '    :hymt2_picker_done_mh_e',
+            ],
+            "Language picker Fragment callback",
+        ),
+        (
+            "smali/a2/q0.smali",
+            "    invoke-static {p1, v4}, Lqh/n;->b(Ljava/lang/Object;Ljava/lang/String;)V\n\n    sget-object v4, Lyh/h;->b:Ljava/util/HashSet;",
+            [
+                '    const-string v4, "TapTranslateHyMT2"',
+                '    invoke-static {v4, p1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I',
+                '    const-string v4, "Hy-MT2 Offline"',
+                '    invoke-virtual {p1, v4}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z',
+                '    move-result v4',
+                '    if-eqz v4, :hymt2_picker_done_a2_q0',
+                '    invoke-static {v0}, Lcom/tap_to_translate/snap_translate/hymt2/HyMT2Launcher;->openIfModelMissing(Landroid/content/Context;)V',
+                '    :hymt2_picker_done_a2_q0',
+            ],
+            "SettingsServiceActivity provider callback",
+        ),
+        (
+            "smali_classes3/qh/f.smali",
+            "    invoke-static {p1, v6}, Lqh/n;->b(Ljava/lang/Object;Ljava/lang/String;)V\n\n    sget-object v6, Lyh/h;->b:Ljava/util/HashSet;",
+            [
+                '    const-string v6, "TapTranslateHyMT2"',
+                '    invoke-static {v6, p1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I',
+                '    const-string v6, "Hy-MT2 Offline"',
+                '    invoke-virtual {p1, v6}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z',
+                '    move-result v6',
+                '    if-eqz v6, :hymt2_picker_done_qh_f',
+                '    invoke-virtual {v2}, Landroid/view/View;->getContext()Landroid/content/Context;',
+                '    move-result-object v6',
+                '    invoke-static {v6}, Lcom/tap_to_translate/snap_translate/hymt2/HyMT2Launcher;->openIfModelMissing(Landroid/content/Context;)V',
+                '    :hymt2_picker_done_qh_f',
+            ],
+            "Language provider list callback",
+        ),
+    ]
+    for rel, anchor, lines, description in specs:
+        path = base / rel
+        if not path.exists():
+            raise RuntimeError(f"Missing picker callback source: {path}")
+        text = path.read_text(encoding="utf-8")
+        if "HyMT2Launcher;->openIfModelMissing" in text:
+            print(f"Picker callback already patched: {description}")
+            continue
+        if text.count(anchor) != 1:
+            raise RuntimeError(f"Expected exactly one picker insertion anchor for {description}; found {text.count(anchor)}")
+        insert = "\n".join(lines) + "\n"
+        if "\n\n" in anchor:
+            before, after = anchor.split("\n\n", 1)
+            replacement = before + "\n\n" + insert + "\n" + after
+        else:
+            before, after = anchor.split("\n", 1)
+            replacement = before + "\n" + insert + after
+        text = text.replace(anchor, replacement, 1)
+        path.write_text(text, encoding="utf-8")
+        print(f"Patched immediate Hy-MT2 picker launch: {description}")
+
+
+def patch_atomic_backport_shims(base: Path) -> None:
+    """Supply the two D8-generated CAS forwarding helpers referenced by coroutines."""
+    shims = {
+        "androidx/concurrent/futures/AbstractResolvableFuture$SafeAtomicHelper$$ExternalSyntheticBackportWithForwarding0.smali": '''.class public final Landroidx/concurrent/futures/AbstractResolvableFuture$SafeAtomicHelper$$ExternalSyntheticBackportWithForwarding0;
+.super Ljava/lang/Object;
+
+.method public static m(Ljava/util/concurrent/atomic/AtomicReferenceFieldUpdater;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z
+    .locals 1
+
+    invoke-virtual {p0, p1, p2, p3}, Ljava/util/concurrent/atomic/AtomicReferenceFieldUpdater;->compareAndSet(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z
+
+    move-result v0
+
+    return v0
+.end method
+''',
+        "androidx/lifecycle/LifecycleKt$$ExternalSyntheticBackportWithForwarding0.smali": '''.class public final Landroidx/lifecycle/LifecycleKt$$ExternalSyntheticBackportWithForwarding0;
+.super Ljava/lang/Object;
+
+.method public static m(Ljava/util/concurrent/atomic/AtomicReference;Ljava/lang/Object;Ljava/lang/Object;)Z
+    .locals 1
+
+    invoke-virtual {p0, p1, p2}, Ljava/util/concurrent/atomic/AtomicReference;->compareAndSet(Ljava/lang/Object;Ljava/lang/Object;)Z
+
+    move-result v0
+
+    return v0
+.end method
+''',
+    }
+    for rel, content in shims.items():
+        # Reuse a definition already present in any host DEX; otherwise add one to classes5.
+        existing = [directory / rel for directory in base.glob("smali*") if directory.is_dir() and (directory / rel).exists()]
+        if existing:
+            print(f"D8 CAS backport shim already supplied by host: {rel}")
+            continue
+        path = base / "smali_classes5" / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        print(f"Added D8 CAS backport shim: {rel}")
+
+    # Audit that every referenced D8 synthetic class has a corresponding definition.
+    descriptors: set[str] = set()
+    references: set[str] = set()
+    ref_re = re.compile(r"L([^;\s]+ExternalSynthetic[^;\s]*);")
+    class_re = re.compile(r"^\.class\s+.*?\s(L[^;]+);", re.MULTILINE)
+    for smali_root in base.glob("smali*"):
+        if not smali_root.is_dir():
+            continue
+        for smali_file in smali_root.rglob("*.smali"):
+            source = smali_file.read_text(encoding="utf-8", errors="ignore")
+            descriptors.update(value + ";" for value in class_re.findall(source))
+            references.update("L" + value + ";" for value in ref_re.findall(source))
+    missing = sorted(references - descriptors)
+    if missing:
+        raise RuntimeError("Unresolved D8 synthetic class references remain: " + ", ".join(missing))
+    print(f"Verified all {len(references)} referenced D8 synthetic classes are present")
 
 def patch_settings_click(base: Path) -> None:
     settings = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/activitys/SettingsServiceActivity.smali"
@@ -286,6 +443,7 @@ def copy_helper_payload(helper: Path, base: Path) -> None:
     if count == 0:
         raise RuntimeError("No Hy-MT2 runtime classes were found in the helper APK")
     print(f"Copied {count} smali classes to classes5.dex")
+    target_root = base / "smali_classes5"
 
     # Copy the prebuilt ARM64 native libraries from the AAR dependency.
     helper_lib = helper / "lib/arm64-v8a"
@@ -345,8 +503,10 @@ def main() -> int:
     run(["java", "-jar", str(args.apktool), "d", "-f", "-o", str(helper), str(args.helper_apk)])
 
     copy_helper_payload(helper, base)
+    patch_atomic_backport_shims(base)
     patch_engine_list(base)
     patch_dispatcher(base)
+    patch_picker_callbacks(base)
     patch_settings_click(base)
     patch_resources(base)
     patch_manifest(base)

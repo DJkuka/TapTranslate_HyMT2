@@ -1,4 +1,4 @@
-name: Build Tap Translate 1.125 with Hy-MT2
+name: Build Tap Translate 1.125 with Hy-MT2 (direct SAF)
 
 on:
   workflow_dispatch:
@@ -71,7 +71,7 @@ jobs:
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
-          name: TapTranslate-1.125-HyMT2-unsigned
+          name: TapTranslate-1.125-HyMT2-direct-SAF-unsigned
           path: build/out/TapTranslate_1.125_HyMT2_unsigned.apk
           if-no-files-found: error
           retention-days: 14
