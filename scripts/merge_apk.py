@@ -2,18 +2,97 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 ANDROID_NS = "http://schemas.android.com/apk/res/android"
 ET.register_namespace("android", ANDROID_NS)
 
 ENGINE_NAME = "Hy-MT2 Offline"
+
+# These belong to the user's verified FontFit/AutoFill base and must not be modified.
+# x9/e: existing OCR traineddata download/load path; qh/p: language list;
+# vh/j: OCR-engine routing; si/a: existing Google Offline model-package selection.
+PRESERVE_OCR_SMALI = (
+    "smali_classes2/x9/e.smali",
+    "smali_classes3/qh/p.smali",
+    "smali_classes3/vh/j.smali",
+    "smali_classes3/si/a.smali",
+)
+PRESERVE_METHOD = ("smali_classes3/yh/f.smali", r".method public final e(Ljava/lang/String;)V")
+METADATA_PATH = "res/raw/translate_models_metadata.json"
+TESSERACT_SO_PATH = "lib/arm64-v8a/libtesseract.so"
+
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+def snapshot_preserved_ocr(base: Path) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for rel in PRESERVE_OCR_SMALI:
+        path = base / rel
+        if not path.is_file():
+            raise RuntimeError(f"Verified base is missing OCR preservation file: {rel}")
+        result[rel] = sha256_bytes(path.read_bytes())
+    metadata = base / METADATA_PATH
+    if not metadata.is_file():
+        raise RuntimeError(f"Verified base is missing {METADATA_PATH}")
+
+    # yh/f is extended with a new dispatch branch, but its original Google Offline
+    # translation method must remain byte-for-byte the same method body.
+    host_file, method_header = PRESERVE_METHOD
+    host_text = (base / host_file).read_text(encoding="utf-8")
+    start = host_text.find(method_header)
+    if start < 0:
+        raise RuntimeError("Verified base is missing the original Google Offline method yh/f->e")
+    end = host_text.find(".end method", start)
+    if end < 0:
+        raise RuntimeError("Could not isolate original Google Offline method yh/f->e")
+    result[host_file + "#GoogleOfflineMethodE"] = sha256_bytes(host_text[start:end + len(".end method")].encode("utf-8"))
+    return result
+
+def assert_preserved_ocr(base: Path, before: dict[str, str]) -> None:
+    for rel, expected in before.items():
+        if "#GoogleOfflineMethodE" in rel:
+            host_file, _ = PRESERVE_METHOD
+            host_text = (base / host_file).read_text(encoding="utf-8")
+            start = host_text.find(PRESERVE_METHOD[1])
+            end = host_text.find(".end method", start)
+            actual = sha256_bytes(host_text[start:end + len(".end method")].encode("utf-8"))
+        else:
+            actual = sha256_bytes((base / rel).read_bytes())
+        if actual != expected:
+            raise RuntimeError(f"OCR/Offline downloader code was unexpectedly modified: {rel}")
+    print("Verified original OCR/language-download files and Google Offline translation method remain unchanged")
+
+def verify_final_host_payload(base_apk: Path, final_apk: Path) -> None:
+    """Ensure original language metadata, assets, and native OCR libraries survive merge."""
+    with zipfile.ZipFile(base_apk) as original, zipfile.ZipFile(final_apk) as built:
+        original_names = set(original.namelist())
+        built_names = set(built.namelist())
+        for rel in (METADATA_PATH, TESSERACT_SO_PATH):
+            if rel not in original_names or rel not in built_names:
+                raise RuntimeError(f"Original host payload missing after merge: {rel}")
+            if original.read(rel) != built.read(rel):
+                raise RuntimeError(f"Original host payload changed during merge: {rel}")
+
+        metadata = __import__("json").loads(built.read(METADATA_PATH))
+        if "PKG_LOW" not in metadata or "PKG_HIGH" not in metadata:
+            raise RuntimeError("Original Google Offline Translate PKG_LOW/PKG_HIGH metadata was not preserved")
+
+        for prefix in ("assets/", "lib/"):
+            source_entries = {n for n in original_names if n.startswith(prefix)}
+            for name in source_entries:
+                if name not in built_names or original.read(name) != built.read(name):
+                    raise RuntimeError(f"Original {prefix} payload changed or disappeared: {name}")
+    print("Verified final APK preserves original assets, native libraries, Tesseract and both Offline Translate model packages")
+
 ACTIVITY = "com.tap_to_translate.snap_translate.hymt2.HyMT2SettingsActivity"
 ROW_ID_NAME = "hymt2_model_manager_row"
 ROW_ID = "0x7f0a04f1"
@@ -502,6 +581,8 @@ def main() -> int:
     run(["java", "-jar", str(args.apktool), "d", "-f", "-o", str(base), str(args.base_apk)])
     run(["java", "-jar", str(args.apktool), "d", "-f", "-o", str(helper), str(args.helper_apk)])
 
+    preserved_ocr = snapshot_preserved_ocr(base)
+
     copy_helper_payload(helper, base)
     patch_atomic_backport_shims(base)
     patch_engine_list(base)
@@ -510,12 +591,14 @@ def main() -> int:
     patch_settings_click(base)
     patch_resources(base)
     patch_manifest(base)
+    assert_preserved_ocr(base, preserved_ocr)
 
     unaligned = args.work / "TapTranslate_HyMT2_unsigned_unaligned.apk"
     run(["java", "-jar", str(args.apktool), "b", str(base), "-o", str(unaligned)])
     args.output.parent.mkdir(parents=True, exist_ok=True)
     run([args.zipalign, "-f", "-p", "4", str(unaligned), str(args.output)])
     run([args.zipalign, "-c", "-p", "4", str(args.output)])
+    verify_final_host_payload(args.base_apk, args.output)
     print(f"Unsigned APK created: {args.output} ({args.output.stat().st_size} bytes)")
     return 0
 

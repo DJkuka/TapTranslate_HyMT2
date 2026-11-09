@@ -1,4 +1,4 @@
-name: Build Tap Translate 1.125 with Hy-MT2 (direct SAF)
+name: Build Tap Translate 1.125 FontFit AutoFill + Hy-MT2
 
 on:
   workflow_dispatch:
@@ -39,12 +39,14 @@ jobs:
 
       - name: Verify integration inputs
         run: |
-          test -s input/TapTranslate_1.125_Tesseract551_EnglishOCR_unsigned.apk
+          test -s input/TapTranslate_1.125_FontFit_AutoFill_unsigned.apk
           test -s tools/apktool.jar
           test -s scripts/merge_apk.py
-          python3 -m py_compile scripts/merge_apk.py
+          test -s scripts/verify_base_apk.py
+          python3 -m py_compile scripts/merge_apk.py scripts/verify_base_apk.py
+          python3 scripts/verify_base_apk.py input/TapTranslate_1.125_FontFit_AutoFill_unsigned.apk
           echo "Base APK SHA-256:"
-          sha256sum input/TapTranslate_1.125_Tesseract551_EnglishOCR_unsigned.apk
+          sha256sum input/TapTranslate_1.125_FontFit_AutoFill_unsigned.apk
 
       - name: Build Hy-MT2 runtime helper
         run: gradle --no-daemon :app:assembleDebug
@@ -52,26 +54,26 @@ jobs:
       - name: Merge Hy-MT2 runtime into the original Tap Translate APK
         run: |
           python3 scripts/merge_apk.py \
-            --base-apk input/TapTranslate_1.125_Tesseract551_EnglishOCR_unsigned.apk \
+            --base-apk input/TapTranslate_1.125_FontFit_AutoFill_unsigned.apk \
             --helper-apk app/build/outputs/apk/debug/app-debug.apk \
             --apktool tools/apktool.jar \
             --work build/merge \
-            --output build/out/TapTranslate_1.125_HyMT2_unsigned.apk \
+            --output build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk \
             --zipalign "$ANDROID_HOME/build-tools/35.0.0/zipalign"
 
       - name: Validate final unsigned APK
         run: |
-          unzip -t build/out/TapTranslate_1.125_HyMT2_unsigned.apk | tail -n 2
-          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -p 4 build/out/TapTranslate_1.125_HyMT2_unsigned.apk
+          unzip -t build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk | tail -n 2
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -p 4 build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
           echo "Final APK SHA-256:"
-          sha256sum build/out/TapTranslate_1.125_HyMT2_unsigned.apk
+          sha256sum build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
           echo "Final APK size:"
-          ls -lh build/out/TapTranslate_1.125_HyMT2_unsigned.apk
+          ls -lh build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
 
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
-          name: TapTranslate-1.125-HyMT2-direct-SAF-unsigned
-          path: build/out/TapTranslate_1.125_HyMT2_unsigned.apk
+          name: TapTranslate-1.125-FontFit-AutoFill-HyMT2-unsigned
+          path: build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
           if-no-files-found: error
           retention-days: 14
