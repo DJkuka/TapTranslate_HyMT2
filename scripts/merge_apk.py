@@ -17,13 +17,9 @@ ET.register_namespace("android", ANDROID_NS)
 
 ENGINE_NAME = "Hy-MT2 Offline"
 
-# These belong to the user's verified FontFit/AutoFill base and must not be modified.
-# x9/e: existing OCR traineddata download/load path; qh/p: language list;
-# vh/j: OCR-engine routing; si/a: existing Google Offline model-package selection.
-PRESERVE_OCR_SMALI = (
-    "smali_classes2/x9/e.smali",
-    "smali_classes3/qh/p.smali",
-    "smali_classes3/vh/j.smali",
+# Preserve Google Offline Translate selection and its original implementation.
+# The three Tesseract files below receive a narrowly scoped English OCR patch.
+PRESERVE_OFFLINE_TRANSLATE_SMALI = (
     "smali_classes3/si/a.smali",
 )
 PRESERVE_METHOD = ("smali_classes3/yh/f.smali", r".method public final e(Ljava/lang/String;)V")
@@ -33,19 +29,14 @@ TESSERACT_SO_PATH = "lib/arm64-v8a/libtesseract.so"
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
-def snapshot_preserved_ocr(base: Path) -> dict[str, str]:
+def snapshot_preserved_offline_translate(base: Path) -> dict[str, str]:
     result: dict[str, str] = {}
-    for rel in PRESERVE_OCR_SMALI:
+    for rel in PRESERVE_OFFLINE_TRANSLATE_SMALI:
         path = base / rel
         if not path.is_file():
-            raise RuntimeError(f"Verified base is missing OCR preservation file: {rel}")
+            raise RuntimeError(f"Verified base is missing Offline Translate preservation file: {rel}")
         result[rel] = sha256_bytes(path.read_bytes())
-    metadata = base / METADATA_PATH
-    if not metadata.is_file():
-        raise RuntimeError(f"Verified base is missing {METADATA_PATH}")
 
-    # yh/f is extended with a new dispatch branch, but its original Google Offline
-    # translation method must remain byte-for-byte the same method body.
     host_file, method_header = PRESERVE_METHOD
     host_text = (base / host_file).read_text(encoding="utf-8")
     start = host_text.find(method_header)
@@ -54,22 +45,45 @@ def snapshot_preserved_ocr(base: Path) -> dict[str, str]:
     end = host_text.find(".end method", start)
     if end < 0:
         raise RuntimeError("Could not isolate original Google Offline method yh/f->e")
-    result[host_file + "#GoogleOfflineMethodE"] = sha256_bytes(host_text[start:end + len(".end method")].encode("utf-8"))
+    result[host_file + "#GoogleOfflineMethodE"] = sha256_bytes(
+        host_text[start:end + len(".end method")].encode("utf-8")
+    )
     return result
 
-def assert_preserved_ocr(base: Path, before: dict[str, str]) -> None:
+
+def assert_preserved_offline_translate(base: Path, before: dict[str, str]) -> None:
     for rel, expected in before.items():
         if "#GoogleOfflineMethodE" in rel:
-            host_file, _ = PRESERVE_METHOD
+            host_file, method_header = PRESERVE_METHOD
             host_text = (base / host_file).read_text(encoding="utf-8")
-            start = host_text.find(PRESERVE_METHOD[1])
+            start = host_text.find(method_header)
             end = host_text.find(".end method", start)
             actual = sha256_bytes(host_text[start:end + len(".end method")].encode("utf-8"))
         else:
             actual = sha256_bytes((base / rel).read_bytes())
         if actual != expected:
-            raise RuntimeError(f"OCR/Offline downloader code was unexpectedly modified: {rel}")
-    print("Verified original OCR/language-download files and Google Offline translation method remain unchanged")
+            raise RuntimeError(f"Google Offline Translate code was unexpectedly modified: {rel}")
+    print("Verified Google Offline Translate provider selection and original translation method remain unchanged")
+
+
+def verify_english_tesseract_patch(base: Path) -> None:
+    qh = (base / "smali_classes3/qh/p.smali").read_text(encoding="utf-8")
+    x9 = (base / "smali_classes2/x9/e.smali").read_text(encoding="utf-8")
+    vh = (base / "smali_classes3/vh/j.smali").read_text(encoding="utf-8")
+    required = {
+        "English is in the Tesseract download language set":
+            'const-string v34, "English"' in qh and 'filled-new-array/range {v3 .. v34}, [Ljava/lang/String;' in qh,
+        "English Tesseract initialization uses the eng model":
+            'const-string v0, "eng"' in x9 and 'const-string v0, "eng+"' in x9,
+        "main OCR route checks English traineddata, calls Tesseract and logs the route":
+            "TT_ENGLISH_MAIN_ROUTE" in vh and 'English Tesseract route active; eng.traineddata present' in vh and 'invoke-static {v0}, Lca/b2;->l(Ljava/lang/String;)Z' in vh and 'invoke-virtual {p0, p1, p2}, Lvh/j;->f(Landroid/graphics/Bitmap;Z)V' in vh,
+        "secondary OCR route keeps a missing-model fallback":
+            'Tesseract traineddata missing; falling back to Google VisionKit' in vh and 'TT_OCR' in vh,
+    }
+    failed = [label for label, okay in required.items() if not okay]
+    if failed:
+        raise RuntimeError("English Tesseract patch verification failed: " + "; ".join(failed))
+    print("Verified English Tesseract download registration, eng initialization and OCR routing")
 
 def verify_final_host_payload(base_apk: Path, final_apk: Path) -> None:
     """Ensure original language metadata, assets, and native OCR libraries survive merge."""
@@ -112,6 +126,237 @@ def ensure_text_once(path: Path, marker: str, addition: str, after: str | None =
     text = text.replace(after, after + addition, 1)
     path.write_text(text, encoding="utf-8")
 
+
+def patch_english_tesseract(base: Path) -> None:
+    """Restore the previously tested English Tesseract download and OCR route only."""
+    # Add English to the language set consulted by qh/f before downloading
+    # tessdata. This invokes the app's original downloader for eng.traineddata.
+    qh_path = base / "smali_classes3/qh/p.smali"
+    qh = qh_path.read_text(encoding="utf-8")
+    qh_added = '    const-string v34, "English"'
+    qh_range = '    filled-new-array/range {v3 .. v34}, [Ljava/lang/String;'
+    if qh_added not in qh:
+        qh_anchor = '    const-string v33, "Odia"\n\n    const-string v3, "Arabic"'
+        if qh.count(qh_anchor) != 1:
+            raise RuntimeError("Could not find the Tesseract language-set anchor in qh/p.smali")
+        qh = qh.replace(
+            qh_anchor,
+            '    const-string v33, "Odia"\n\n    const-string v34, "English"\n\n    const-string v3, "Arabic"',
+            1,
+        )
+    if qh_range not in qh:
+        old_range = '    filled-new-array/range {v3 .. v33}, [Ljava/lang/String;'
+        if qh.count(old_range) != 1:
+            raise RuntimeError("Could not update the Tesseract language-set array size in qh/p.smali")
+        qh = qh.replace(old_range, qh_range, 1)
+    qh_path.write_text(qh, encoding="utf-8")
+
+    # The existing loader builds "eng+<language>" for most OCR languages.
+    # For English, initialize the Tesseract engine with the single "eng" model.
+    x9_path = base / "smali_classes2/x9/e.smali"
+    x9 = x9_path.read_text(encoding="utf-8")
+    if 'const-string v0, "eng"' not in x9:
+        old = '''    if-nez v1, :cond_3
+
+    :cond_0
+    invoke-static {}, Lqh/p;->d()Ljava/lang/String;'''
+        new = '''    if-nez v1, :cond_4
+
+    :cond_0
+    invoke-static {}, Lqh/p;->d()Ljava/lang/String;'''
+        if x9.count(old) != 1:
+            raise RuntimeError("Could not find the Tesseract loader entry anchor in x9/e.smali")
+        x9 = x9.replace(old, new, 1)
+
+        old = '''    if-eqz v1, :cond_2
+
+    :try_start_1
+    invoke-static {v3, v4}, Lqh/n;->a(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;'''
+        new = '''    if-eqz v1, :cond_3
+
+    :try_start_1
+    invoke-static {}, Lqh/p;->d()Ljava/lang/String;
+
+    move-result-object v1
+
+    const-string v0, "English"
+
+    invoke-virtual {v1, v0}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+
+    move-result v1
+
+    if-eqz v1, :cond_2
+
+    invoke-static {v3, v4}, Lqh/n;->a(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;
+
+    move-result-object v1
+
+    check-cast v1, Ljava/lang/String;
+
+    const-string v0, "eng"
+
+    invoke-virtual {v2, v1, v0}, Lcom/googlecode/tesseract/android/TessBaseAPI;->d(Ljava/lang/String;Ljava/lang/String;)V
+
+    goto :goto_0
+
+    :cond_2
+    const-string v0, "eng+"
+
+    invoke-static {v3, v4}, Lqh/n;->a(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;'''
+        if x9.count(old) != 1:
+            raise RuntimeError("Could not find the language initialization anchor in x9/e.smali")
+        x9 = x9.replace(old, new, 1)
+
+        old_tail = '''    :cond_2
+    invoke-static {v3, v4}, Lqh/n;->a(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;'''
+        new_tail = '''    :cond_3
+    invoke-static {v3, v4}, Lqh/n;->a(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;'''
+        if x9.count(old_tail) != 1:
+            raise RuntimeError("Could not find the old Tesseract fallback label in x9/e.smali")
+        x9 = x9.replace(old_tail, new_tail, 1)
+        old_end = '''    :catch_0
+    :cond_3
+    :goto_0'''
+        new_end = '''    :catch_0
+    :cond_4
+    :goto_0'''
+        if x9.count(old_end) != 1:
+            raise RuntimeError("Could not find the Tesseract loader exit label in x9/e.smali")
+        x9 = x9.replace(old_end, new_end, 1)
+    x9_path.write_text(x9, encoding="utf-8")
+
+    # Route through Tesseract only when the downloaded model exists. If it is
+    # absent, retain the original Google VisionKit fallback instead of failing.
+    vh_path = base / "smali_classes3/vh/j.smali"
+    vh = vh_path.read_text(encoding="utf-8")
+    if 'Tesseract traineddata missing; falling back to Google VisionKit' not in vh:
+        method_start = vh.find('.method public final i(Landroid/graphics/Bitmap;Z)V')
+        method_end = vh.find('.end method', method_start)
+        if method_start < 0 or method_end < 0:
+            raise RuntimeError("Could not isolate the secondary OCR route vh/j.i")
+        method = vh[method_start:method_end]
+        old = '''    move-result v0
+
+    if-eqz v0, :cond_1
+
+    invoke-virtual {p0, p1, p2}, Lvh/j;->f(Landroid/graphics/Bitmap;Z)V'''
+        new = '''    move-result v0
+
+    if-eqz v0, :cond_2
+
+    invoke-static {}, Lqh/p;->d()Ljava/lang/String;
+
+    move-result-object v0
+
+    invoke-static {v0}, Lca/b2;->l(Ljava/lang/String;)Z
+
+    move-result v0
+
+    if-eqz v0, :cond_1
+
+    const-string v1, "TT_OCR"
+
+    const-string v0, "Tesseract 5.5.1 route active; traineddata present"
+
+    invoke-static {v1, v0}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I
+
+    invoke-virtual {p0, p1, p2}, Lvh/j;->f(Landroid/graphics/Bitmap;Z)V'''
+        if method.count(old) != 1:
+            raise RuntimeError("Could not find the secondary Tesseract route anchor in vh/j.i")
+        method = method.replace(old, new, 1)
+        old = '''    :cond_1
+    iget-object v0, p0, Lvh/j;->c:Lcom/google/mlkit/vision/text/internal/zzn;'''
+        new = '''    :cond_1
+    const-string v1, "TT_OCR"
+
+    const-string v0, "Tesseract traineddata missing; falling back to Google VisionKit. Re-select the source language to download its model."
+
+    invoke-static {v1, v0}, Landroid/util/Log;->w(Ljava/lang/String;Ljava/lang/String;)I
+
+    :cond_2
+    iget-object v0, p0, Lvh/j;->c:Lcom/google/mlkit/vision/text/internal/zzn;'''
+        if method.count(old) != 1:
+            raise RuntimeError("Could not find the secondary OCR fallback anchor in vh/j.i")
+        method = method.replace(old, new, 1)
+        old = '''    iput-object v0, p0, Lvh/j;->c:Lcom/google/mlkit/vision/text/internal/zzn;
+
+    :cond_2
+    iget-object v0, p0, Lvh/j;->c:Lcom/google/mlkit/vision/text/internal/zzn;'''
+        new = '''    iput-object v0, p0, Lvh/j;->c:Lcom/google/mlkit/vision/text/internal/zzn;
+
+    :cond_3
+    iget-object v0, p0, Lvh/j;->c:Lcom/google/mlkit/vision/text/internal/zzn;'''
+        if method.count(old) != 1:
+            raise RuntimeError("Could not re-label the secondary OCR recognizer join in vh/j.i")
+        method = method.replace(old, new, 1)
+        old_jump = "    if-nez v0, :cond_2"
+        new_jump = "    if-nez v0, :cond_3"
+        if method.count(old_jump) != 1:
+            raise RuntimeError("Could not retarget the existing OCR recognizer initialization branch in vh/j.i")
+        method = method.replace(old_jump, new_jump, 1)
+        vh = vh[:method_start] + method + vh[method_end:]
+
+    # The normal Bitmap -> h() screen-translation path did not route English
+    # to Tesseract: it otherwise fell into ML Kit. Add an explicit English-only
+    # route here; leave the deliberately selected Cloud OCR branch untouched.
+    if 'TT_ENGLISH_MAIN_ROUTE' not in vh:
+        method_start = vh.find('.method public final h(Landroid/graphics/Bitmap;Z)V')
+        method_end = vh.find('.end method', method_start)
+        if method_start < 0 or method_end < 0:
+            raise RuntimeError("Could not isolate the main OCR route vh/j.h")
+        method = vh[method_start:method_end]
+        anchor = '''    :cond_1
+    invoke-static {}, Lqh/p;->d()Ljava/lang/String;'''
+        insert = '''    :cond_1
+    # TT_ENGLISH_MAIN_ROUTE
+    invoke-static {}, Lqh/p;->d()Ljava/lang/String;
+
+    move-result-object v0
+
+    const-string v1, "English"
+
+    invoke-virtual {v0, v1}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+
+    move-result v0
+
+    if-eqz v0, :tt_english_tesseract_skip
+
+    invoke-static {}, Lqh/p;->d()Ljava/lang/String;
+
+    move-result-object v0
+
+    invoke-static {v0}, Lca/b2;->l(Ljava/lang/String;)Z
+
+    move-result v0
+
+    if-eqz v0, :tt_english_tesseract_missing
+
+    const-string v1, "TT_OCR"
+
+    const-string v0, "English Tesseract route active; eng.traineddata present"
+
+    invoke-static {v1, v0}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I
+
+    invoke-virtual {p0, p1, p2}, Lvh/j;->f(Landroid/graphics/Bitmap;Z)V
+
+    return-void
+
+    :tt_english_tesseract_missing
+    const-string v1, "TT_OCR"
+
+    const-string v0, "English Tesseract model missing; using the original OCR fallback"
+
+    invoke-static {v1, v0}, Landroid/util/Log;->w(Ljava/lang/String;Ljava/lang/String;)I
+
+    :tt_english_tesseract_skip
+    invoke-static {}, Lqh/p;->d()Ljava/lang/String;'''
+        if method.count(anchor) != 1:
+            raise RuntimeError("Could not find the main OCR route insertion point in vh/j.h")
+        method = method.replace(anchor, insert, 1)
+        vh = vh[:method_start] + method + vh[method_end:]
+    vh_path.write_text(vh, encoding="utf-8")
+
+    verify_english_tesseract_patch(base)
 
 def patch_engine_list(base: Path) -> None:
     path = base / "smali_classes3/yh/h.smali"
@@ -581,17 +826,18 @@ def main() -> int:
     run(["java", "-jar", str(args.apktool), "d", "-f", "-o", str(base), str(args.base_apk)])
     run(["java", "-jar", str(args.apktool), "d", "-f", "-o", str(helper), str(args.helper_apk)])
 
-    preserved_ocr = snapshot_preserved_ocr(base)
+    preserved_offline_translate = snapshot_preserved_offline_translate(base)
 
     copy_helper_payload(helper, base)
     patch_atomic_backport_shims(base)
+    patch_english_tesseract(base)
     patch_engine_list(base)
     patch_dispatcher(base)
     patch_picker_callbacks(base)
     patch_settings_click(base)
     patch_resources(base)
     patch_manifest(base)
-    assert_preserved_ocr(base, preserved_ocr)
+    assert_preserved_offline_translate(base, preserved_offline_translate)
 
     unaligned = args.work / "TapTranslate_HyMT2_unsigned_unaligned.apk"
     run(["java", "-jar", str(args.apktool), "b", str(base), "-o", str(unaligned)])
