@@ -1,0 +1,143 @@
+name: Build Tap Translate STQ1_0 + Vulkan experimental
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ stq1_0-experimental ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Tap Translate integration
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: '15859902'
+          packages: 'platform-tools'
+          accept-android-sdk-licenses: true
+
+      - name: Install Android platform, NDK, CMake and Vulkan shader compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslc
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Prepare pinned Android wrapper and STQ-enabled llama.cpp source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p upstream
+          git clone https://github.com/ffmpegkit-maintained/llama-android.git upstream/llama-android
+          git -C upstream/llama-android checkout 9f5469fd9fa7ea7bc7b01801923af95dc3b41d52
+          rm -rf upstream/llama-android/llama.cpp
+          git clone https://github.com/Zane-dev16/llama.cpp-voco.git upstream/llama-android/llama.cpp
+          git -C upstream/llama-android/llama.cpp checkout acca4facb4dfbecf3db123f1f99a5d013d518a29
+          echo "LLAMA_ROOT=$GITHUB_WORKSPACE/upstream/llama-android/llama.cpp" >> "$GITHUB_ENV"
+
+      - name: Install pinned Vulkan and SPIR-V headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/KhronosGroup/Vulkan-Headers.git upstream/Vulkan-Headers
+          git -C upstream/Vulkan-Headers checkout b379292b2ab6df5771ba9870d53cf8b2c9295daf
+          git clone https://github.com/KhronosGroup/SPIRV-Headers.git upstream/SPIRV-Headers
+          git -C upstream/SPIRV-Headers checkout 2acb319af38d43be3ea76bfabf3998e5281d8d12
+          cmake -S upstream/SPIRV-Headers -B build/spirv-headers \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/build/spirv-headers-install"
+          cmake --build build/spirv-headers --target install
+          echo "VULKAN_HEADERS_INCLUDE_DIR=$GITHUB_WORKSPACE/upstream/Vulkan-Headers/include" >> "$GITHUB_ENV"
+          echo "SPIRV_HEADERS_INCLUDE_DIR=$GITHUB_WORKSPACE/build/spirv-headers-install/include" >> "$GITHUB_ENV"
+          echo "SPIRV_HEADERS_CMAKE_DIR=$GITHUB_WORKSPACE/build/spirv-headers-install/share/ SPIRV-Headers" | sed 's/ //g' >> "$GITHUB_ENV"
+
+      - name: Enable Vulkan and verify Tencent STQ1_0 type mapping
+        run: |
+          python3 -m py_compile scripts/prepare_stq_android_runtime.py
+          python3 scripts/prepare_stq_android_runtime.py \
+            --llama-root "$LLAMA_ROOT" \
+            --android-wrapper-root "$GITHUB_WORKSPACE/upstream/llama-android"
+
+      - name: Build Android native runtime AAR with STQ1_0 and Vulkan
+        run: |
+          set -euo pipefail
+          cd upstream/llama-android
+          gradle --no-daemon -PVERSION=0.1.0 :library:assembleRelease
+          mkdir -p "$GITHUB_WORKSPACE/app/libs"
+          cp library/build/outputs/aar/library-release.aar \
+            "$GITHUB_WORKSPACE/app/libs/llama-android-vulkan.aar"
+          unzip -l "$GITHUB_WORKSPACE/app/libs/llama-android-vulkan.aar"
+          mkdir -p "$GITHUB_WORKSPACE/build/stq-aar"
+          unzip -q "$GITHUB_WORKSPACE/app/libs/llama-android-vulkan.aar" -d "$GITHUB_WORKSPACE/build/stq-aar"
+          for so in libllama_jni.so libllama.so libggml.so libggml-base.so libggml-cpu.so libggml-vulkan.so; do
+            test -s "$GITHUB_WORKSPACE/build/stq-aar/jni/arm64-v8a/$so"
+          done
+          echo "VULKAN_AAR_NATIVE_DIR=$GITHUB_WORKSPACE/build/stq-aar/jni/arm64-v8a" >> "$GITHUB_ENV"
+          sha256sum "$GITHUB_WORKSPACE/app/libs/llama-android-vulkan.aar"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Download and verify exact Tap Translate base APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p input
+          curl --fail --location --retry 4 --retry-all-errors \
+            "https://github.com/DJkuka/TapTranslate_HyMT2/releases/download/1/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk" \
+            -o input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
+          echo "dfe0463c9d9c0bf39451586e4e7aa405f5721504c61f20cef9fd122618418d83  input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk" | sha256sum -c -
+          python3 scripts/verify_vulkan_base_apk.py input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
+
+      - name: Build Tap Translate helper against the new native runtime
+        run: |
+          gradle --no-daemon \
+            -PllamaRoot="$LLAMA_ROOT" \
+            -PvulkanAarNativeDir="$VULKAN_AAR_NATIVE_DIR" \
+            :app:assembleDebug
+
+      - name: Merge runtime into the original unsigned APK
+        run: |
+          python3 scripts/merge_apk.py \
+            --base-apk input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk \
+            --helper-apk app/build/outputs/apk/debug/app-debug.apk \
+            --apktool tools/apktool.jar \
+            --work build/merge \
+            --output build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_unsigned.apk \
+            --zipalign "$ANDROID_HOME/build-tools/35.0.0/zipalign"
+
+      - name: Validate unsigned APK and native backend payload
+        run: |
+          set -euo pipefail
+          unzip -t build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_unsigned.apk | tail -n 2
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -p 4 build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_unsigned.apk
+          sha256sum build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_unsigned.apk
+          ls -lh build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_unsigned.apk
+
+      - name: Upload experimental unsigned APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TapTranslate-STQ1_0-Vulkan-unsigned-experimental
+          path: build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_unsigned.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload native runtime AAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-android-STQ1_0-Vulkan-AAR
+          path: app/libs/llama-android-vulkan.aar
+          if-no-files-found: error
+          retention-days: 14
