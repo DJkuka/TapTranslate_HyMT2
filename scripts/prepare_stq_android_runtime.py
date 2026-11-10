@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Adapt upstream STQ1_0 support to Tencent's released GGUF tensor id 42."""
+"""Adapt upstream STQ1_0 support to the production AngelSlim GGUF tensor id 40."""
 from __future__ import annotations
 import argparse
 import re
@@ -23,26 +23,31 @@ def main() -> int:
     llama, wrapper = args.llama_root, args.android_wrapper_root
 
     header_path = llama / "ggml/include/ggml.h"
-    header = header_path.read_text(encoding="utf-8")
     replace_once(
         header_path,
-        "        GGML_TYPE_Q2_0    = 42,\n        GGML_TYPE_STQ1_0  = 43,",
-        "        GGML_TYPE_STQ1_0  = 42,\n        GGML_TYPE_Q2_0    = 43,",
-        "Tencent legacy GGUF tensor id 42",
+        "        GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)\n"
+        "        GGML_TYPE_Q1_0    = 41,\n"
+        "        GGML_TYPE_Q2_0    = 42,\n"
+        "        GGML_TYPE_STQ1_0  = 43,",
+        "        GGML_TYPE_STQ1_0  = 40, // Tencent/AngelSlim production GGUF id\n"
+        "        GGML_TYPE_Q1_0    = 41,\n"
+        "        GGML_TYPE_Q2_0    = 42,\n"
+        "        GGML_TYPE_NVFP4   = 43, // moved to avoid the legacy STQ id",
+        "production STQ tensor id 40 (preserve Q1/Q2 ids)",
     )
     header = header_path.read_text(encoding="utf-8")
-    if not re.search(r"GGML_TYPE_STQ1_0\s*=\s*42,", header):
-        raise SystemExit("STQ1_0 must use Tencent's GGUF tensor id 42")
-    if not re.search(r"GGML_TYPE_Q2_0\s*=\s*43,", header):
-        raise SystemExit("Q2_0 must move to 43 to avoid the STQ1_0 id collision")
+    if not re.search(r"GGML_TYPE_STQ1_0\s*=\s*40,", header):
+        raise SystemExit("STQ1_0 must use the production AngelSlim GGUF tensor id 40")
+    if not re.search(r"GGML_TYPE_NVFP4\s*=\s*43,", header):
+        raise SystemExit("NVFP4 must move to 43 to avoid the STQ1_0 id collision")
     if not re.search(r"GGML_TYPE_COUNT\s*=\s*44", header):
         raise SystemExit("Unexpected GGML_TYPE_COUNT")
 
     constants = llama / "gguf-py/gguf/constants.py"
     replace_once(
         constants,
-        "    Q2_0    = 42\n    STQ1_0  = 43",
-        "    STQ1_0  = 42\n    Q2_0    = 43",
+        "    NVFP4   = 40\n    Q1_0    = 41\n    Q2_0    = 42\n    STQ1_0  = 43",
+        "    STQ1_0  = 40\n    Q1_0    = 41\n    Q2_0    = 42\n    NVFP4   = 43",
         "GGUF Python tensor type ids",
     )
 
@@ -80,7 +85,7 @@ def main() -> int:
         'set(GGML_OPENMP          OFF CACHE BOOL "" FORCE)\nset(GGML_BACKEND_DL      OFF CACHE BOOL "" FORCE)',
         "disable dynamic backend loading in native CMake",
     )
-    print("Tencent STQ1_0 id 42, upstream ARM NEON kernel and Vulkan/Q4 settings verified.")
+    print("Production STQ1_0 id 40, ARM NEON kernel and Vulkan/Q4 settings verified.")
     return 0
 
 
