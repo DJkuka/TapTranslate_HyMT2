@@ -230,6 +230,7 @@ object HyMT2Runtime {
             append("Translate the following text into ")
                 .append(targetLanguage)
                 .append(". Note that you should only output the translated result without any additional explanation:")
+            append("\\nPreserve the original line breaks, dialogue order, and speaker labels.")
             if (background.isNotEmpty()) {
                 append("\n\nBackground information:\n").append(background)
             }
