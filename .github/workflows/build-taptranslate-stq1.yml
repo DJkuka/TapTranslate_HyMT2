@@ -78,7 +78,7 @@ jobs:
             --llama-root "$LLAMA_ROOT" \
             --android-wrapper-root "$GITHUB_WORKSPACE/upstream/llama-android"
 
-      - name: Build host llama-cli and load the exact Tencent STQ1_0 GGUF
+      - name: Build host llama-cli with STQ1_0 support
         shell: bash
         run: |
           set -euo pipefail
@@ -91,15 +91,40 @@ jobs:
             -DLLAMA_BUILD_EXAMPLES=OFF \
             -DLLAMA_BUILD_TOOLS=ON
           cmake --build build/host-stq --target llama-cli -j2
-          mkdir -p test-model
-          curl --fail --location --retry 5 --retry-all-errors \
+
+      - name: Download and verify the exact Tencent STQ1_0 GGUF
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p test-model build
+          curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 --max-time 1200 \
             "https://huggingface.co/tencent/Hy-MT2-1.8B-1.25Bit-GGUF/resolve/main/Hy-MT2-1.8B-1.25Bit.gguf?download=true" \
             -o test-model/Hy-MT2-1.8B-1.25Bit.gguf
           echo "cc497fe8f033b52b3b8b00a7669e9661435432f9d4cd43f7ed24400c01507a93  test-model/Hy-MT2-1.8B-1.25Bit.gguf" | sha256sum -c -
-          build/host-stq/bin/llama-cli \
+
+      - name: Load Tencent STQ1_0 and run a short inference smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          timeout 1800s build/host-stq/bin/llama-cli \
             -m test-model/Hy-MT2-1.8B-1.25Bit.gguf \
-            -p "Translate the following text into Russian. Output only the translation: Hello, world." \
-            -n 8 -c 256 -t 2 --temp 0.1 --no-display-prompt
+            -p "Translate into Russian. Output only the translation: Hello, world." \
+            -n 2 -c 128 -t 2 --temp 0.1 --no-display-prompt \
+            > build/stq-host-smoke.log 2>&1
+          result=$?
+          set -e
+          tail -n 200 build/stq-host-smoke.log
+          exit "$result"
+
+      - name: Upload host STQ smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stq-host-smoke-log-${{ github.run_number }}
+          path: build/stq-host-smoke.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Build Android native runtime AAR with STQ1_0 and Vulkan
         run: |
