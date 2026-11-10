@@ -3,7 +3,7 @@ name: Build Tap Translate 1.125 FontFit AutoFill + Hy-MT2 Vulkan
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [ main, vulkan-v12-integration ]
 
 permissions:
   contents: read
