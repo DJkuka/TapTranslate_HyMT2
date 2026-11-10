@@ -88,7 +88,7 @@ jobs:
           cmake --build build/spirv-headers --target install
           echo "VULKAN_HEADERS_INCLUDE_DIR=$GITHUB_WORKSPACE/upstream/Vulkan-Headers/include" >> "$GITHUB_ENV"
           echo "SPIRV_HEADERS_INCLUDE_DIR=$GITHUB_WORKSPACE/build/spirv-headers-install/include" >> "$GITHUB_ENV"
-          echo "SPIRV_HEADERS_CMAKE_DIR=$GITHUB_WORKSPACE/build/spirv-headers-install/share/ SPIRV-Headers" | sed 's/ //g' >> "$GITHUB_ENV"
+          echo "SPIRV_HEADERS_CMAKE_DIR=$GITHUB_WORKSPACE/build/spirv-headers-install/share/cmake/SPIRV-Headers" >> "$GITHUB_ENV"
 
       - name: Enable Vulkan and verify Tencent STQ1_0 type mapping
         run: |
