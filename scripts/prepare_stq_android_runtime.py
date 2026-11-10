@@ -29,17 +29,19 @@ def main() -> int:
         "        GGML_TYPE_Q1_0    = 41,\n"
         "        GGML_TYPE_Q2_0    = 42,\n"
         "        GGML_TYPE_STQ1_0  = 43,",
-        "        GGML_TYPE_STQ1_0  = 40, // Tencent/AngelSlim production GGUF id\n"
+        "        GGML_TYPE_NVFP4   = 40, // unchanged\n"
         "        GGML_TYPE_Q1_0    = 41,\n"
-        "        GGML_TYPE_Q2_0    = 42,\n"
-        "        GGML_TYPE_NVFP4   = 43, // moved to avoid the legacy STQ id",
+        "        GGML_TYPE_STQ1_0  = 42, // Tencent Hy-MT2 official GGUF id\n"
+        "        GGML_TYPE_Q2_0    = 43, // moved to free STQ id 42",
         "production STQ tensor id 40 (preserve Q1/Q2 ids)",
     )
     header = header_path.read_text(encoding="utf-8")
-    if not re.search(r"GGML_TYPE_STQ1_0\s*=\s*40,", header):
-        raise SystemExit("STQ1_0 must use the production AngelSlim GGUF tensor id 40")
-    if not re.search(r"GGML_TYPE_NVFP4\s*=\s*43,", header):
-        raise SystemExit("NVFP4 must move to 43 to avoid the STQ1_0 id collision")
+    if not re.search(r"GGML_TYPE_STQ1_0\s*=\s*42,", header):
+        raise SystemExit("STQ1_0 must use Tencent Hy-MT2 GGUF tensor id 42")
+    if not re.search(r"GGML_TYPE_Q2_0\s*=\s*43,", header):
+        raise SystemExit("Q2_0 must move to 43 to avoid the legacy STQ1_0 id collision")
+    if not re.search(r"GGML_TYPE_NVFP4\s*=\s*40,", header):
+        raise SystemExit("NVFP4 must remain at its upstream id 40")
     if not re.search(r"GGML_TYPE_COUNT\s*=\s*44", header):
         raise SystemExit("Unexpected GGML_TYPE_COUNT")
 
@@ -47,7 +49,7 @@ def main() -> int:
     replace_once(
         constants,
         "    NVFP4   = 40\n    Q1_0    = 41\n    Q2_0    = 42\n    STQ1_0  = 43",
-        "    STQ1_0  = 40\n    Q1_0    = 41\n    Q2_0    = 42\n    NVFP4   = 43",
+        "    NVFP4   = 40\n    Q1_0    = 41\n    STQ1_0  = 42\n    Q2_0    = 43",
         "GGUF Python tensor type ids",
     )
 
@@ -85,7 +87,7 @@ def main() -> int:
         'set(GGML_OPENMP          OFF CACHE BOOL "" FORCE)\nset(GGML_BACKEND_DL      OFF CACHE BOOL "" FORCE)',
         "disable dynamic backend loading in native CMake",
     )
-    print("Production STQ1_0 id 40, ARM NEON kernel and Vulkan/Q4 settings verified.")
+    print("Tencent STQ1_0 id 42, Q2_0 id 43, ARM NEON kernel and Vulkan/Q4 settings verified.")
     return 0
 
 
