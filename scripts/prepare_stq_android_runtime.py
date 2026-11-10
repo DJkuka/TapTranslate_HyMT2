@@ -24,7 +24,7 @@ def main() -> int:
 
     # Keep upstream GGML IDs unchanged: Q2_0 remains 42 and STQ1_0 remains 43.
     # Tencent's 1.25-bit Hy-MT2 GGUF uses disk id 42 for STQ1_0, so remap it
-    # only for that exact model signature while parsing its tensor table.
+    # only for that exact model signature while parsing its tensor table and file metadata.
     header_path = llama / "ggml/include/ggml.h"
     header = header_path.read_text(encoding="utf-8")
     if not re.search(r"GGML_TYPE_NVFP4\s*=\s*40,", header):
@@ -45,7 +45,7 @@ def main() -> int:
         """    // Tencent's Hy-MT2 1.25-bit GGUF stores STQ1_0 as on-disk type 42,
     // which collides with the standard GGML_TYPE_Q2_0 id. Detect this exact
     // model signature from metadata and remap only its tensor entries to the
-    // internal STQ1_0 enum (43). Other GGUF files keep standard Q2_0 semantics.
+    // internal STQ1_0 enum (43). Other GGUF files keep standard Q2_0 semantics and metadata.
     const int architecture_idx = gguf_find_key(ctx, "general.architecture");
     const int file_type_idx = gguf_find_key(ctx, "general.file_type");
     const bool is_tencent_hymt2_stq =
@@ -54,15 +54,20 @@ def main() -> int:
         gguf_get_kv_type(ctx, architecture_idx) == GGUF_TYPE_STRING &&
         gguf_get_kv_type(ctx, file_type_idx) == GGUF_TYPE_UINT32 &&
         strcmp(gguf_get_val_str(ctx, architecture_idx), "hunyuan-dense") == 0 &&
-        gguf_get_val_u32(ctx, file_type_idx) == 42;
+        gguf_get_val_u32(ctx, file_type_idx) == 41 &&
+        gguf_find_key(ctx, "general.finetune") >= 0 &&
+        gguf_get_kv_type(ctx, gguf_find_key(ctx, "general.finetune")) == GGUF_TYPE_STRING &&
+        strcmp(gguf_get_val_str(ctx, gguf_find_key(ctx, "general.finetune")), "2bit-stride16") == 0;
 
     if (is_tencent_hymt2_stq) {
-        GGML_LOG_INFO("%s: applying Tencent Hy-MT2 STQ1_0 GGUF compatibility mapping (disk type 42 -> internal STQ1_0)\\n", __func__);
+        GGML_LOG_INFO("%s: applying Tencent Hy-MT2 STQ1_0 GGUF compatibility mapping (tensor type 42 -> 43, file_type 41 -> 42)\\n", __func__);
+        // Convert the legacy Tencent quantization tag to the current llama.cpp file type.
+        gguf_set_val_u32(ctx, "general.file_type", 42);
     }
 
     // read the tensor info
     for (int64_t i = 0; ok && i < n_tensors; ++i) {""",
-        "model-specific Tencent STQ1_0 GGUF type compatibility",
+        "model-specific Tencent STQ1_0 tensor and file-type compatibility",
     )
     replace_once(
         gguf_cpp,
