@@ -1,4 +1,4 @@
-name: Build Tap Translate 1.125 FontFit AutoFill + Hy-MT2
+name: Build Tap Translate 1.125 FontFit AutoFill + Hy-MT2 Vulkan
 
 on:
   workflow_dispatch:
@@ -29,8 +29,35 @@ jobs:
           packages: 'platform-tools'
           accept-android-sdk-licenses: true
 
-      - name: Install Android platform and build tools
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Install Android platform, build tools, NDK and CMake
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Download the exact Hy-MT2 base APK from the user's Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p input app/libs
+          curl --fail --location --retry 4 --retry-all-errors \
+            "https://github.com/DJkuka/TapTranslate_HyMT2/releases/download/1/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk" \
+            -o input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
+          echo "dfe0463c9d9c0bf39451586e4e7aa405f5721504c61f20cef9fd122618418d83  input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk" | sha256sum -c -
+
+      - name: Fetch verified Vulkan AAR and pinned llama.cpp headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 4 \
+            "https://raw.githubusercontent.com/DJkuka/HyMT2_Vulkan_Standalone_Test/main/app/libs/llama-android-vulkan.aar" \
+            -o app/libs/llama-android-vulkan.aar
+          echo "b2a15a3e297b4107575df52711a86e6a53e1a14fff497db5acb1837abe1f49bb  app/libs/llama-android-vulkan.aar" | sha256sum -c -
+          mkdir -p build/vulkan-aar
+          unzip -q app/libs/llama-android-vulkan.aar -d build/vulkan-aar
+          test -f build/vulkan-aar/jni/arm64-v8a/libggml-vulkan.so
+          test -f build/vulkan-aar/jni/arm64-v8a/libllama.so
+          git clone --recurse-submodules https://github.com/ffmpegkit-maintained/llama-android.git upstream/llama-android
+          test "$(git -C upstream/llama-android/llama.cpp describe --tags --exact-match)" = "b9878"
+          echo "LLAMA_ROOT=$GITHUB_WORKSPACE/upstream/llama-android/llama.cpp" >> "$GITHUB_ENV"
+          echo "VULKAN_AAR_NATIVE_DIR=$GITHUB_WORKSPACE/build/vulkan-aar/jni/arm64-v8a" >> "$GITHUB_ENV"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -39,26 +66,27 @@ jobs:
 
       - name: Verify integration inputs
         run: |
-          test -s input/TapTranslate_1.125_FontFit_AutoFill_unsigned.apk
+          test -s input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
+          test -s app/libs/llama-android-vulkan.aar
           test -s tools/apktool.jar
           test -s scripts/merge_apk.py
-          test -s scripts/verify_base_apk.py
-          python3 -m py_compile scripts/merge_apk.py scripts/verify_base_apk.py
-          python3 scripts/verify_base_apk.py input/TapTranslate_1.125_FontFit_AutoFill_unsigned.apk
+          test -s scripts/verify_vulkan_base_apk.py
+          python3 -m py_compile scripts/merge_apk.py scripts/verify_vulkan_base_apk.py
+          python3 scripts/verify_vulkan_base_apk.py input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
           echo "Base APK SHA-256:"
-          sha256sum input/TapTranslate_1.125_FontFit_AutoFill_unsigned.apk
+          sha256sum input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
 
-      - name: Build Hy-MT2 runtime helper
-        run: gradle --no-daemon :app:assembleDebug
+      - name: Build Hy-MT2 Vulkan runtime helper and JNI extension
+        run: gradle --no-daemon -PllamaRoot="$LLAMA_ROOT" -PvulkanAarNativeDir="$VULKAN_AAR_NATIVE_DIR" :app:assembleDebug
 
       - name: Merge Hy-MT2 runtime into the original Tap Translate APK
         run: |
           python3 scripts/merge_apk.py \
-            --base-apk input/TapTranslate_1.125_FontFit_AutoFill_unsigned.apk \
+            --base-apk input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk \
             --helper-apk app/build/outputs/apk/debug/app-debug.apk \
             --apktool tools/apktool.jar \
             --work build/merge \
-            --output build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk \
+            --output build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk \
             --zipalign "$ANDROID_HOME/build-tools/35.0.0/zipalign"
 
       - name: Validate final unsigned APK
