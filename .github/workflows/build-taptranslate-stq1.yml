@@ -34,6 +34,11 @@ jobs:
           sudo apt-get install -y glslc
           sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
       - name: Prepare pinned Android wrapper and STQ-enabled llama.cpp source
         shell: bash
         run: |
@@ -84,11 +89,6 @@ jobs:
           done
           echo "VULKAN_AAR_NATIVE_DIR=$GITHUB_WORKSPACE/build/stq-aar/jni/arm64-v8a" >> "$GITHUB_ENV"
           sha256sum "$GITHUB_WORKSPACE/app/libs/llama-android-vulkan.aar"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
 
       - name: Download and verify exact Tap Translate base APK
         shell: bash
