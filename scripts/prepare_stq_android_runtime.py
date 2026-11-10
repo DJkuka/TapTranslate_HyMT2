@@ -115,6 +115,27 @@ def main() -> int:
         "link the installed SPIRV-Headers target and explicit include directory to the Vulkan backend",
     )
 
+    # Android NDK API 24 exports the Vulkan 1.0 loader and the KHR
+    # properties2 entry point, but not the promoted Vulkan 1.1 core symbol
+    # vkGetPhysicalDeviceFeatures2. Vulkan-Hpp's dynamic dispatcher is already
+    # initialized with the VkInstance and resolves core first, then KHR fallback.
+    # Route all three direct C calls through that dispatcher to avoid a hard
+    # undefined-symbol dependency on API 28+.
+    vulkan_cpp = llama / "ggml/src/ggml-vulkan/ggml-vulkan.cpp"
+    vulkan_source = vulkan_cpp.read_text(encoding="utf-8")
+    feature2_calls = vulkan_source.count("vkGetPhysicalDeviceFeatures2(")
+    if feature2_calls != 3:
+        raise SystemExit(
+            "Expected exactly 3 direct vkGetPhysicalDeviceFeatures2 calls, "
+            f"found {feature2_calls}; refusing an unsafe Vulkan source rewrite"
+        )
+    vulkan_source = vulkan_source.replace(
+        "vkGetPhysicalDeviceFeatures2(",
+        "VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceFeatures2(",
+    )
+    vulkan_cpp.write_text(vulkan_source, encoding="utf-8")
+    print("Routed 3 Vulkan Features2 calls through Vulkan-Hpp dynamic dispatcher (core/KHR fallback).")
+
     cmake = wrapper / "library/src/main/jni/CMakeLists.txt"
     replace_once(
         cmake,
