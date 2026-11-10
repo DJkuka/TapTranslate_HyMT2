@@ -1,0 +1,81 @@
+name: Inspect Tap Translate host callbacks and settings screens
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Download the exact Tap Translate base APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p input build/decoded diagnostics
+          curl --fail --location --retry 4 \
+            "https://github.com/DJkuka/TapTranslate_HyMT2/releases/download/1/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk" \
+            -o input/base.apk
+          echo "dfe0463c9d9c0bf39451586e4e7aa405f5721504c61f20cef9fd122618418d83  input/base.apk" | sha256sum -c -
+
+      - name: Decode APK and collect host settings and callback sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -jar tools/apktool.jar d -f -o build/decoded input/base.apk
+          {
+            echo "=== MANIFEST ACTIVITIES ==="
+            grep -n -E '<activity|<activity-alias' build/decoded/AndroidManifest.xml || true
+            echo
+            echo "=== SETTINGS-LIKE LAYOUT FILES ==="
+            find build/decoded/res/layout* -type f -iname '*setting*' -o -iname '*main*' | sort
+            echo
+            echo "=== ALL LAYOUT FILES ==="
+            find build/decoded/res -maxdepth 2 -type f -path '*/layout*/*.xml' | sort
+            echo
+            echo "=== ACTIVITY SMALI FILES ==="
+            find build/decoded/smali* -type f -name '*.smali' | grep -E '/activitys/|Settings|MainActivity|HomeActivity' | sort | head -n 500
+          } > diagnostics/index.txt
+
+          mkdir -p diagnostics/smali diagnostics/layout diagnostics/values
+          for f in \
+            build/decoded/smali_classes3/yh/f.smali \
+            build/decoded/smali_classes3/yh/h.smali \
+            build/decoded/smali_classes3/com/tap_to_translate/snap_translate/domain/main/activitys/SettingsServiceActivity.smali; do
+            if [ -f "$f" ]; then cp "$f" diagnostics/smali/; fi
+          done
+
+          # Save all activity class smali plus settings-like resource layouts and values.
+          find build/decoded/smali* -type f -name '*.smali' \
+            | grep -E '/(activitys|activities)/|Settings.*Activity|Main.*Activity|Home.*Activity' \
+            | while IFS= read -r f; do cp --parents "$f" diagnostics/smali/; done || true
+          find build/decoded/res -type f -path '*/layout*/*.xml' \
+            | while IFS= read -r f; do
+                if grep -qiE 'setting|preference|main|home|menu' "$f"; then cp --parents "$f" diagnostics/layout/; fi
+              done
+          cp build/decoded/AndroidManifest.xml diagnostics/
+          cp build/decoded/res/values/public.xml diagnostics/values/ 2>/dev/null || true
+          cp build/decoded/res/values/ids.xml diagnostics/values/ 2>/dev/null || true
+
+          # Include method/callback and activity declarations for compact grep-based reading.
+          grep -R -n -E 'field .* (a|b|d):|\.method .*\(|SettingsServiceActivity|setContentView|inflate\(' \
+            diagnostics/smali > diagnostics/declarations.txt || true
+          zip -qr diagnostics.zip diagnostics
+
+      - name: Upload source inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: TapTranslate-host-source-inspection
+          path: diagnostics.zip
+          if-no-files-found: error
+          retention-days: 7
