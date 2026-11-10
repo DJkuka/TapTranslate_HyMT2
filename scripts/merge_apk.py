@@ -466,11 +466,11 @@ def patch_settings_click(base: Path) -> None:
 
 def _remove_linear_layout_with_id(xml_text: str, view_id: str) -> tuple[str, bool]:
     import re
-    opening = re.compile(r'<LinearLayout\\b(?=[^>]*android:id="@id/' + re.escape(view_id) + r'")[^>]*>')
+    opening = re.compile(r'<LinearLayout\b(?=[^>]*android:id="@id/' + re.escape(view_id) + r'")[^>]*>')
     match = opening.search(xml_text)
     if not match:
         return xml_text, False
-    token = re.compile(r'<(/?)LinearLayout\\b[^>]*>')
+    token = re.compile(r'<(/?)LinearLayout\b[^>]*>')
     depth = 0
     end = None
     for item in token.finditer(xml_text, match.start()):
