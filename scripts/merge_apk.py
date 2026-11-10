@@ -89,6 +89,14 @@ def verify_final_host_payload(base_apk: Path, final_apk: Path) -> None:
         for prefix in ("assets/", "lib/"):
             source_entries = {n for n in original_names if n.startswith(prefix)}
             for name in source_entries:
+                # Replace only the llama.cpp runtime; preserve all unrelated host
+                # native libraries, assets, Tesseract and offline translation files.
+                if prefix == "lib/" and name.rsplit("/", 1)[-1] in {
+                    "libllama_jni.so", "libllama.so", "libggml.so",
+                    "libggml-base.so", "libggml-cpu.so", "libggml-vulkan.so",
+                    "libhymt2_jni.so", "libc++_shared.so",
+                }:
+                    continue
                 if name not in built_names or original.read(name) != built.read(name):
                     raise RuntimeError(f"Original {prefix} payload changed or disappeared: {name}")
     print("Verified final APK preserves original assets, native libraries, Tesseract and both Offline Translate model packages")
@@ -533,12 +541,27 @@ def copy_helper_payload(helper: Path, base: Path) -> None:
     so_files = list(helper_lib.glob("*.so"))
     if not so_files:
         raise RuntimeError("The llama-android AAR did not package any native .so files")
+    replaceable = {
+        "libllama_jni.so", "libllama.so", "libggml.so",
+        "libggml-base.so", "libggml-cpu.so", "libggml-vulkan.so",
+        "libhymt2_jni.so", "libc++_shared.so",
+    }
     for source in so_files:
         destination = out_lib / source.name
         if destination.exists() and destination.read_bytes() != source.read_bytes():
-            raise RuntimeError(f"Native library collision: {source.name}")
+            if source.name not in replaceable:
+                raise RuntimeError(f"Unexpected native library collision: {source.name}")
+            print(f"Replacing Hy-MT2 runtime library: {source.name}")
         shutil.copy2(source, destination)
-    print("Copied native libraries:", ", ".join(sorted(p.name for p in so_files)))
+    required_runtime = {
+        "libllama_jni.so", "libllama.so", "libggml.so",
+        "libggml-base.so", "libggml-cpu.so", "libggml-vulkan.so",
+        "libhymt2_jni.so",
+    }
+    missing_runtime = sorted(name for name in required_runtime if not (out_lib / name).is_file())
+    if missing_runtime:
+        raise RuntimeError("Vulkan runtime libraries missing from helper APK: " + ", ".join(missing_runtime))
+    print("Copied/replaced native libraries:", ", ".join(sorted(p.name for p in so_files)))
 
     # Coroutines can discover Android's Main dispatcher via META-INF service files.
     helper_services = helper / "unknown/META-INF/services"
