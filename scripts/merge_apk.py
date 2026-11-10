@@ -481,6 +481,11 @@ def patch_resources(base: Path) -> None:
         old, count = re.subn(r'\s*<LinearLayout[^>]*android:id="@id/hymt2_model_manager_row"[^>]*>.*?</LinearLayout>\s*</LinearLayout>\s*', '\n', old, count=1, flags=re.S)
         if count:
             secondary.write_text(old, encoding="utf-8")
+        if ROW_ID_NAME in secondary.read_text(encoding="utf-8"):
+            raise RuntimeError("Hy-MT2 row still exists in secondary SettingsServiceActivity")
+
+    if ROW_ID_NAME not in layout.read_text(encoding="utf-8"):
+        raise RuntimeError("Hy-MT2 row was not added to the primary fragment_settings layout")
 
     ids = base / "res/values/ids.xml"
     id_text = ids.read_text(encoding="utf-8")
