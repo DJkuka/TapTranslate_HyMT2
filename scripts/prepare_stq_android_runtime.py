@@ -27,21 +27,21 @@ def main() -> int:
     # only for that exact model signature while parsing its tensor table.
     header_path = llama / "ggml/include/ggml.h"
     header = header_path.read_text(encoding="utf-8")
-    if not re.search(r"GGML_TYPE_NVFP4\\s*=\\s*40,", header):
+    if not re.search(r"GGML_TYPE_NVFP4\s*=\s*40,", header):
         raise SystemExit("Unexpected NVFP4 GGML type id; expected 40")
-    if not re.search(r"GGML_TYPE_Q1_0\\s*=\\s*41,", header):
+    if not re.search(r"GGML_TYPE_Q1_0\s*=\s*41,", header):
         raise SystemExit("Unexpected Q1_0 GGML type id; expected 41")
-    if not re.search(r"GGML_TYPE_Q2_0\\s*=\\s*42,", header):
+    if not re.search(r"GGML_TYPE_Q2_0\s*=\s*42,", header):
         raise SystemExit("Upstream Q2_0 id 42 must remain unchanged")
-    if not re.search(r"GGML_TYPE_STQ1_0\\s*=\\s*43,", header):
+    if not re.search(r"GGML_TYPE_STQ1_0\s*=\s*43,", header):
         raise SystemExit("Upstream internal STQ1_0 id 43 must remain unchanged")
-    if not re.search(r"GGML_TYPE_COUNT\\s*=\\s*44", header):
+    if not re.search(r"GGML_TYPE_COUNT\s*=\s*44", header):
         raise SystemExit("Unexpected GGML_TYPE_COUNT")
 
     gguf_cpp = llama / "ggml/src/gguf.cpp"
     replace_once(
         gguf_cpp,
-        "    // read the tensor info\\n    for (int64_t i = 0; ok && i < n_tensors; ++i) {",
+        "    // read the tensor info\n    for (int64_t i = 0; ok && i < n_tensors; ++i) {",
         """    // Tencent's Hy-MT2 1.25-bit GGUF stores STQ1_0 as on-disk type 42,
     // which collides with the standard GGML_TYPE_Q2_0 id. Detect this exact
     // model signature from metadata and remap only its tensor entries to the
@@ -54,10 +54,10 @@ def main() -> int:
         gguf_get_kv_type(ctx, architecture_idx) == GGUF_TYPE_STRING &&
         gguf_get_kv_type(ctx, file_type_idx) == GGUF_TYPE_UINT32 &&
         strcmp(gguf_get_val_str(ctx, architecture_idx), "hunyuan-dense") == 0 &&
-        gguf_get_val_u32(ctx, file_type_idx) == 41;
+        gguf_get_val_u32(ctx, file_type_idx) == 42;
 
     if (is_tencent_hymt2_stq) {
-        GGML_LOG_INFO("%s: applying Tencent Hy-MT2 STQ1_0 GGUF compatibility mapping (disk type 42 -> internal STQ1_0)\\n", __func__);
+        GGML_LOG_INFO("%s: applying Tencent Hy-MT2 STQ1_0 GGUF compatibility mapping (disk type 42 -> internal STQ1_0)\n", __func__);
     }
 
     // read the tensor info
@@ -66,7 +66,7 @@ def main() -> int:
     )
     replace_once(
         gguf_cpp,
-        "            ok = ok && gr.read(info.t.type);\\n\\n            // check that tensor type is within defined range",
+        "            ok = ok && gr.read(info.t.type);\n\n            // check that tensor type is within defined range",
         """            ok = ok && gr.read(info.t.type);
 
             // Only Tencent Hy-MT2 1.25-bit GGUF reuses the Q2_0 disk id 42.
