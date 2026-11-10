@@ -57,7 +57,7 @@ def main() -> int:
         gguf_get_val_u32(ctx, file_type_idx) == 42;
 
     if (is_tencent_hymt2_stq) {
-        GGML_LOG_INFO("%s: applying Tencent Hy-MT2 STQ1_0 GGUF compatibility mapping (disk type 42 -> internal STQ1_0)\n", __func__);
+        GGML_LOG_INFO("%s: applying Tencent Hy-MT2 STQ1_0 GGUF compatibility mapping (disk type 42 -> internal STQ1_0)\\n", __func__);
     }
 
     // read the tensor info
