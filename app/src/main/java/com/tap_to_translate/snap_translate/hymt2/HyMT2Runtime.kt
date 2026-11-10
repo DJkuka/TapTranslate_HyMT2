@@ -164,40 +164,77 @@ object HyMT2Runtime {
                         val contextPairs = if (options.useRecentContext && options.recentContextPairs > 0) {
                             recentContextFor(host, sourceLanguageKey, targetLanguage, options.recentContextPairs)
                         } else emptyList()
-                        val prompt = buildTranslationPrompt(
-                            sourceText = sourceText,
-                            targetLanguage = targetLanguage,
-                            options = options,
-                        )
-                        // Count tokens after llama.cpp applies the GGUF chat template.
-                        val promptTokens = HyMT2PenaltyNative.countPromptTokens(model, prompt)
-                        val availableOutputTokens = (options.contextSize - promptTokens - 32).coerceAtLeast(0)
-                        if (availableOutputTokens < 8) {
-                            error("Входной текст не помещается в выбранный контекст ${options.contextSize}. Выбери больший контекст или сократи OCR-фрагмент.")
+                        // The host app serializes its OCR list as one text block per line.
+                        // ScreenTranslateService.f() splits the returned String on '\\n' and
+                        // requires the output line count to equal the original OCR block count.
+                        // Translate blocks independently so model-generated line wrapping can
+                        // never break that contract.
+                        val sourceBlocks = java.util.regex.Pattern.compile("\\n").split(sourceText).toList()
+                        if (sourceBlocks.isEmpty()) error("Входной OCR-текст пуст")
+                        val translatedBlocks = ArrayList<String>(sourceBlocks.size)
+                        val translationStartedAt = SystemClock.elapsedRealtime()
+                        var generatedTokens = 0
+                        var generatedTimeMs = 0L
+
+                        sourceBlocks.forEachIndexed { index, sourceBlock ->
+                            if (sourceBlock.isBlank()) {
+                                translatedBlocks += ""
+                            } else {
+                                val prompt = buildTranslationPrompt(
+                                    sourceText = sourceBlock,
+                                    targetLanguage = targetLanguage,
+                                    options = options,
+                                )
+                                val promptTokens = HyMT2PenaltyNative.countPromptTokens(model, prompt)
+                                val availableOutputTokens = (options.contextSize - promptTokens - 32).coerceAtLeast(0)
+                                if (availableOutputTokens < 8) {
+                                    error("OCR-блок ${index + 1}/${sourceBlocks.size} не помещается в контекст ${options.contextSize}. Выбери больший контекст.")
+                                }
+                                val effectiveMaxTokens = min(options.maxTokens, availableOutputTokens)
+                                val completion = HyMT2PenaltyNative.complete(
+                                    model = model,
+                                    prompt = prompt,
+                                    maxTokens = effectiveMaxTokens,
+                                    temperature = options.temperature,
+                                    topP = options.topP,
+                                    topK = options.topK,
+                                    repetitionPenalty = options.repetitionPenalty,
+                                )
+                                // One OCR block must yield exactly one output line. If the
+                                // model wraps a sentence, flatten those wraps within this block.
+                                val translatedBlock = completion.text
+                                    .replace('\\r', '\\n')
+                                    .split('\\n')
+                                    .joinToString(" ") { it.trim() }
+                                    .replace(Regex("\\s+"), " ")
+                                    .trim()
+                                if (translatedBlock.isBlank()) {
+                                    error("Hy-MT2 вернул пустой перевод для OCR-блока ${index + 1}/${sourceBlocks.size}")
+                                }
+                                translatedBlocks += translatedBlock
+                                generatedTokens += completion.tokensGenerated
+                                generatedTimeMs += completion.generateTimeMs
+                                Log.d(TAG, "OCR block ${index + 1}/${sourceBlocks.size}: promptTokens=$promptTokens, outputChars=${translatedBlock.length}")
+                            }
                         }
-                        val effectiveMaxTokens = min(options.maxTokens, availableOutputTokens)
-                        Log.i(TAG, "Prompt tokens=$promptTokens; context=${options.contextSize}; effective maxTokens=$effectiveMaxTokens")
-                        val startedAt = SystemClock.elapsedRealtime()
-                        val completion = HyMT2PenaltyNative.complete(
-                            model = model,
-                            prompt = prompt,
-                            maxTokens = effectiveMaxTokens,
-                            temperature = options.temperature,
-                            topP = options.topP,
-                            topK = options.topK,
-                            repetitionPenalty = options.repetitionPenalty,
-                        )
-                        val elapsedMs = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(1L)
-                        completion.text.trim().also { translated ->
-                            if (translated.isBlank()) error("The model returned an empty translation")
-                            rememberRecentContext(host, sourceLanguageKey, targetLanguage, sourceText, translated)
-                            HyMT2Settings.recordTranslation(
-                                appContext,
-                                elapsedMs,
-                                completion.tokensPerSecond.toDouble(),
-                                translated.length,
-                            )
+
+                        if (translatedBlocks.size != sourceBlocks.size) {
+                            error("Нарушено соответствие OCR-блоков: вход=${sourceBlocks.size}, выход=${translatedBlocks.size}")
                         }
+                        val translated = translatedBlocks.joinToString("\\n")
+                        val elapsedMs = (SystemClock.elapsedRealtime() - translationStartedAt).coerceAtLeast(1L)
+                        val aggregateTokensPerSecond = if (generatedTimeMs > 0L) {
+                            generatedTokens * 1000.0 / generatedTimeMs
+                        } else 0.0
+                        Log.i(TAG, "OCR block mapping preserved: input=${sourceBlocks.size}, output=${translatedBlocks.size}")
+                        rememberRecentContext(host, sourceLanguageKey, targetLanguage, sourceText, translated)
+                        HyMT2Settings.recordTranslation(
+                            appContext,
+                            elapsedMs,
+                            aggregateTokensPerSecond,
+                            translated.length,
+                        )
+                        translated
                     }
 
                     mainHandler.post { deliverResult(host, result, sourceText) }
@@ -230,7 +267,6 @@ object HyMT2Runtime {
             append("Translate the following text into ")
                 .append(targetLanguage)
                 .append(". Note that you should only output the translated result without any additional explanation:")
-            append("\\nPreserve the original line breaks, dialogue order, and speaker labels.")
             if (background.isNotEmpty()) {
                 append("\n\nBackground information:\n").append(background)
             }
