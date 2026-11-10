@@ -38,6 +38,7 @@ class HyMT2SettingsActivity : Activity() {
 
     private lateinit var profileSpinner: Spinner
     private lateinit var threadsSpinner: Spinner
+    private lateinit var gpuLayerSpinner: Spinner
     private lateinit var contextSpinner: Spinner
     private lateinit var maxTokensSpinner: Spinner
     private lateinit var historySpinner: Spinner
@@ -45,6 +46,7 @@ class HyMT2SettingsActivity : Activity() {
     private lateinit var temperatureInput: EditText
     private lateinit var topPInput: EditText
     private lateinit var topKInput: EditText
+    private lateinit var repetitionPenaltyInput: EditText
     private lateinit var backgroundInput: EditText
     private lateinit var glossaryInput: EditText
     private lateinit var customStyleInput: EditText
@@ -116,11 +118,13 @@ class HyMT2SettingsActivity : Activity() {
             }
         }
         threadsSpinner = addSpinner(root, "Потоки CPU", HyMT2Settings.threadChoices.map { it.toString() })
+        gpuLayerSpinner = addSpinner(root, "Слои Vulkan на GPU", HyMT2Settings.gpuLayerChoices.map { if (it == 0) "0 · CPU only" else it.toString() })
         contextSpinner = addSpinner(root, "Размер контекста (токены)", HyMT2Settings.contextChoices.map { it.toString() })
         maxTokensSpinner = addSpinner(root, "Максимум выходных токенов", HyMT2Settings.maxTokenChoices.map { it.toString() })
         temperatureInput = addEdit(root, "Temperature (0–2)", "0.7", decimal = true)
         topPInput = addEdit(root, "Top-P (0,05–1)", "0.6", decimal = true)
         topKInput = addEdit(root, "Top-K (1–100)", "20", decimal = false)
+        repetitionPenaltyInput = addEdit(root, "Repetition penalty (1–2)", "1.05", decimal = true)
 
         addSection(root, "КОНТЕКСТ ПЕРЕВОДА")
         addText(root, "Фоновое описание мира, персонажей и ситуации. Hy-MT2 будет учитывать его, но не переводить.", 13f)
@@ -144,11 +148,11 @@ class HyMT2SettingsActivity : Activity() {
         customStyleInput.maxLines = 5
 
         addSection(root, "УСКОРЕНИЕ GPU")
-        vulkanSwitch = addSwitch(root, "Экспериментальное ускорение Vulkan", false)
-        vulkanSwitch.isEnabled = false
+        vulkanSwitch = addSwitch(root, "Использовать Vulkan на Adreno 610", true)
+        vulkanSwitch.isEnabled = HyMT2Settings.VULKAN_BACKEND_COMPILED
         addText(
             root,
-            "Adreno 610 в Snapdragon 680 поддерживает Vulkan 1.1, но включённая в эту сборку библиотека llama.cpp собрана только с CPU/NEON. Переключатель оставлен отдельным; он станет доступен после сборки и проверки отдельного Vulkan-runtime. Сейчас приложение гарантированно продолжает использовать CPU.",
+            "Проверенный профиль для Lenovo Xiaoxin Pad 2022: Vulkan · 8 GPU layers + 6 CPU threads. Отключение Vulkan использует CPU/NEON; число GPU-слоёв при этом не применяется.",
             12f,
         )
 
@@ -174,6 +178,7 @@ class HyMT2SettingsActivity : Activity() {
         lastProfileSelection = options.performanceProfile
         selectSpinner(profileSpinner, HyMT2Settings.profileChoices.indexOf(options.performanceProfile))
         selectSpinner(threadsSpinner, HyMT2Settings.threadChoices.indexOf(options.threads))
+        selectSpinner(gpuLayerSpinner, HyMT2Settings.gpuLayerChoices.indexOf(options.gpuLayers))
         selectSpinner(contextSpinner, HyMT2Settings.contextChoices.indexOf(options.contextSize))
         selectSpinner(maxTokensSpinner, HyMT2Settings.maxTokenChoices.indexOf(options.maxTokens))
         selectSpinner(historySpinner, HyMT2Settings.historyChoices.indexOf(options.recentContextPairs))
@@ -181,11 +186,12 @@ class HyMT2SettingsActivity : Activity() {
         temperatureInput.setText(options.temperature.toString())
         topPInput.setText(options.topP.toString())
         topKInput.setText(options.topK.toString())
+        repetitionPenaltyInput.setText(options.repetitionPenalty.toString())
         recentContextSwitch.isChecked = options.useRecentContext
         backgroundInput.setText(options.backgroundContext)
         glossaryInput.setText(options.glossary)
         customStyleInput.setText(options.customStyle)
-        vulkanSwitch.isChecked = false
+        vulkanSwitch.isChecked = options.useVulkan
         bindingControls = false
         updateStats()
     }
@@ -194,17 +200,21 @@ class HyMT2SettingsActivity : Activity() {
         try {
             val old = HyMT2Settings.load(this)
             val threads = selectedInt(threadsSpinner, HyMT2Settings.threadChoices)
+            val gpuLayers = selectedInt(gpuLayerSpinner, HyMT2Settings.gpuLayerChoices)
             val contextSize = selectedInt(contextSpinner, HyMT2Settings.contextChoices)
             val maxTokens = selectedInt(maxTokensSpinner, HyMT2Settings.maxTokenChoices)
             val historyCount = selectedInt(historySpinner, HyMT2Settings.historyChoices)
             val temperature = temperatureInput.text.toString().trim().replace(',', '.').toFloat()
             val topP = topPInput.text.toString().trim().replace(',', '.').toFloat()
             val topK = topKInput.text.toString().trim().toInt()
+            val repetitionPenalty = repetitionPenaltyInput.text.toString().trim().replace(',', '.').toFloat()
             val style = styleSpinner.selectedItem?.toString() ?: HyMT2Settings.styleChoices.first()
             val options = HyMT2Options(
                 threads = threads,
                 contextSize = contextSize,
                 maxTokens = maxTokens,
+                gpuLayers = gpuLayers,
+                repetitionPenalty = repetitionPenalty,
                 temperature = temperature,
                 topP = topP,
                 topK = topK,
@@ -214,13 +224,15 @@ class HyMT2SettingsActivity : Activity() {
                 glossary = glossaryInput.text.toString(),
                 stylePreset = style,
                 customStyle = customStyleInput.text.toString(),
-                useVulkan = false,
+                useVulkan = vulkanSwitch.isChecked,
                 performanceProfile = profileSpinner.selectedItem?.toString() ?: HyMT2Settings.profileChoices.last(),
             )
             HyMT2Settings.save(this, options)
             val requiresReload = old.threads != options.threads ||
                 old.contextSize != options.contextSize ||
-                old.temperature != options.temperature || old.topP != options.topP || old.topK != options.topK
+                old.useVulkan != options.useVulkan || old.gpuLayers != options.gpuLayers ||
+                old.temperature != options.temperature || old.topP != options.topP ||
+                old.topK != options.topK || old.repetitionPenalty != options.repetitionPenalty
 
             if (HyMT2Runtime.isLoaded() && requiresReload) {
                 status.text = "Настройки сохранены. Выгружаю модель, чтобы применить параметры загрузки…"
@@ -245,16 +257,18 @@ class HyMT2SettingsActivity : Activity() {
     private fun applyPerformanceProfile(profile: String) {
         when (profile) {
             HyMT2Settings.profileChoices[0] -> {
-                selectSpinner(threadsSpinner, HyMT2Settings.threadChoices.indexOf(4))
-                selectSpinner(contextSpinner, HyMT2Settings.contextChoices.indexOf(2048))
-                selectSpinner(maxTokensSpinner, HyMT2Settings.maxTokenChoices.indexOf(512))
+                selectSpinner(threadsSpinner, HyMT2Settings.threadChoices.indexOf(6))
+                selectSpinner(gpuLayerSpinner, HyMT2Settings.gpuLayerChoices.indexOf(8))
+                selectSpinner(contextSpinner, HyMT2Settings.contextChoices.indexOf(1024))
+                selectSpinner(maxTokensSpinner, HyMT2Settings.maxTokenChoices.indexOf(256))
                 temperatureInput.setText("0.5")
                 topPInput.setText("0.6")
                 topKInput.setText("20")
                 selectSpinner(historySpinner, HyMT2Settings.historyChoices.indexOf(1))
             }
             HyMT2Settings.profileChoices[1] -> {
-                selectSpinner(threadsSpinner, HyMT2Settings.threadChoices.indexOf(4))
+                selectSpinner(threadsSpinner, HyMT2Settings.threadChoices.indexOf(6))
+                selectSpinner(gpuLayerSpinner, HyMT2Settings.gpuLayerChoices.indexOf(8))
                 selectSpinner(contextSpinner, HyMT2Settings.contextChoices.indexOf(2048))
                 selectSpinner(maxTokensSpinner, HyMT2Settings.maxTokenChoices.indexOf(768))
                 temperatureInput.setText("0.7")
@@ -263,7 +277,8 @@ class HyMT2SettingsActivity : Activity() {
                 selectSpinner(historySpinner, HyMT2Settings.historyChoices.indexOf(2))
             }
             HyMT2Settings.profileChoices[2] -> {
-                selectSpinner(threadsSpinner, HyMT2Settings.threadChoices.indexOf(4))
+                selectSpinner(threadsSpinner, HyMT2Settings.threadChoices.indexOf(6))
+                selectSpinner(gpuLayerSpinner, HyMT2Settings.gpuLayerChoices.indexOf(8))
                 selectSpinner(contextSpinner, HyMT2Settings.contextChoices.indexOf(4096))
                 selectSpinner(maxTokensSpinner, HyMT2Settings.maxTokenChoices.indexOf(1024))
                 temperatureInput.setText("0.7")
