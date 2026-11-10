@@ -384,120 +384,119 @@ def patch_atomic_backport_shims(base: Path) -> None:
     print(f"Verified all {len(references)} referenced D8 synthetic classes are present")
 
 def patch_settings_click(base: Path) -> None:
-    settings = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/activitys/SettingsServiceActivity.smali"
-    text = settings.read_text(encoding="utf-8")
+    # Put Hy-MT2 in the app's actual Settings tab (mh.p / fragment_settings),
+    # not the floating SettingsServiceActivity dialog.
+    fragment = base / "smali_classes3/mh/p.smali"
+    text = fragment.read_text(encoding="utf-8")
     if "hymt2_model_manager_row" not in text and "0x7f0a04f1" not in text:
-        anchor = '''    invoke-virtual {p1, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+        anchor = '''    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
 
-    iget-object p1, p0, Lcom/tap_to_translate/snap_translate/domain/main/activitys/SettingsServiceActivity;->k:Landroid/widget/ImageView;'''
-        replacement = '''    invoke-virtual {p1, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+    const p2, 0x7f0a01bf'''
+        replacement = '''    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
 
-    const p1, 0x7f0a04f1
+    const p2, 0x7f0a04f1
 
-    invoke-virtual {p0, p1}, Landroidx/appcompat/app/AppCompatActivity;->findViewById(I)Landroid/view/View;
+    invoke-virtual {p1, p2}, Landroid/view/View;->findViewById(I)Landroid/view/View;
 
-    move-result-object p1
+    move-result-object p2
 
-    new-instance v0, Llh/m;
+    new-instance v0, Lmh/n;
 
-    invoke-direct {v0, p0}, Llh/m;-><init>(Landroid/app/Activity;)V
+    invoke-direct {v0, p0}, Lmh/n;-><init>(Lmh/p;)V
 
-    invoke-virtual {p1, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
 
-    iget-object p1, p0, Lcom/tap_to_translate/snap_translate/domain/main/activitys/SettingsServiceActivity;->k:Landroid/widget/ImageView;'''
+    const p2, 0x7f0a01bf'''
         if anchor not in text:
-            raise RuntimeError("Could not find SettingsServiceActivity listener insertion point")
+            raise RuntimeError("Could not find primary Settings fragment listener insertion point")
         text = text.replace(anchor, replacement, 1)
-        settings.write_text(text, encoding="utf-8")
+        fragment.write_text(text, encoding="utf-8")
 
-    click = base / "smali_classes3/lh/m.smali"
-    if not click.exists():
-        click.write_text('''.class public final Llh/m;
+    listener = base / "smali_classes3/mh/n.smali"
+    listener.write_text('''.class public final Lmh/n;
 .super Ljava/lang/Object;
 
 # interfaces
 .implements Landroid/view/View$OnClickListener;
 
-# instance fields
-.field private final a:Landroid/app/Activity;
+.field private final a:Lmh/p;
 
-# direct methods
-.method public constructor <init>(Landroid/app/Activity;)V
+.method public constructor <init>(Lmh/p;)V
     .locals 0
-
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
-
-    iput-object p1, p0, Llh/m;->a:Landroid/app/Activity;
-
+    iput-object p1, p0, Lmh/n;->a:Lmh/p;
     return-void
 .end method
 
-# virtual methods
 .method public final onClick(Landroid/view/View;)V
     .locals 3
-
-    iget-object v0, p0, Llh/m;->a:Landroid/app/Activity;
-
+    iget-object v0, p0, Lmh/n;->a:Lmh/p;
+    invoke-virtual {v0}, Landroidx/fragment/app/Fragment;->requireContext()Landroid/content/Context;
+    move-result-object v0
     new-instance v1, Landroid/content/Intent;
-
     const-class v2, Lcom/tap_to_translate/snap_translate/hymt2/HyMT2SettingsActivity;
-
     invoke-direct {v1, v0, v2}, Landroid/content/Intent;-><init>(Landroid/content/Context;Ljava/lang/Class;)V
-
-    invoke-virtual {v0, v1}, Landroid/app/Activity;->startActivity(Landroid/content/Intent;)V
-
+    invoke-virtual {v0, v1}, Landroid/content/Context;->startActivity(Landroid/content/Intent;)V
     return-void
 .end method
 ''', encoding="utf-8")
 
+    # Remove the previous, misplaced click listener from SettingsServiceActivity.
+    settings = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/activitys/SettingsServiceActivity.smali"
+    old = settings.read_text(encoding="utf-8")
+    start = old.find("    const p1, 0x7f0a04f1")
+    if start >= 0:
+        end_marker = "    invoke-virtual {p1, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V\n"
+        end = old.find(end_marker, start)
+        if end < 0:
+            raise RuntimeError("Could not remove old secondary-settings listener cleanly")
+        old = old[:start] + old[end + len(end_marker):]
+        settings.write_text(old, encoding="utf-8")
+
 
 def patch_resources(base: Path) -> None:
-    # Add the new settings row.
-    layout = base / "res/layout/activity_settings_service.xml"
+    # The row is part of fragment_settings.xml, the actual main Settings tab.
+    layout = base / "res/layout/fragment_settings.xml"
     text = layout.read_text(encoding="utf-8")
     if ROW_ID_NAME not in text:
-        anchor = '                    <com.tap_to_translate.snap_translate.domain.main.widgets.custom.WidgetChooseLanguage'
-        row = f'''                    <LinearLayout android:gravity="center" android:orientation="horizontal" android:id="@id/{ROW_ID_NAME}" android:background="@drawable/bg_spinner_language" android:paddingTop="5.0dip" android:paddingBottom="5.0dip" android:focusable="true" android:clickable="true" android:layout_width="fill_parent" android:layout_height="45.0dip" android:layout_marginLeft="15.0dip" android:layout_marginTop="15.0dip" android:layout_marginRight="15.0dip" android:foreground="@drawable/fg_efftect_8" android:paddingVertical="5.0dip">
-                        <LinearLayout android:gravity="center|left" android:orientation="vertical" android:layout_width="0.0dip" android:layout_height="wrap_content" android:layout_marginLeft="20.0dip" android:layout_weight="1.0">
-                            <TextView android:theme="@style/fontSemi" android:textSize="17.0dip" android:textColor="@color/cl_text_word" android:gravity="center|left" android:layout_width="fill_parent" android:layout_height="wrap_content" android:text="Hy-MT2 Offline · GGUF model settings" android:includeFontPadding="false" />
-                        </LinearLayout>
-                        <ImageView android:layout_width="11.0dip" android:layout_height="11.0dip" android:layout_marginRight="20.0dip" android:src="@drawable/ic_more_dropdown_svg" />
-                    </LinearLayout>
-'''
+        anchor = '''            <View android:background="@color/cl_underLine" android:layout_width="fill_parent" android:layout_height="1.0dip" android:layout_marginLeft="25.0dip" android:layout_marginRight="25.0dip" />
+            <LinearLayout android:gravity="start|center" android:orientation="horizontal" android:id="@id/fragment_setting_ll_voice_settings"'''
+        row = f'''            <View android:background="@color/cl_underLine" android:layout_width="fill_parent" android:layout_height="1.0dip" android:layout_marginLeft="25.0dip" android:layout_marginRight="25.0dip" />
+            <LinearLayout android:gravity="start|center" android:orientation="horizontal" android:id="@id/{ROW_ID_NAME}" android:paddingLeft="15.0dip" android:paddingTop="15.0dip" android:paddingRight="15.0dip" android:paddingBottom="15.0dip" android:focusable="true" android:clickable="true" android:layout_width="fill_parent" android:layout_height="wrap_content" android:foreground="@drawable/fg_efftect">
+                <ImageView android:padding="5.0dip" android:layout_width="30.0dip" android:layout_height="30.0dip" android:layout_marginRight="10.0dip" android:src="@drawable/ic_download_svg" />
+                <TextView android:textSize="18.0dip" android:textColor="@color/cl_text_word" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Hy-MT2 Offline · настройки перевода" />
+            </LinearLayout>
+            <View android:background="@color/cl_underLine" android:layout_width="fill_parent" android:layout_height="1.0dip" android:layout_marginLeft="25.0dip" android:layout_marginRight="25.0dip" />
+            <LinearLayout android:gravity="start|center" android:orientation="horizontal" android:id="@id/fragment_setting_ll_voice_settings"'''
         if anchor not in text:
-            raise RuntimeError("Could not find insertion point in activity_settings_service.xml")
-        text = text.replace(anchor, row + anchor, 1)
+            raise RuntimeError("Could not find primary settings layout insertion point")
+        text = text.replace(anchor, row, 1)
         layout.write_text(text, encoding="utf-8")
 
-    # The entry is shown directly on SettingsServiceActivity (the app's main
-    # settings screen), not only inside the model manager.
-    text = layout.read_text(encoding="utf-8")
-    text = text.replace(
-        "Hy-MT2 Offline · GGUF model settings",
-        "Hy-MT2 Offline · Translation settings",
-    )
-    layout.write_text(text, encoding="utf-8")
+    # Remove the old row from the secondary floating settings dialog if it exists.
+    secondary = base / "res/layout/activity_settings_service.xml"
+    if secondary.exists():
+        import re
+        old = secondary.read_text(encoding="utf-8")
+        old, count = re.subn(r'\s*<LinearLayout[^>]*android:id="@id/hymt2_model_manager_row"[^>]*>.*?</LinearLayout>\s*', '\n', old, count=1, flags=re.S)
+        if count:
+            secondary.write_text(old, encoding="utf-8")
 
     ids = base / "res/values/ids.xml"
     id_text = ids.read_text(encoding="utf-8")
     if ROW_ID_NAME not in id_text:
-        item = f'    <item type="id" name="{ROW_ID_NAME}" />\n'
         anchor = '    <item type="id" name="home_wcv_font_size" />\n'
         if anchor not in id_text:
             raise RuntimeError("Could not find end of ids.xml for new view ID")
-        id_text = id_text.replace(anchor, anchor + item, 1)
-        ids.write_text(id_text, encoding="utf-8")
+        ids.write_text(id_text.replace(anchor, anchor + f'    <item type="id" name="{ROW_ID_NAME}" />\n', 1), encoding="utf-8")
 
     public = base / "res/values/public.xml"
     pub_text = public.read_text(encoding="utf-8")
     if ROW_ID_NAME not in pub_text:
-        item = f'    <public type="id" name="{ROW_ID_NAME}" id="{ROW_ID}" />\n'
         anchor = '    <public type="id" name="home_wcv_font_size" id="0x7f0a04f0" />\n'
         if anchor not in pub_text:
             raise RuntimeError("Could not find end of public id table")
-        pub_text = pub_text.replace(anchor, anchor + item, 1)
-        public.write_text(pub_text, encoding="utf-8")
-
+        public.write_text(pub_text.replace(anchor, anchor + f'    <public type="id" name="{ROW_ID_NAME}" id="{ROW_ID}" />\n', 1), encoding="utf-8")
 
 def patch_manifest(base: Path) -> None:
     path = base / "AndroidManifest.xml"
