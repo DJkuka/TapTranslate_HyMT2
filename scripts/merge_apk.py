@@ -398,9 +398,9 @@ def patch_settings_click(base: Path) -> None:
 
     move-result-object p2
 
-    new-instance v0, Lmh/n;
+    new-instance v0, Lcom/tap_to_translate/snap_translate/hymt2/HyMT2SettingsClickListener;
 
-    invoke-direct {v0, p0}, Lmh/n;-><init>(Lmh/p;)V
+    invoke-direct {v0, p0}, Lcom/tap_to_translate/snap_translate/hymt2/HyMT2SettingsClickListener;-><init>(Lmh/p;)V
 
     invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
 
@@ -412,8 +412,8 @@ def patch_settings_click(base: Path) -> None:
         text = text.replace(anchor, replacement, 1)
         fragment.write_text(text, encoding="utf-8")
 
-    listener = base / "smali_classes3/mh/n.smali"
-    listener.write_text('''.class public final Lmh/n;
+    listener = base / "smali_classes5/com/tap_to_translate/snap_translate/hymt2/HyMT2SettingsClickListener.smali"
+    listener.write_text('''.class public final Lcom/tap_to_translate/snap_translate/hymt2/HyMT2SettingsClickListener;
 .super Ljava/lang/Object;
 
 # interfaces
@@ -424,13 +424,13 @@ def patch_settings_click(base: Path) -> None:
 .method public constructor <init>(Lmh/p;)V
     .locals 0
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
-    iput-object p1, p0, Lmh/n;->a:Lmh/p;
+    iput-object p1, p0, Lcom/tap_to_translate/snap_translate/hymt2/HyMT2SettingsClickListener;->a:Lmh/p;
     return-void
 .end method
 
 .method public final onClick(Landroid/view/View;)V
     .locals 3
-    iget-object v0, p0, Lmh/n;->a:Lmh/p;
+    iget-object v0, p0, Lcom/tap_to_translate/snap_translate/hymt2/HyMT2SettingsClickListener;->a:Lmh/p;
     invoke-virtual {v0}, Landroidx/fragment/app/Fragment;->requireContext()Landroid/content/Context;
     move-result-object v0
     new-instance v1, Landroid/content/Intent;
