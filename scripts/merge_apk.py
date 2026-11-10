@@ -538,7 +538,13 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
                         shutil.copy2(source, destination)
                         replaced += 1
                         continue
-                    # Do not silently introduce duplicate classes across DEX files.
+                    # The host APK already supplies Kotlin stdlib/coroutines and
+                    # annotations. Keep those host copies instead of duplicating them
+                    # from the helper APK. The actual Hy-MT2 and llama API packages
+                    # are refreshed in classes5.dex above.
+                    if rel.startswith(("kotlin/", "kotlinx/", "org/jetbrains/annotations/")):
+                        continue
+                    # Do not silently introduce duplicate app/runtime classes across DEX files.
                     other = [d for d in base.glob("smali*") if d.is_dir() and d != target_root and (d / rel).is_file()]
                     if other:
                         if (other[0] / rel).read_bytes() == source.read_bytes():
