@@ -469,6 +469,15 @@ def patch_resources(base: Path) -> None:
         text = text.replace(anchor, row + anchor, 1)
         layout.write_text(text, encoding="utf-8")
 
+    # The entry is shown directly on SettingsServiceActivity (the app's main
+    # settings screen), not only inside the model manager.
+    text = layout.read_text(encoding="utf-8")
+    text = text.replace(
+        "Hy-MT2 Offline · GGUF model settings",
+        "Hy-MT2 Offline · Translation settings",
+    )
+    layout.write_text(text, encoding="utf-8")
+
     ids = base / "res/values/ids.xml"
     id_text = ids.read_text(encoding="utf-8")
     if ROW_ID_NAME not in id_text:
