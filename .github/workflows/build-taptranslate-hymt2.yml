@@ -54,9 +54,9 @@ jobs:
           unzip -q app/libs/llama-android-vulkan.aar -d build/vulkan-aar
           test -f build/vulkan-aar/jni/arm64-v8a/libggml-vulkan.so
           test -f build/vulkan-aar/jni/arm64-v8a/libllama.so
-          git clone --recurse-submodules https://github.com/ffmpegkit-maintained/llama-android.git upstream/llama-android
-          test "$(git -C upstream/llama-android/llama.cpp describe --tags --exact-match)" = "b9878"
-          echo "LLAMA_ROOT=$GITHUB_WORKSPACE/upstream/llama-android/llama.cpp" >> "$GITHUB_ENV"
+          git clone --depth 1 --branch b9878 https://github.com/ggml-org/llama.cpp.git upstream/llama.cpp
+          test "$(git -C upstream/llama.cpp describe --tags --exact-match)" = "b9878"
+          echo "LLAMA_ROOT=$GITHUB_WORKSPACE/upstream/llama.cpp" >> "$GITHUB_ENV"
           echo "VULKAN_AAR_NATIVE_DIR=$GITHUB_WORKSPACE/build/vulkan-aar/jni/arm64-v8a" >> "$GITHUB_ENV"
 
       - name: Set up Gradle
