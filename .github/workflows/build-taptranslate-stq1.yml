@@ -56,6 +56,28 @@ jobs:
           git -C upstream/llama-android/llama.cpp checkout 1e411d8f5a1e23525fa3265dfb4bd76265465397
           echo "LLAMA_ROOT=$GITHUB_WORKSPACE/upstream/llama-android/llama.cpp" >> "$GITHUB_ENV"
 
+      - name: Install pinned Vulkan and SPIR-V headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/KhronosGroup/Vulkan-Headers.git upstream/Vulkan-Headers
+          git -C upstream/Vulkan-Headers checkout b379292b2ab6df5771ba9870d53cf8b2c9295daf
+          git clone https://github.com/KhronosGroup/SPIRV-Headers.git upstream/SPIRV-Headers
+          git -C upstream/SPIRV-Headers checkout 2acb319af38d43be3ea76bfabf3998e5281d8d12
+          cmake -S upstream/SPIRV-Headers -B build/spirv-headers \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/build/spirv-headers-install"
+          cmake --build build/spirv-headers --target install
+          echo "VULKAN_HEADERS_INCLUDE_DIR=$GITHUB_WORKSPACE/upstream/Vulkan-Headers/include" >> "$GITHUB_ENV"
+          echo "SPIRV_HEADERS_INCLUDE_DIR=$GITHUB_WORKSPACE/build/spirv-headers-install/include" >> "$GITHUB_ENV"
+          echo "SPIRV_HEADERS_CMAKE_DIR=$GITHUB_WORKSPACE/build/spirv-headers-install/share/cmake/SPIRV-Headers" >> "$GITHUB_ENV"
+
+      - name: Enable Vulkan and verify Tencent STQ1_0 type mapping
+        run: |
+          python3 -m py_compile scripts/prepare_stq_android_runtime.py
+          python3 scripts/prepare_stq_android_runtime.py \
+            --llama-root "$LLAMA_ROOT" \
+            --android-wrapper-root "$GITHUB_WORKSPACE/upstream/llama-android"
+
       - name: Build host llama-cli and load the exact Tencent STQ1_0 GGUF
         shell: bash
         run: |
@@ -78,28 +100,6 @@ jobs:
             -m test-model/Hy-MT2-1.8B-1.25Bit.gguf \
             -p "Translate the following text into Russian. Output only the translation: Hello, world." \
             -n 8 -c 256 -t 2 --temp 0.1 --no-display-prompt
-
-      - name: Install pinned Vulkan and SPIR-V headers
-        shell: bash
-        run: |
-          set -euo pipefail
-          git clone https://github.com/KhronosGroup/Vulkan-Headers.git upstream/Vulkan-Headers
-          git -C upstream/Vulkan-Headers checkout b379292b2ab6df5771ba9870d53cf8b2c9295daf
-          git clone https://github.com/KhronosGroup/SPIRV-Headers.git upstream/SPIRV-Headers
-          git -C upstream/SPIRV-Headers checkout 2acb319af38d43be3ea76bfabf3998e5281d8d12
-          cmake -S upstream/SPIRV-Headers -B build/spirv-headers \
-            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/build/spirv-headers-install"
-          cmake --build build/spirv-headers --target install
-          echo "VULKAN_HEADERS_INCLUDE_DIR=$GITHUB_WORKSPACE/upstream/Vulkan-Headers/include" >> "$GITHUB_ENV"
-          echo "SPIRV_HEADERS_INCLUDE_DIR=$GITHUB_WORKSPACE/build/spirv-headers-install/include" >> "$GITHUB_ENV"
-          echo "SPIRV_HEADERS_CMAKE_DIR=$GITHUB_WORKSPACE/build/spirv-headers-install/share/cmake/SPIRV-Headers" >> "$GITHUB_ENV"
-
-      - name: Enable Vulkan and verify Tencent STQ1_0 type mapping
-        run: |
-          python3 -m py_compile scripts/prepare_stq_android_runtime.py
-          python3 scripts/prepare_stq_android_runtime.py \
-            --llama-root "$LLAMA_ROOT" \
-            --android-wrapper-root "$GITHUB_WORKSPACE/upstream/llama-android"
 
       - name: Build Android native runtime AAR with STQ1_0 and Vulkan
         run: |
