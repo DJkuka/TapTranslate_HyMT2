@@ -32,8 +32,11 @@ object HyMT2Runtime {
     private const val TAG = "TapTranslateHyMT2"
     private const val MODEL_NAME = "Hy-MT2-1.8B-Q4_K_M.gguf"
     private const val MIN_MODEL_BYTES = 100L * 1024L * 1024L
+    const val MODEL_KIND_Q4 = "Q4_K_M"
+    const val MODEL_KIND_STQ1 = "STQ1_0"
     private const val PREFS = "hymt2_model_selection"
     private const val KEY_MODEL_URI = "model_uri"
+    private const val KEY_MODEL_KIND = "model_kind"
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val modelMutex = Mutex()
@@ -70,11 +73,20 @@ object HyMT2Runtime {
     }
 
     @JvmStatic
-    fun setSelectedModelUri(context: Context, uri: Uri) {
+    fun setSelectedModelUri(context: Context, uri: Uri, modelKind: String) {
+        val safeKind = if (modelKind == MODEL_KIND_STQ1) MODEL_KIND_STQ1 else MODEL_KIND_Q4
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putString(KEY_MODEL_URI, uri.toString()).apply()
-        Log.i(TAG, "Persisted SAF model URI: $uri")
+            .edit()
+            .putString(KEY_MODEL_URI, uri.toString())
+            .putString(KEY_MODEL_KIND, safeKind)
+            .apply()
+        Log.i(TAG, "Persisted SAF model URI: $uri; kind=$safeKind")
     }
+
+    @JvmStatic
+    fun selectedModelKind(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_MODEL_KIND, MODEL_KIND_Q4) ?: MODEL_KIND_Q4
 
     @JvmStatic
     fun hasModel(context: Context): Boolean {
@@ -321,6 +333,8 @@ object HyMT2Runtime {
         val selectedUri = selectedModelUri(context)
             ?: error("GGUF-файл Hy-MT2 не выбран. Выбери исходную модель через системный проводник.")
         val sourceKey = selectedUri.toString()
+        val modelKind = selectedModelKind(context)
+        val isStqModel = modelKind == MODEL_KIND_STQ1
 
         val existing = loadedModel
         if (existing != null && loadedSource == sourceKey) return@withLock existing
@@ -357,7 +371,9 @@ object HyMT2Runtime {
                 config = LlamaConfig(
                     contextSize = options.contextSize,
                     threads = threads,
-                    gpuLayers = if (options.useVulkan) options.gpuLayers else 0,
+                    // Legacy AngelSlim STQ1_0 weights have a dedicated ARM NEON CPU kernel.
+                    // Vulkan has no STQ1_0 tensor kernel, so never offload this model.
+                    gpuLayers = if (isStqModel) 0 else if (options.useVulkan) options.gpuLayers else 0,
                     temperature = options.temperature,
                     topP = options.topP,
                     topK = options.topK,
@@ -367,7 +383,7 @@ object HyMT2Runtime {
             loadedModel = created
             loadedDescriptor = descriptor
             descriptor = null // Ownership moved to loadedDescriptor.
-            Log.i(TAG, "Hy-MT2 loaded from $sourceKey; CPU threads=$threads, context=${options.contextSize}, Vulkan=${options.useVulkan}, GPU layers=${if (options.useVulkan) options.gpuLayers else 0}")
+            Log.i(TAG, "Hy-MT2 loaded from $sourceKey; kind=$modelKind, CPU threads=$threads, context=${options.contextSize}, Vulkan=${!isStqModel && options.useVulkan}, GPU layers=${if (!isStqModel && options.useVulkan) options.gpuLayers else 0}")
             created
         } finally {
             descriptor?.close()
