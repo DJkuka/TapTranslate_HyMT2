@@ -484,12 +484,12 @@ class HyMT2SettingsActivity : Activity() {
         modelInfo.text = when {
             uri != null -> {
                 val name = queryDisplayName(uri) ?: uri.lastPathSegment ?: "GGUF"
-                "Модель: $name\nИсточник: SAF URI (SD/внешний носитель)\nКопирование: отключено\nСостояние: ${if (HyMT2Runtime.isLoaded()) "загружена в RAM" else "выбрана, готова к загрузке"}"
+                "Модель: $name\nТип: ${HyMT2Runtime.selectedModelKind(this)}\nРежим: ${if (HyMT2Runtime.selectedModelKind(this) == HyMT2Runtime.MODEL_KIND_STQ1) "CPU/NEON (STQ1_0)" else "Vulkan/CPU (Q4)"}\nИсточник: SAF URI (SD/внешний носитель)\nКопирование: отключено\nСостояние: ${if (HyMT2Runtime.isLoaded()) "загружена в RAM" else "выбрана, готова к загрузке"}"
             }
             legacy.isFile && legacy.length() >= MIN_MODEL_BYTES -> {
                 "Найдена старая копия модели: ${legacy.name}\nРазмер: ${formatBytes(legacy.length())}\nЭта версия не использует старые копии. Выбери исходный GGUF через проводник."
             }
-            else -> "Модель ещё не выбрана. Нужен GGUF-файл Hy-MT2-1.8B-Q4_K_M.gguf."
+            else -> "Модель ещё не выбрана. Поддерживаются Hy-MT2 Q4_K_M и Tencent Hy-MT2 1.25-bit STQ1_0."
         }
         chooseButton.isEnabled = !importing && !HyMT2Runtime.isLoaded()
         loadButton.isEnabled = !importing && HyMT2Runtime.hasModel(this) && !HyMT2Runtime.isLoaded()
