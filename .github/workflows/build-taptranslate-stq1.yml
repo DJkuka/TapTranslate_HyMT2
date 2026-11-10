@@ -1,4 +1,4 @@
-name: Build Tap Translate STQ1_0 + Vulkan experimental
+name: Build Tap Translate STQ1_0 + Vulkan experimental # explicit SPIRV-Headers target wiring
 
 on:
   workflow_dispatch:
