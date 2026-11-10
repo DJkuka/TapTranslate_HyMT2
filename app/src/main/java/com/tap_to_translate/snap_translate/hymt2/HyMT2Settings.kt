@@ -54,6 +54,17 @@ object HyMT2Settings {
 
     fun load(context: Context): HyMT2Options {
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        // The previous CPU-only build always persisted use_vulkan=false and had
+        // no GPU-layer preference. Migrate once to the tablet-tested v12 profile.
+        if (!p.getBoolean("vulkan_v12_migrated", false)) {
+            p.edit()
+                .putBoolean("use_vulkan", true)
+                .putInt("gpu_layers", 8)
+                .putInt("threads", 6)
+                .putFloat("repetition_penalty", 1.05f)
+                .putBoolean("vulkan_v12_migrated", true)
+                .apply()
+        }
         val defaultThreads = minOf(6, Runtime.getRuntime().availableProcessors().coerceAtLeast(2))
         return HyMT2Options(
             threads = p.getInt("threads", defaultThreads).coerceIn(1, 8),
