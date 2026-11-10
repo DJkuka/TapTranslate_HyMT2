@@ -86,6 +86,19 @@ def verify_final_host_payload(base_apk: Path, final_apk: Path) -> None:
         if "PKG_LOW" not in metadata or "PKG_HIGH" not in metadata:
             raise RuntimeError("Original Google Offline Translate PKG_LOW/PKG_HIGH metadata was not preserved")
 
+        required_vulkan = {
+            "lib/arm64-v8a/libllama_jni.so",
+            "lib/arm64-v8a/libllama.so",
+            "lib/arm64-v8a/libggml.so",
+            "lib/arm64-v8a/libggml-base.so",
+            "lib/arm64-v8a/libggml-cpu.so",
+            "lib/arm64-v8a/libggml-vulkan.so",
+            "lib/arm64-v8a/libhymt2_jni.so",
+        }
+        missing_vulkan = sorted(required_vulkan - built_names)
+        if missing_vulkan:
+            raise RuntimeError("Final APK is missing Vulkan runtime libraries: " + ", ".join(missing_vulkan))
+
         for prefix in ("assets/", "lib/"):
             source_entries = {n for n in original_names if n.startswith(prefix)}
             for name in source_entries:
