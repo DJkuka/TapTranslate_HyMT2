@@ -15,6 +15,14 @@ android {
         versionCode = 1
         versionName = "integration-helper"
         ndk { abiFilters += "arm64-v8a" }
+        externalNativeBuild {
+            cmake {
+                arguments += listOf(
+                    "-DLLAMA_ROOT=${providers.gradleProperty("llamaRoot").orNull ?: error("Pass -PllamaRoot=<llama.cpp checkout>")}",
+                    "-DVULKAN_AAR_NATIVE_DIR=${providers.gradleProperty("vulkanAarNativeDir").orNull ?: error("Pass -PvulkanAarNativeDir=<AAR jni/arm64-v8a>")}",
+                )
+            }
+        }
     }
 
     compileOptions {
@@ -33,10 +41,6 @@ android {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
-            arguments += listOf(
-                "-DLLAMA_ROOT=${providers.gradleProperty("llamaRoot").orNull ?: error("Pass -PllamaRoot=<llama.cpp checkout>")}",
-                "-DVULKAN_AAR_NATIVE_DIR=${providers.gradleProperty("vulkanAarNativeDir").orNull ?: error("Pass -PvulkanAarNativeDir=<AAR jni/arm64-v8a>")}",
-            )
         }
     }
 
