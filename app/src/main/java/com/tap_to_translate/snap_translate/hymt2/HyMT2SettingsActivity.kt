@@ -149,11 +149,11 @@ class HyMT2SettingsActivity : Activity() {
         customStyleInput.maxLines = 5
 
         addSection(root, "УСКОРЕНИЕ GPU")
-        vulkanSwitch = addSwitch(root, "Использовать Vulkan на Adreno 610", true)
+        vulkanSwitch = addSwitch(root, "Использовать Vulkan для Q4_K_M на Adreno 610", true)
         vulkanSwitch.isEnabled = HyMT2Settings.VULKAN_BACKEND_COMPILED
         addText(
             root,
-            "Проверенный профиль для Lenovo Xiaoxin Pad 2022: Vulkan · 8 GPU layers + 6 CPU threads. Отключение Vulkan использует CPU/NEON; число GPU-слоёв при этом не применяется.",
+            "Проверенный профиль Q4_K_M для Lenovo Xiaoxin Pad 2022: Vulkan · 8 GPU layers + 6 CPU threads. Для STQ1_0 Vulkan отключается автоматически: эта версия использует CPU/NEON. Число GPU-слоёв STQ1_0 не меняет.",
             12f,
         )
 
