@@ -73,7 +73,7 @@ object HyMT2Runtime {
     }
 
     @JvmStatic
-    fun setSelectedModelUri(context: Context, uri: Uri, modelKind: String) {
+    fun setSelectedModelUri(context: Context, uri: Uri, modelKind: String = MODEL_KIND_Q4) {
         val safeKind = if (modelKind == MODEL_KIND_STQ1) MODEL_KIND_STQ1 else MODEL_KIND_Q4
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
