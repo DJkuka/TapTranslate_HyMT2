@@ -1,16 +1,14 @@
-# Tap Translate 1.125 FontFit/AutoFill + Hy-MT2 Offline
+# Tap Translate 1.125 FontFit/AutoFill + Hy-MT2 Offline Vulkan v12
 
 ## ВАЖНО: правильная исходная версия APK
 
-Этот проект пересобирается **на основе пользовательского файла** `TapTranslate_1.125_FontFit_AutoFill_unsigned.apk`, а не предыдущего `TapTranslate_1.125_Tesseract551_EnglishOCR_unsigned.apk`.
-
-SHA-256 исходной базы:
+Workflow автоматически скачивает текущий Release APK `TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk` из `DJkuka/TapTranslate_HyMT2` и проверяет его SHA-256:
 
 ```text
-3cc9ac5a10add494b2053b947a8c748c7f0c2f5c69e936216a5ef1df4c833910
+dfe0463c9d9c0bf39451586e4e7aa405f5721504c61f20cef9fd122618418d83
 ```
 
-Workflow проверяет этот хеш до сборки. Если вместо него окажется другой APK, сборка остановится.
+Базовый APK вручную прикреплять или помещать в `input/` не нужно. Если Release-файл изменится, проверка остановит сборку до модификации приложения.
 
 ### Почему заменили базу
 
@@ -30,10 +28,10 @@ Workflow проверяет этот хеш до сборки. Если вмес
 ## Что добавляет Hy-MT2
 
 - Отдельный движок `Hy-MT2 Offline` в штатном выборе переводчиков.
-- Отдельный пункт настроек `Hy-MT2 Offline · GGUF model settings`.
+- Отдельный пункт **Hy-MT2 Offline · Translation settings** непосредственно в основном экране настроек приложения.
 - Выбор GGUF-файла через Android SAF.
 - Прямое чтение исходного файла с SD/внешнего носителя без создания второй копии.
-- CPU/NEON llama.cpp runtime для ARM64.
+- Vulkan + CPU/NEON llama.cpp runtime для ARM64; CPU fallback сохраняется.
 - Google Offline Translate остаётся резервным движком при ошибке Hy-MT2.
 
 Модель не включается в APK. Поддерживаемая модель: `Hy-MT2-1.8B-Q4_K_M.gguf` из репозитория Tencent:
@@ -54,12 +52,12 @@ https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF
 
 - Профили: «Быстрый», «Сбалансированный», «Качественный», «Настраиваемый».
 - CPU threads: 2/3/4/6/8 (ограничивается доступными ядрами).
-- Context size: 2048/3072/4096/6144/8192 токенов.
+- Context size: 256/512/1024/2048/3072/4096/6144/8192 токенов.
 - Max output tokens: 256–4096.
 - Temperature, Top-P, Top-K.
 - Статистика скорости `tokensPerSecond`, длительности и среднего значения последних десяти успешных переводов.
 
-Для Snapdragon 680 начни с профиля «Сбалансированный» (контекст 2048). Значения 6144–8192 могут резко увеличить потребление RAM и вызвать OOM. Изменение загрузочных параметров требует выгрузить и загрузить модель заново.
+Проверенный на Lenovo Xiaoxin Pad 2022 (Snapdragon 680 / Adreno 610) профиль: **8 GPU layers + 6 CPU threads**. Он используется по умолчанию. Доступны 0 GPU layers (CPU-only), 2/4/6/8/12/16/24. Контекст 256/512/1024 полезен для коротких OCR-фрагментов; 6144–8192 может резко увеличить потребление RAM и вызвать OOM. Изменение загрузочных параметров выгружает модель и требует повторной загрузки.
 
 ### Контекст и терминология
 
@@ -82,20 +80,22 @@ https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF
 
 В текущем runtime нет таймера, который принудительно отменяет локальную генерацию. `maxTokens` задаёт длину вывода, а не время.
 
-### Vulkan
+### Vulkan v12
 
-Переключатель Vulkan вынесен отдельно, но заблокирован в этой CPU/NEON-сборке. Наличие Vulkan 1.1 у Adreno 610 не означает, что используемая библиотека llama.cpp собрана с Vulkan backend. Для включения понадобится отдельная сборка native runtime и проверка на устройстве. CPU-режим остаётся доступным и не подменяется.
+- Используется проверенный `llama-android-vulkan.aar` из `DJkuka/HyMT2_Vulkan_Standalone_Test`; SHA-256: `b2a15a3e297b4107575df52711a86e6a53e1a14fff497db5acb1837abe1f49bb`.
+- AAR содержит ARM64 Vulkan и CPU/NEON backend. При отключении Vulkan загрузка модели получает 0 GPU layers.
+- Дополнительный JNI-мост собран против того же llama.cpp commit/tag `b9878`. Он добавляет точный подсчёт prompt tokens и Tencent repetition penalty 1.05.
+- Параметры генерации по умолчанию: temperature 0.7, top-p 0.6, top-k 20, repetition penalty 1.05.
+- Для Adreno 610 рекомендуется начать с 8 GPU layers + 6 CPU threads. Устройство должно быть проверено после установки итогового APK; сам факт сборки не заменяет тест перевода и стабильности.
 
 ## Сборка через GitHub Actions
 
-1. Распакуй архив проекта.
-2. Загрузи **содержимое** папки `TapTranslate_HyMT2_Integration` в корень GitHub-репозитория, сохранив `.github/workflows`, `app`, `input`, `scripts`, `tools`.
-3. Убедись, что в `input/` лежит `TapTranslate_1.125_FontFit_AutoFill_unsigned.apk`.
-4. Commit в `main`.
-5. Actions → `Build Tap Translate 1.125 FontFit AutoFill + Hy-MT2` → `Run workflow`.
-6. Скачай Artifact `TapTranslate-1.125-FontFit-AutoFill-HyMT2-unsigned`.
+1. Выбери ветку `vulkan-v12-integration` в репозитории.
+2. Workflow запускается при каждом новом commit в этой ветке (либо вручную через Actions → `Build Tap Translate 1.125 FontFit AutoFill + Hy-MT2 Vulkan` → `Run workflow`, выбрав эту ветку).
+3. GitHub Actions скачивает базовый APK и проверенный Vulkan AAR, клонирует llama.cpp `b9878`, собирает JNI-мост, затем объединяет runtime с приложением.
+4. Скачай Artifact `TapTranslate-1.125-FontFit-AutoFill-HyMT2-Vulkan-unsigned`.
 
-Workflow использует JDK 17, Android SDK setup v4, compileSdk 35 и Gradle 8.9. Сначала проверяет SHA-256 базы, наличие обоих Offline Translate model packages и Tesseract native library; затем компилирует helper APK, объединяет Hy-MT2 runtime с исходным APK через apktool, выравнивает и проверяет итоговый unsigned APK.
+Workflow использует JDK 17, Android SDK setup v4, compileSdk 35, NDK r27c и Gradle 8.9. Проверяет SHA-256 базового APK и AAR, сохраняет OCR/Tesseract/Google Offline Translate, собирает helper APK с JNI-мостом, заменяет только llama runtime, выравнивает и проверяет итоговый unsigned APK. APK не подписывается.
 
 ## Что проверить на планшете
 
@@ -105,7 +105,7 @@ Workflow использует JDK 17, Android SDK setup v4, compileSdk 35 и Gra
 4. Проверь один короткий перевод и затем несколько реплик с включённым контекстом.
 5. В настройках посмотри `tokensPerSecond` и сравни профили CPU-потоков.
 
-При ошибке пришли `TapTranslateHyMT2` и `AndroidRuntime` с момента выбора модели/перевода. Для проверки сохранности OCR отдельно полезны строки существующих тегов Tesseract/языковой загрузки.
+При ошибке пришли лог GitHub Actions (если сборка не проходит) либо `TapTranslateHyMT2`, `llama-jni`, `HyMT2PenaltyJNI` и `AndroidRuntime` с момента выбора модели/перевода. Для проверки сохранности OCR отдельно полезны строки существующих тегов Tesseract/языковой загрузки.
 
 ## Степень проверки
 
@@ -114,4 +114,4 @@ Workflow использует JDK 17, Android SDK setup v4, compileSdk 35 и Gra
 - Все функции интеграции применены на отдельной копии декодированной базы.
 - Контрольные хеши OCR/языкового загрузчика и исходного Google Offline Translate метода не изменились.
 - Проверен Python-синтаксис merge-скрипта и base verifier.
-- Полная Gradle-сборка helper + merge и runtime-тест на планшете выполняются после запуска GitHub Actions. До этого готовый APK не считается собранным.
+- Код интеграции и workflow подготовлены в ветке `vulkan-v12-integration`. Полная Gradle-сборка, merge и тест перевода на планшете ещё должны пройти; до успешного Actions-run APK не считается готовым.
