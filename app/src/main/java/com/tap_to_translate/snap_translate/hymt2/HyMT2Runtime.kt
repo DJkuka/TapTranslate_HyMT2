@@ -203,8 +203,8 @@ object HyMT2Runtime {
                                 // One OCR block must yield exactly one output line. If the
                                 // model wraps a sentence, flatten those wraps within this block.
                                 val translatedBlock = completion.text
-                                    .replace('\\r', '\\n')
-                                    .split('\\n')
+                                    .replace('\r', '\n')
+                                    .split('\n')
                                     .joinToString(" ") { it.trim() }
                                     .replace(Regex("\\s+"), " ")
                                     .trim()
