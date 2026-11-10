@@ -384,35 +384,45 @@ def patch_atomic_backport_shims(base: Path) -> None:
     print(f"Verified all {len(references)} referenced D8 synthetic classes are present")
 
 def patch_settings_click(base: Path) -> None:
-    # Put Hy-MT2 in the app's actual Settings tab (mh.p / fragment_settings),
-    # not the floating SettingsServiceActivity dialog.
+    # Attach the row click listener inside the actual primary Settings fragment.
     fragment = base / "smali_classes3/mh/p.smali"
     text = fragment.read_text(encoding="utf-8")
-    if "hymt2_model_manager_row" not in text and "0x7f0a04f1" not in text:
-        anchor = '''    const p2, 0x7f0a01bf
+    method_start = text.find(".method public final onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V")
+    if method_start < 0:
+        raise RuntimeError("Primary settings fragment has no onViewCreated method")
+    method_end = text.find(".end method", method_start)
+    if method_end < 0:
+        raise RuntimeError("Could not isolate primary settings onViewCreated method")
+    method = text[method_start:method_end]
+    if "HyMT2SettingsClickListener" not in method:
+        anchor = "    return-void\n"
+        insert_at = method.rfind(anchor)
+        if insert_at < 0:
+            raise RuntimeError("Could not find end of primary settings onViewCreated")
+        listener_code = '''    invoke-virtual {p0}, Landroidx/fragment/app/Fragment;->requireView()Landroid/view/View;
 
-    invoke-virtual {p1, p2}, Landroid/view/View;->findViewById(I)Landroid/view/View;'''
-        replacement = '''    const p2, 0x7f0a04f1
+    move-result-object v1
 
-    invoke-virtual {p1, p2}, Landroid/view/View;->findViewById(I)Landroid/view/View;
+    const v2, 0x7f0a04f1
 
-    move-result-object p2
+    invoke-virtual {v1, v2}, Landroid/view/View;->findViewById(I)Landroid/view/View;
 
-    new-instance v0, Lcom/tap_to_translate/snap_translate/hymt2/HyMT2SettingsClickListener;
+    move-result-object v1
 
-    invoke-direct {v0, p0}, Lcom/tap_to_translate/snap_translate/hymt2/HyMT2SettingsClickListener;-><init>(Lmh/p;)V
+    new-instance v2, Lcom/tap_to_translate/snap_translate/hymt2/HyMT2SettingsClickListener;
 
-    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+    invoke-direct {v2, p0}, Lcom/tap_to_translate/snap_translate/hymt2/HyMT2SettingsClickListener;-><init>(Lmh/p;)V
 
-    const p2, 0x7f0a01bf
+    invoke-virtual {v1, v2}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
 
-    invoke-virtual {p1, p2}, Landroid/view/View;->findViewById(I)Landroid/view/View;'''
-        if anchor not in text:
-            raise RuntimeError("Could not find primary Settings fragment listener insertion point")
-        text = text.replace(anchor, replacement, 1)
+'''
+        method = method[:insert_at] + listener_code + method[insert_at:]
+        text = text[:method_start] + method + text[method_end:]
         fragment.write_text(text, encoding="utf-8")
 
+    # The listener is placed in classes5 together with the integrated Hy-MT2 code.
     listener = base / "smali_classes5/com/tap_to_translate/snap_translate/hymt2/HyMT2SettingsClickListener.smali"
+    listener.parent.mkdir(parents=True, exist_ok=True)
     listener.write_text('''.class public final Lcom/tap_to_translate/snap_translate/hymt2/HyMT2SettingsClickListener;
 .super Ljava/lang/Object;
 
@@ -441,7 +451,7 @@ def patch_settings_click(base: Path) -> None:
 .end method
 ''', encoding="utf-8")
 
-    # Remove the previous, misplaced click listener from SettingsServiceActivity.
+    # Remove the old, incorrectly attached listener from the floating settings dialog.
     settings = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/activitys/SettingsServiceActivity.smali"
     old = settings.read_text(encoding="utf-8")
     start = old.find("    const p1, 0x7f0a04f1")
@@ -454,8 +464,31 @@ def patch_settings_click(base: Path) -> None:
         settings.write_text(old, encoding="utf-8")
 
 
+def _remove_linear_layout_with_id(xml_text: str, view_id: str) -> tuple[str, bool]:
+    import re
+    opening = re.compile(r'<LinearLayout\\b(?=[^>]*android:id="@id/' + re.escape(view_id) + r'")[^>]*>')
+    match = opening.search(xml_text)
+    if not match:
+        return xml_text, False
+    token = re.compile(r'<(/?)LinearLayout\\b[^>]*>')
+    depth = 0
+    end = None
+    for item in token.finditer(xml_text, match.start()):
+        tag = item.group(0)
+        if tag.startswith("</"):
+            depth -= 1
+        elif not tag.endswith("/>"):
+            depth += 1
+        if depth == 0:
+            end = item.end()
+            break
+    if end is None:
+        raise RuntimeError(f"Could not find matching </LinearLayout> for @{view_id}")
+    return xml_text[:match.start()] + xml_text[end:], True
+
+
 def patch_resources(base: Path) -> None:
-    # The row is part of fragment_settings.xml, the actual main Settings tab.
+    # Add Hy-MT2 row to the app's real Settings tab (fragment_settings.xml).
     layout = base / "res/layout/fragment_settings.xml"
     text = layout.read_text(encoding="utf-8")
     if ROW_ID_NAME not in text:
@@ -473,16 +506,15 @@ def patch_resources(base: Path) -> None:
         text = text.replace(anchor, row, 1)
         layout.write_text(text, encoding="utf-8")
 
-    # Remove the old row from the secondary floating settings dialog if it exists.
+    # The floating SettingsServiceActivity is not the main settings screen.
     secondary = base / "res/layout/activity_settings_service.xml"
     if secondary.exists():
-        import re
         old = secondary.read_text(encoding="utf-8")
-        old, count = re.subn(r'\s*<LinearLayout[^>]*android:id="@id/hymt2_model_manager_row"[^>]*>.*?</LinearLayout>\s*</LinearLayout>\s*', '\n', old, count=1, flags=re.S)
-        if count:
-            secondary.write_text(old, encoding="utf-8")
-        if ROW_ID_NAME in secondary.read_text(encoding="utf-8"):
+        old, removed = _remove_linear_layout_with_id(old, ROW_ID_NAME)
+        if ROW_ID_NAME in old:
             raise RuntimeError("Hy-MT2 row still exists in secondary SettingsServiceActivity")
+        if removed:
+            secondary.write_text(old, encoding="utf-8")
 
     if ROW_ID_NAME not in layout.read_text(encoding="utf-8"):
         raise RuntimeError("Hy-MT2 row was not added to the primary fragment_settings layout")
@@ -490,18 +522,27 @@ def patch_resources(base: Path) -> None:
     ids = base / "res/values/ids.xml"
     id_text = ids.read_text(encoding="utf-8")
     if ROW_ID_NAME not in id_text:
-        anchor = '    <item type="id" name="home_wcv_font_size" />\n'
+        anchor = '    <item type="id" name="home_wcv_font_size" />\\n'
         if anchor not in id_text:
             raise RuntimeError("Could not find end of ids.xml for new view ID")
-        ids.write_text(id_text.replace(anchor, anchor + f'    <item type="id" name="{ROW_ID_NAME}" />\n', 1), encoding="utf-8")
+        ids.write_text(id_text.replace(anchor, anchor + f'    <item type="id" name="{ROW_ID_NAME}" />\\n', 1), encoding="utf-8")
 
     public = base / "res/values/public.xml"
     pub_text = public.read_text(encoding="utf-8")
     if ROW_ID_NAME not in pub_text:
-        anchor = '    <public type="id" name="home_wcv_font_size" id="0x7f0a04f0" />\n'
+        anchor = '    <public type="id" name="home_wcv_font_size" id="0x7f0a04f0" />\\n'
         if anchor not in pub_text:
             raise RuntimeError("Could not find end of public id table")
-        public.write_text(pub_text.replace(anchor, anchor + f'    <public type="id" name="{ROW_ID_NAME}" id="{ROW_ID}" />\n', 1), encoding="utf-8")
+        public.write_text(pub_text.replace(anchor, anchor + f'    <public type="id" name="{ROW_ID_NAME}" id="{ROW_ID}" />\\n', 1), encoding="utf-8")
+
+    # Explicitly verify both location and click callback.
+    if ROW_ID_NAME not in layout.read_text(encoding="utf-8"):
+        raise RuntimeError("Primary settings layout has no Hy-MT2 row")
+    if ROW_ID_NAME in secondary.read_text(encoding="utf-8"):
+        raise RuntimeError("Secondary settings layout still contains the Hy-MT2 row")
+    fragment_smali = (base / "smali_classes3/mh/p.smali").read_text(encoding="utf-8")
+    if "HyMT2SettingsClickListener" not in fragment_smali:
+        raise RuntimeError("Primary settings row has no click listener")
 
 def patch_manifest(base: Path) -> None:
     path = base / "AndroidManifest.xml"
