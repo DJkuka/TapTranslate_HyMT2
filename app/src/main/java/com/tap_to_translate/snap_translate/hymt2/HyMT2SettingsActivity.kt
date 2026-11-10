@@ -341,7 +341,13 @@ class HyMT2SettingsActivity : Activity() {
                 if (grantedFlags == 0) error("DocumentsUI не выдал разрешение на чтение файла")
                 contentResolver.takePersistableUriPermission(uri, grantedFlags)
                 val size = validateSeekableGguf(uri)
-                val sha256 = sha256Uri(uri)
+                // The official 1.25-bit Tencent GGUF is about 462 MB. Avoid reading
+                // an entire 1.1-GB Q4 model just to discover that it is not this file.
+                val sha256 = if (size in STQ_MIN_FILE_BYTES..STQ_MAX_FILE_BYTES) {
+                    sha256Uri(uri)
+                } else {
+                    ""
+                }
                 val modelKind = if (sha256.equals(STQ_MODEL_SHA256, ignoreCase = true)) {
                     HyMT2Runtime.MODEL_KIND_STQ1
                 } else {
@@ -620,5 +626,7 @@ class HyMT2SettingsActivity : Activity() {
         private const val EXTRA_AUTO_PICK = "hymt2_auto_pick"
         private const val MIN_MODEL_BYTES = 100L * 1024L * 1024L
         private const val STQ_MODEL_SHA256 = "cc497fe8f033b52b3b8b00a7669e9661435432f9d4cd43f7ed24400c01507a93"
+        private const val STQ_MIN_FILE_BYTES = 450L * 1024L * 1024L
+        private const val STQ_MAX_FILE_BYTES = 500L * 1024L * 1024L
     }
 }
