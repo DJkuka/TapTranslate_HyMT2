@@ -22,35 +22,60 @@ def main() -> int:
     args = ap.parse_args()
     llama, wrapper = args.llama_root, args.android_wrapper_root
 
+    # Keep upstream GGML IDs unchanged: Q2_0 remains 42 and STQ1_0 remains 43.
+    # Tencent's 1.25-bit Hy-MT2 GGUF uses disk id 42 for STQ1_0, so remap it
+    # only for that exact model signature while parsing its tensor table.
     header_path = llama / "ggml/include/ggml.h"
-    replace_once(
-        header_path,
-        "        GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)\n"
-        "        GGML_TYPE_Q1_0    = 41,\n"
-        "        GGML_TYPE_Q2_0    = 42,\n"
-        "        GGML_TYPE_STQ1_0  = 43,",
-        "        GGML_TYPE_NVFP4   = 40, // unchanged\n"
-        "        GGML_TYPE_Q1_0    = 41,\n"
-        "        GGML_TYPE_STQ1_0  = 42, // Tencent Hy-MT2 official GGUF id\n"
-        "        GGML_TYPE_Q2_0    = 43, // moved to free STQ id 42",
-        "Tencent STQ tensor id 42 (preserve NVFP4/Q1_0 ids)",
-    )
     header = header_path.read_text(encoding="utf-8")
-    if not re.search(r"GGML_TYPE_STQ1_0\s*=\s*42,", header):
-        raise SystemExit("STQ1_0 must use Tencent Hy-MT2 GGUF tensor id 42")
-    if not re.search(r"GGML_TYPE_Q2_0\s*=\s*43,", header):
-        raise SystemExit("Q2_0 must move to 43 to avoid the legacy STQ1_0 id collision")
-    if not re.search(r"GGML_TYPE_NVFP4\s*=\s*40,", header):
-        raise SystemExit("NVFP4 must remain at its upstream id 40")
-    if not re.search(r"GGML_TYPE_COUNT\s*=\s*44", header):
+    if not re.search(r"GGML_TYPE_NVFP4\\s*=\\s*40,", header):
+        raise SystemExit("Unexpected NVFP4 GGML type id; expected 40")
+    if not re.search(r"GGML_TYPE_Q1_0\\s*=\\s*41,", header):
+        raise SystemExit("Unexpected Q1_0 GGML type id; expected 41")
+    if not re.search(r"GGML_TYPE_Q2_0\\s*=\\s*42,", header):
+        raise SystemExit("Upstream Q2_0 id 42 must remain unchanged")
+    if not re.search(r"GGML_TYPE_STQ1_0\\s*=\\s*43,", header):
+        raise SystemExit("Upstream internal STQ1_0 id 43 must remain unchanged")
+    if not re.search(r"GGML_TYPE_COUNT\\s*=\\s*44", header):
         raise SystemExit("Unexpected GGML_TYPE_COUNT")
 
-    constants = llama / "gguf-py/gguf/constants.py"
+    gguf_cpp = llama / "ggml/src/gguf.cpp"
     replace_once(
-        constants,
-        "    NVFP4   = 40\n    Q1_0    = 41\n    Q2_0    = 42\n    STQ1_0  = 43",
-        "    NVFP4   = 40\n    Q1_0    = 41\n    STQ1_0  = 42\n    Q2_0    = 43",
-        "GGUF Python tensor type ids",
+        gguf_cpp,
+        "    // read the tensor info\\n    for (int64_t i = 0; ok && i < n_tensors; ++i) {",
+        """    // Tencent's Hy-MT2 1.25-bit GGUF stores STQ1_0 as on-disk type 42,
+    // which collides with the standard GGML_TYPE_Q2_0 id. Detect this exact
+    // model signature from metadata and remap only its tensor entries to the
+    // internal STQ1_0 enum (43). Other GGUF files keep standard Q2_0 semantics.
+    const int architecture_idx = gguf_find_key(ctx, "general.architecture");
+    const int file_type_idx = gguf_find_key(ctx, "general.file_type");
+    const bool is_tencent_hymt2_stq =
+        architecture_idx >= 0 &&
+        file_type_idx >= 0 &&
+        gguf_get_kv_type(ctx, architecture_idx) == GGUF_TYPE_STRING &&
+        gguf_get_kv_type(ctx, file_type_idx) == GGUF_TYPE_UINT32 &&
+        strcmp(gguf_get_val_str(ctx, architecture_idx), "hunyuan-dense") == 0 &&
+        gguf_get_val_u32(ctx, file_type_idx) == 41;
+
+    if (is_tencent_hymt2_stq) {
+        GGML_LOG_INFO("%s: applying Tencent Hy-MT2 STQ1_0 GGUF compatibility mapping (disk type 42 -> internal STQ1_0)\\n", __func__);
+    }
+
+    // read the tensor info
+    for (int64_t i = 0; ok && i < n_tensors; ++i) {""",
+        "model-specific Tencent STQ1_0 GGUF type compatibility",
+    )
+    replace_once(
+        gguf_cpp,
+        "            ok = ok && gr.read(info.t.type);\\n\\n            // check that tensor type is within defined range",
+        """            ok = ok && gr.read(info.t.type);
+
+            // Only Tencent Hy-MT2 1.25-bit GGUF reuses the Q2_0 disk id 42.
+            if (is_tencent_hymt2_stq && info.t.type == GGML_TYPE_Q2_0) {
+                info.t.type = GGML_TYPE_STQ1_0;
+            }
+
+            // check that tensor type is within defined range""",
+        "per-tensor Tencent STQ1_0 type remapping",
     )
 
     arm = (llama / "ggml/src/ggml-cpu/arch/arm/quants.c").read_text(encoding="utf-8")
@@ -87,7 +112,7 @@ def main() -> int:
         'set(GGML_OPENMP          OFF CACHE BOOL "" FORCE)\nset(GGML_BACKEND_DL      OFF CACHE BOOL "" FORCE)',
         "disable dynamic backend loading in native CMake",
     )
-    print("Tencent STQ1_0 id 42, Q2_0 id 43, ARM NEON kernel and Vulkan/Q4 settings verified.")
+    print("Tencent model-specific disk type 42 -> internal STQ1_0=43; standard Q2_0=42 preserved; ARM NEON and Vulkan/Q4 settings verified.")
     return 0
 
 
