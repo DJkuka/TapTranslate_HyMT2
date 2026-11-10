@@ -11,7 +11,7 @@ import org.json.JSONObject
  * counting. This bridge uses the same LlamaModel native handle and llama.cpp
  * b9878 API, without changing the prebuilt Vulkan/CPU backend libraries.
  */
-internal object HyMT2PenaltyNative {
+object HyMT2PenaltyNative {
     init {
         System.loadLibrary("hymt2_jni")
     }
