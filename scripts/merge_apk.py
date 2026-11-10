@@ -500,6 +500,7 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
             existing.add(p.relative_to(smali_dir).as_posix())
 
     copied = 0
+    replaced = 0
     for helper in helper_dirs:
         for prefix in rel_prefixes:
             root = helper / prefix
@@ -507,13 +508,26 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
                 continue
             for source in root.rglob("*.smali"):
                 rel = source.relative_to(helper).as_posix()
-                if rel in existing:
-                    continue
                 destination = target_root / rel
+                if rel in existing:
+                    if destination.is_file():
+                        # This input APK already contains the Hy-MT2 runtime.
+                        # Refresh its own classes with the updated helper build.
+                        shutil.copy2(source, destination)
+                        replaced += 1
+                        continue
+                    # Do not silently introduce duplicate classes across DEX files.
+                    other = [d for d in base.glob("smali*") if d.is_dir() and d != target_root and (d / rel).is_file()]
+                    if other:
+                        if (other[0] / rel).read_bytes() == source.read_bytes():
+                            continue
+                        raise RuntimeError(f"Cannot safely replace {rel}: existing definition is outside classes5.dex")
+                    continue
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
                 existing.add(rel)
                 copied += 1
+    print(f"Updated {replaced} existing runtime classes; added {copied} new classes")
     return copied
 
 
