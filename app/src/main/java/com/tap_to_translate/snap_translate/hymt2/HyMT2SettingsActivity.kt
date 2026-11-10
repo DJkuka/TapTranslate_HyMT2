@@ -26,6 +26,7 @@ import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import java.util.Locale
+import java.security.MessageDigest
 
 /** Model manager and independent settings panel for the Hy-MT2 translation engine. */
 class HyMT2SettingsActivity : Activity() {
@@ -340,9 +341,15 @@ class HyMT2SettingsActivity : Activity() {
                 if (grantedFlags == 0) error("DocumentsUI не выдал разрешение на чтение файла")
                 contentResolver.takePersistableUriPermission(uri, grantedFlags)
                 val size = validateSeekableGguf(uri)
-                HyMT2Runtime.setSelectedModelUri(applicationContext, uri)
+                val sha256 = sha256Uri(uri)
+                val modelKind = if (sha256.equals(STQ_MODEL_SHA256, ignoreCase = true)) {
+                    HyMT2Runtime.MODEL_KIND_STQ1
+                } else {
+                    HyMT2Runtime.MODEL_KIND_Q4
+                }
+                HyMT2Runtime.setSelectedModelUri(applicationContext, uri, modelKind)
                 val name = queryDisplayName(uri) ?: uri.lastPathSegment ?: "GGUF"
-                Log.i(TAG, "Model URI stored without copying: name=$name size=$size uri=$uri")
+                Log.i(TAG, "Model URI stored without copying: name=$name size=$size kind=$modelKind sha256=$sha256 uri=$uri")
 
                 if (autoPicker) {
                     runOnUiThread {
@@ -417,6 +424,22 @@ class HyMT2SettingsActivity : Activity() {
             Log.i(TAG, "Direct SAF path probe passed: $procFdPath; no-copy mode available")
             return stat.st_size
         }
+    }
+
+    /** Hash the selected GGUF once so the Tencent legacy STQ file is identified by content, not filename. */
+    private fun sha256Uri(uri: Uri): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val input = contentResolver.openInputStream(uri)
+            ?: error("Не удалось прочитать GGUF для определения модели")
+        input.use { stream ->
+            val buffer = ByteArray(1024 * 1024)
+            while (true) {
+                val count = stream.read(buffer)
+                if (count < 0) break
+                if (count > 0) digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private fun queryDisplayName(uri: Uri): String? {
@@ -596,5 +619,6 @@ class HyMT2SettingsActivity : Activity() {
         private const val REQUEST_MODEL = 7412
         private const val EXTRA_AUTO_PICK = "hymt2_auto_pick"
         private const val MIN_MODEL_BYTES = 100L * 1024L * 1024L
+        private const val STQ_MODEL_SHA256 = "cc497fe8f033b52b3b8b00a7669e9661435432f9d4cd43f7ed24400c01507a93"
     }
 }
