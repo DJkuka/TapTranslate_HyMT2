@@ -108,8 +108,8 @@ def main() -> int:
     replace_once(
         vulkan_cmake,
         "    target_link_libraries(ggml-vulkan PRIVATE Vulkan::Vulkan)",
-        "    target_link_libraries(ggml-vulkan PRIVATE Vulkan::Vulkan SPIRV-Headers::SPIRV-Headers)",
-        "link the installed SPIRV-Headers target to the Vulkan backend",
+        "    target_link_libraries(ggml-vulkan PRIVATE Vulkan::Vulkan SPIRV-Headers::SPIRV-Headers)\\n    if (DEFINED SPIRV_HEADERS_INCLUDE_DIR)\\n        target_include_directories(ggml-vulkan SYSTEM PRIVATE ${SPIRV_HEADERS_INCLUDE_DIR})\\n    endif()",
+        "link the installed SPIRV-Headers target and explicit include directory to the Vulkan backend",
     )
 
     cmake = wrapper / "library/src/main/jni/CMakeLists.txt"
@@ -125,7 +125,7 @@ def main() -> int:
         'set(GGML_OPENMP          OFF CACHE BOOL "" FORCE)\nset(GGML_BACKEND_DL      OFF CACHE BOOL "" FORCE)',
         "disable dynamic backend loading in native CMake",
     )
-    print("Tencent model-specific disk type 42 -> internal STQ1_0=43; standard Q2_0=42 preserved; ARM NEON, Vulkan and SPIR-V include target verified.")
+    print("Tencent model-specific disk type 42 -> internal STQ1_0=43; standard Q2_0=42 preserved; ARM NEON, Vulkan and explicit SPIR-V header include path verified.")
     return 0
 
 
