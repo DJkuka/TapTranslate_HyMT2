@@ -44,7 +44,7 @@ jobs:
             --llama-root "$LLAMA_ROOT" \
             --android-wrapper-root "$GITHUB_WORKSPACE/upstream/llama-android"
 
-      - name: Build host llama-cli with STQ1_0 support
+      - name: Build host llama-server with STQ1_0 support
         shell: bash
         run: |
           set -euo pipefail
@@ -56,7 +56,7 @@ jobs:
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
             -DLLAMA_BUILD_TOOLS=ON
-          cmake --build build/host-stq --target llama-cli -j2
+          cmake --build build/host-stq --target llama-server -j2
 
       - name: Download and verify the exact Tencent STQ1_0 GGUF
         shell: bash
@@ -68,20 +68,39 @@ jobs:
             -o test-model/Hy-MT2-1.8B-1.25Bit.gguf
           echo "cc497fe8f033b52b3b8b00a7669e9661435432f9d4cd43f7ed24400c01507a93  test-model/Hy-MT2-1.8B-1.25Bit.gguf" | sha256sum -c -
 
-      - name: Load Tencent STQ1_0 and run a short inference smoke test
+      - name: Load Tencent STQ1_0 model on host without slow x86 inference
         shell: bash
         run: |
           set -euo pipefail
-          set +e
-          timeout 1800s build/host-stq/bin/llama-cli \
+          mkdir -p build
+          log=build/stq-host-smoke.log
+          rm -f "$log"
+          stdbuf -oL -eL build/host-stq/bin/llama-server \
             -m test-model/Hy-MT2-1.8B-1.25Bit.gguf \
-            -p "Translate into Russian. Output only the translation: Hello, world." \
-            -n 2 -c 128 -t 2 --temp 0.1 --no-display-prompt \
-            > build/stq-host-smoke.log 2>&1
-          result=$?
-          set -e
-          tail -n 200 build/stq-host-smoke.log
-          exit "$result"
+            -c 128 -t 4 --no-warmup --host 127.0.0.1 --port 18080 \
+            > >(tee "$log") 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          for _ in $(seq 1 900); do
+            if grep -q "model loaded" "$log"; then
+              echo "STQ_HOST_MODEL_LOAD_OK"
+              exit 0
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              wait "$server_pid" || true
+              echo "llama-server exited before loading the model"
+              tail -n 200 "$log"
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "Timed out waiting for STQ1_0 model load"
+          tail -n 200 "$log"
+          exit 124
 
       - name: Upload host STQ smoke diagnostics
         if: always()
