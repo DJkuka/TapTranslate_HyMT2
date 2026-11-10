@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the STQ-enabled llama.cpp checkout and enable Vulkan in llama-android."""
+"""Adapt upstream STQ1_0 support to Tencent's released GGUF tensor id 42."""
 from __future__ import annotations
 import argparse
 import re
@@ -22,20 +22,36 @@ def main() -> int:
     args = ap.parse_args()
     llama, wrapper = args.llama_root, args.android_wrapper_root
 
-    header = (llama / "ggml/include/ggml.h").read_text(encoding="utf-8")
+    header_path = llama / "ggml/include/ggml.h"
+    header = header_path.read_text(encoding="utf-8")
+    replace_once(
+        header_path,
+        "        GGML_TYPE_Q2_0    = 42,\n        GGML_TYPE_STQ1_0  = 43,",
+        "        GGML_TYPE_STQ1_0  = 42,\n        GGML_TYPE_Q2_0    = 43,",
+        "Tencent legacy GGUF tensor id 42",
+    )
+    header = header_path.read_text(encoding="utf-8")
     if not re.search(r"GGML_TYPE_STQ1_0\s*=\s*42,", header):
-        raise SystemExit("Expected Tencent-compatible GGML_TYPE_STQ1_0 = 42")
-    if "GGML_TYPE_COUNT" not in header:
-        raise SystemExit("GGML type enum missing")
-    common = (llama / "ggml/src/ggml-common.h").read_text(encoding="utf-8")
-    if "block_stq1_0" not in common:
-        raise SystemExit("STQ1_0 block layout missing")
-    cpu = (llama / "ggml/src/ggml-cpu/ggml-cpu.c").read_text(encoding="utf-8")
-    if "[GGML_TYPE_STQ1_0]" not in cpu or "ggml_vec_dot_stq1_0_q8_K" not in cpu:
-        raise SystemExit("STQ1_0 CPU type traits/kernel registration missing")
+        raise SystemExit("STQ1_0 must use Tencent's GGUF tensor id 42")
+    if not re.search(r"GGML_TYPE_Q2_0\s*=\s*43,", header):
+        raise SystemExit("Q2_0 must move to 43 to avoid the STQ1_0 id collision")
+    if not re.search(r"GGML_TYPE_COUNT\s*=\s*44", header):
+        raise SystemExit("Unexpected GGML_TYPE_COUNT")
+
+    constants = llama / "gguf-py/gguf/constants.py"
+    replace_once(
+        constants,
+        "    Q2_0    = 42\n    STQ1_0  = 43",
+        "    STQ1_0  = 42\n    Q2_0    = 43",
+        "GGUF Python tensor type ids",
+    )
+
+    arm = (llama / "ggml/src/ggml-cpu/arch/arm/quants.c").read_text(encoding="utf-8")
+    if "ggml_vec_dot_stq1_0_q8_K" not in arm or "STQ1_0_DOT_HALF" not in arm:
+        raise SystemExit("Optimized ARM NEON STQ1_0 kernel missing")
     generic = (llama / "ggml/src/ggml-cpu/quants.c").read_text(encoding="utf-8")
     if "ggml_vec_dot_stq1_0_q8_K_generic" not in generic:
-        raise SystemExit("STQ1_0 generic CPU fallback missing")
+        raise SystemExit("STQ1_0 generic fallback missing")
 
     gradle = wrapper / "library/build.gradle.kts"
     replace_once(
@@ -48,7 +64,7 @@ def main() -> int:
         gradle,
         '                    "-DLLAMA_CURL=OFF",    // no libcurl dependency',
         '                    "-DLLAMA_CURL=OFF",    // no libcurl dependency\n                    "-DGGML_CPU=ON",\n                    "-DGGML_BACKEND_DL=OFF", // link Vulkan/CPU backends directly\n                    "-DVulkan_INCLUDE_DIR=" + System.getenv("VULKAN_HEADERS_INCLUDE_DIR"),\n                    "-DSPIRV_HEADERS_INCLUDE_DIR=" + System.getenv("SPIRV_HEADERS_INCLUDE_DIR"),\n                    "-DSPIRV-Headers_DIR=" + System.getenv("SPIRV_HEADERS_CMAKE_DIR"),',
-        "disable dynamic backend loading",
+        "pass Vulkan and SPIR-V paths to Gradle CMake",
     )
 
     cmake = wrapper / "library/src/main/jni/CMakeLists.txt"
@@ -64,7 +80,7 @@ def main() -> int:
         'set(GGML_OPENMP          OFF CACHE BOOL "" FORCE)\nset(GGML_BACKEND_DL      OFF CACHE BOOL "" FORCE)',
         "disable dynamic backend loading in native CMake",
     )
-    print("STQ1_0 id 42 and generic CPU kernel verified; Vulkan enabled for Q4.")
+    print("Tencent STQ1_0 id 42, upstream ARM NEON kernel and Vulkan/Q4 settings verified.")
     return 0
 
 
