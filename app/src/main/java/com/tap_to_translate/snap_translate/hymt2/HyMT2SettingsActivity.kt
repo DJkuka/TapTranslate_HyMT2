@@ -626,7 +626,8 @@ class HyMT2SettingsActivity : Activity() {
         private const val EXTRA_AUTO_PICK = "hymt2_auto_pick"
         private const val MIN_MODEL_BYTES = 100L * 1024L * 1024L
         private const val STQ_MODEL_SHA256 = "cc497fe8f033b52b3b8b00a7669e9661435432f9d4cd43f7ed24400c01507a93"
-        private const val STQ_MIN_FILE_BYTES = 450L * 1024L * 1024L
-        private const val STQ_MAX_FILE_BYTES = 500L * 1024L * 1024L
+        // Official Tencent file: 461,860,800 bytes = about 440.46 MiB.
+        private const val STQ_MIN_FILE_BYTES = 430L * 1024L * 1024L
+        private const val STQ_MAX_FILE_BYTES = 450L * 1024L * 1024L
     }
 }
