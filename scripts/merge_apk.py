@@ -389,12 +389,10 @@ def patch_settings_click(base: Path) -> None:
     fragment = base / "smali_classes3/mh/p.smali"
     text = fragment.read_text(encoding="utf-8")
     if "hymt2_model_manager_row" not in text and "0x7f0a04f1" not in text:
-        anchor = '''    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+        anchor = '''    const p2, 0x7f0a01bf
 
-    const p2, 0x7f0a01bf'''
-        replacement = '''    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
-
-    const p2, 0x7f0a04f1
+    invoke-virtual {p1, p2}, Landroid/view/View;->findViewById(I)Landroid/view/View;'''
+        replacement = '''    const p2, 0x7f0a04f1
 
     invoke-virtual {p1, p2}, Landroid/view/View;->findViewById(I)Landroid/view/View;
 
@@ -406,7 +404,9 @@ def patch_settings_click(base: Path) -> None:
 
     invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
 
-    const p2, 0x7f0a01bf'''
+    const p2, 0x7f0a01bf
+
+    invoke-virtual {p1, p2}, Landroid/view/View;->findViewById(I)Landroid/view/View;'''
         if anchor not in text:
             raise RuntimeError("Could not find primary Settings fragment listener insertion point")
         text = text.replace(anchor, replacement, 1)
