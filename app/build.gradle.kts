@@ -28,12 +28,23 @@ android {
         release { isMinifyEnabled = false }
     }
 
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+            arguments += listOf(
+                "-DLLAMA_ROOT=${providers.gradleProperty("llamaRoot").orNull ?: error("Pass -PllamaRoot=<llama.cpp checkout>")}",
+                "-DVULKAN_AAR_NATIVE_DIR=${providers.gradleProperty("vulkanAarNativeDir").orNull ?: error("Pass -PvulkanAarNativeDir=<AAR jni/arm64-v8a>")}",
+            )
+        }
+    }
+
     packaging {
         jniLibs { useLegacyPackaging = false }
     }
 }
 
 dependencies {
-    implementation("dev.ffmpegkit-maintained:llama-android:0.1.1")
+    implementation(files("libs/llama-android-vulkan.aar"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 }
