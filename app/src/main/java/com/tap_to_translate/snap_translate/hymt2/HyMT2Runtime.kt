@@ -166,35 +166,30 @@ object HyMT2Runtime {
                         } else emptyList()
                         val prompt = buildTranslationPrompt(
                             sourceText = sourceText,
-                            sourceLanguage = sourceLanguage,
                             targetLanguage = targetLanguage,
                             options = options,
-                            recentPairs = contextPairs,
                         )
-                        // Reserve a safety margin for the generation tokens. Character-to-token
-                        // estimation is deliberately conservative for mixed English/Cyrillic text.
-                        val estimatedPromptTokens = kotlin.math.ceil(prompt.length / 2.2).toInt()
-                        val availableOutputTokens = (options.contextSize - estimatedPromptTokens - 64).coerceAtLeast(0)
-                        if (availableOutputTokens < 64) {
-                            error("Контекст запроса слишком велик для выбранного context size. Уменьши фон/словарь или увеличь контекст.")
+                        // Count tokens after llama.cpp applies the GGUF chat template.
+                        val promptTokens = HyMT2PenaltyNative.countPromptTokens(model, prompt)
+                        val availableOutputTokens = (options.contextSize - promptTokens - 32).coerceAtLeast(0)
+                        if (availableOutputTokens < 8) {
+                            error("Входной текст не помещается в выбранный контекст ${options.contextSize}. Выбери больший контекст или сократи OCR-фрагмент.")
                         }
                         val effectiveMaxTokens = min(options.maxTokens, availableOutputTokens)
-                        Log.i(TAG, "Prompt chars=${prompt.length}; estimated prompt tokens=$estimatedPromptTokens; effective maxTokens=$effectiveMaxTokens")
+                        Log.i(TAG, "Prompt tokens=$promptTokens; context=${options.contextSize}; effective maxTokens=$effectiveMaxTokens")
                         val startedAt = SystemClock.elapsedRealtime()
-                        val completion = Llama.complete(
+                        val completion = HyMT2PenaltyNative.complete(
                             model = model,
                             prompt = prompt,
-                            systemPrompt = "You are a professional comic and manga translation engine. Follow the translation instructions and terminology in the user prompt. Preserve character voice, jokes, irony, wordplay, punctuation and line structure. Return only the translation.",
                             maxTokens = effectiveMaxTokens,
+                            temperature = options.temperature,
+                            topP = options.topP,
+                            topK = options.topK,
+                            repetitionPenalty = options.repetitionPenalty,
                         )
                         val elapsedMs = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(1L)
                         completion.text.trim().also { translated ->
                             if (translated.isBlank()) error("The model returned an empty translation")
-                            val inputLineCount = sourceText.replace("\r\n", "\n").split('\n').size
-                            val outputLineCount = translated.replace("\r\n", "\n").split('\n').size
-                            if (inputLineCount > 1 && inputLineCount != outputLineCount) {
-                                error("Hy-MT2 changed line count ($inputLineCount → $outputLineCount)")
-                            }
                             rememberRecentContext(host, sourceLanguageKey, targetLanguage, sourceText, translated)
                             HyMT2Settings.recordTranslation(
                                 appContext,
@@ -224,74 +219,24 @@ object HyMT2Runtime {
 
     private fun buildTranslationPrompt(
         sourceText: String,
-        sourceLanguage: String?,
         targetLanguage: String,
         options: HyMT2Options,
-        recentPairs: List<Pair<String, String>>,
     ): String {
-        var optionalContextBudget = (
-            (options.contextSize - 256).coerceAtLeast(128) * 2.2
-        ).toInt() - sourceText.length - 760
-        optionalContextBudget = optionalContextBudget.coerceAtLeast(0)
-
-        fun takeContext(value: String, limit: Int): String {
-            val allowed = minOf(limit, optionalContextBudget.coerceAtLeast(0))
-            val result = value.trim().take(allowed)
-            optionalContextBudget -= result.length
-            return result
-        }
-
-        val background = takeContext(options.backgroundContext, 1200)
-        val glossary = takeContext(options.glossary, 1000)
-        val compactHistory = recentPairs.mapNotNull { pair ->
-            val source = takeContext(pair.first, 260)
-            val translated = takeContext(pair.second, 260)
-            if (source.isBlank() || translated.isBlank()) null else source to translated
-        }
-
+        // Tencent's official Hy-MT2 instruction format. Do not add a system prompt:
+        // the model is instruction-tuned for a single user message.
+        val background = options.backgroundContext.trim()
+        val glossary = options.glossary.trim()
         return buildString {
-            append("Translate the following text")
-            if (!sourceLanguage.isNullOrBlank()) append(" from ").append(sourceLanguage)
-            append(" into ").append(targetLanguage).append(".\n")
-            append("Output only the translation. Do not explain, summarize, or translate the background context.\n")
-            append("Preserve the same number and order of lines, punctuation, numbering, names, speaker distinctions and delimiters.\n")
-
+            append("Translate the following text into ")
+                .append(targetLanguage)
+                .append(". Note that you should only output the translated result without any additional explanation:")
             if (background.isNotEmpty()) {
-                append("\n[Background Information]\n")
-                append(background).append("\n")
+                append("\n\nBackground information:\n").append(background)
             }
-
-            if (compactHistory.isNotEmpty()) {
-                append("\n[Recent Dialogue Context]\n")
-                append("Use these preceding source/translation pairs only to maintain continuity, pronouns, names and character voice. Do not translate them again.\n")
-                compactHistory.forEachIndexed { index, pair ->
-                    append("Previous segment ").append(index + 1).append(" source: ")
-                        .append(pair.first).append("\n")
-                    append("Previous segment ").append(index + 1).append(" translation: ")
-                        .append(pair.second).append("\n")
-                }
-            }
-
             if (glossary.isNotEmpty()) {
-                append("\n[Terminology]\n")
-                append("Reference these translations consistently. Keep names and terms exactly as specified:\n")
-                append(glossary).append("\n")
+                append("\n\nTerminology reference:\n").append(glossary)
             }
-
-            val style = when {
-                options.stylePreset == HyMT2Settings.styleChoices.last() && options.customStyle.isNotBlank() -> options.customStyle.trim()
-                options.stylePreset == HyMT2Settings.styleChoices[1] -> "Natural, fluent spoken dialogue. Avoid stiff or literal phrasing."
-                options.stylePreset == HyMT2Settings.styleChoices[2] -> "Stay close to the source wording while keeping the target language grammatical. Do not embellish."
-                options.stylePreset == HyMT2Settings.styleChoices[3] -> "Dramatic comic dialogue. Preserve sarcasm, irony, humor, emotional intensity and character voice."
-                else -> "Natural literary comic dialogue. Preserve character voice, humor, irony, sarcasm and idiomatic phrasing."
-            }
-            append("\n[Style]\n").append(style).append("\n")
-            append("\n[Source Text]\n")
-            append(sourceText)
-            append("\n\nTranslate [Source Text]")
-            if (!sourceLanguage.isNullOrBlank()) append(" from ").append(sourceLanguage)
-            append(" into ").append(targetLanguage)
-                .append(". Return only its translation, preserving all line breaks and delimiters.")
+            append("\n\n").append(sourceText)
         }
     }
 
@@ -375,7 +320,7 @@ object HyMT2Runtime {
                 config = LlamaConfig(
                     contextSize = options.contextSize,
                     threads = threads,
-                    gpuLayers = 0,
+                    gpuLayers = if (options.useVulkan) options.gpuLayers else 0,
                     temperature = options.temperature,
                     topP = options.topP,
                     topK = options.topK,
@@ -385,7 +330,7 @@ object HyMT2Runtime {
             loadedModel = created
             loadedDescriptor = descriptor
             descriptor = null // Ownership moved to loadedDescriptor.
-            Log.i(TAG, "Hy-MT2 loaded from $sourceKey; CPU threads=$threads, context=${options.contextSize}, Vulkan=false (CPU/NEON backend)")
+            Log.i(TAG, "Hy-MT2 loaded from $sourceKey; CPU threads=$threads, context=${options.contextSize}, Vulkan=${options.useVulkan}, GPU layers=${if (options.useVulkan) options.gpuLayers else 0}")
             created
         } finally {
             descriptor?.close()
