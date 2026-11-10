@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Adapt upstream STQ1_0 support to the production AngelSlim GGUF tensor id 40."""
+"""Adapt upstream STQ1_0 support to Tencent Hy-MT2 GGUF tensor id 42."""
 from __future__ import annotations
 import argparse
 import re
@@ -33,7 +33,7 @@ def main() -> int:
         "        GGML_TYPE_Q1_0    = 41,\n"
         "        GGML_TYPE_STQ1_0  = 42, // Tencent Hy-MT2 official GGUF id\n"
         "        GGML_TYPE_Q2_0    = 43, // moved to free STQ id 42",
-        "production STQ tensor id 40 (preserve Q1/Q2 ids)",
+        "Tencent STQ tensor id 42 (preserve NVFP4/Q1_0 ids)",
     )
     header = header_path.read_text(encoding="utf-8")
     if not re.search(r"GGML_TYPE_STQ1_0\s*=\s*42,", header):
