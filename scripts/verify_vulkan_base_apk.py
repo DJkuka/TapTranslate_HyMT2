@@ -36,7 +36,7 @@ def main() -> int:
         if not all(key in metadata for key in ("PKG_LOW", "PKG_HIGH")):
             raise SystemExit("Google Offline Translate metadata does not contain PKG_LOW and PKG_HIGH")
         dex = sorted(name for name in names if name.startswith("classes") and name.endswith(".dex"))
-        if not any(name.startswith("smali_classes5") for name in dex):
+        if "classes5.dex" not in dex:
             print("Note: current APK has no classes5.dex; merge script will add it.")
     print("Verified current user Release APK.")
     print("SHA-256:", digest)
