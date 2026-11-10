@@ -221,7 +221,7 @@ object HyMT2Runtime {
                         if (translatedBlocks.size != sourceBlocks.size) {
                             error("Нарушено соответствие OCR-блоков: вход=${sourceBlocks.size}, выход=${translatedBlocks.size}")
                         }
-                        val translated = translatedBlocks.joinToString("\\n")
+                        val translated = translatedBlocks.joinToString("\n")
                         val elapsedMs = (SystemClock.elapsedRealtime() - translationStartedAt).coerceAtLeast(1L)
                         val aggregateTokensPerSecond = if (generatedTimeMs > 0L) {
                             generatedTokens * 1000.0 / generatedTimeMs
