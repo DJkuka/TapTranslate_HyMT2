@@ -108,7 +108,10 @@ def main() -> int:
     replace_once(
         vulkan_cmake,
         "    target_link_libraries(ggml-vulkan PRIVATE Vulkan::Vulkan)",
-        "    target_link_libraries(ggml-vulkan PRIVATE Vulkan::Vulkan SPIRV-Headers::SPIRV-Headers)\\n    if (DEFINED SPIRV_HEADERS_INCLUDE_DIR)\\n        target_include_directories(ggml-vulkan SYSTEM PRIVATE ${SPIRV_HEADERS_INCLUDE_DIR})\\n    endif()",
+        """    target_link_libraries(ggml-vulkan PRIVATE Vulkan::Vulkan SPIRV-Headers::SPIRV-Headers)
+    if (DEFINED SPIRV_HEADERS_INCLUDE_DIR)
+        target_include_directories(ggml-vulkan SYSTEM PRIVATE ${SPIRV_HEADERS_INCLUDE_DIR})
+    endif()""",
         "link the installed SPIRV-Headers target and explicit include directory to the Vulkan backend",
     )
 
