@@ -47,7 +47,7 @@ def main() -> int:
     replace_once(
         gradle,
         '                    "-DLLAMA_CURL=OFF",    // no libcurl dependency',
-        '                    "-DLLAMA_CURL=OFF",    // no libcurl dependency\n                    "-DGGML_BACKEND_DL=OFF", // link Vulkan/CPU backends directly',
+        '                    "-DLLAMA_CURL=OFF",    // no libcurl dependency\n                    "-DGGML_CPU=ON",\n                    "-DGGML_BACKEND_DL=OFF", // link Vulkan/CPU backends directly\n                    "-DVulkan_INCLUDE_DIR=" + System.getenv("VULKAN_HEADERS_INCLUDE_DIR"),\n                    "-DSPIRV_HEADERS_INCLUDE_DIR=" + System.getenv("SPIRV_HEADERS_INCLUDE_DIR"),\n                    "-DSPIRV-Headers_DIR=" + System.getenv("SPIRV_HEADERS_CMAKE_DIR"),',
         "disable dynamic backend loading",
     )
 
