@@ -478,7 +478,7 @@ def patch_resources(base: Path) -> None:
     if secondary.exists():
         import re
         old = secondary.read_text(encoding="utf-8")
-        old, count = re.subn(r'\s*<LinearLayout[^>]*android:id="@id/hymt2_model_manager_row"[^>]*>.*?</LinearLayout>\s*', '\n', old, count=1, flags=re.S)
+        old, count = re.subn(r'\s*<LinearLayout[^>]*android:id="@id/hymt2_model_manager_row"[^>]*>.*?</LinearLayout>\s*</LinearLayout>\s*', '\n', old, count=1, flags=re.S)
         if count:
             secondary.write_text(old, encoding="utf-8")
 
