@@ -6,6 +6,7 @@ plugins {
 android {
     namespace = "com.tap_to_translate.snap_translate.hymt2build"
     compileSdk = 35
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "com.tap_to_translate.snap_translate"
