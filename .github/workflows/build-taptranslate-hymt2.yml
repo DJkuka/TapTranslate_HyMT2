@@ -91,17 +91,17 @@ jobs:
 
       - name: Validate final unsigned APK
         run: |
-          unzip -t build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk | tail -n 2
-          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -p 4 build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
+          unzip -t build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk | tail -n 2
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -p 4 build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
           echo "Final APK SHA-256:"
-          sha256sum build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
+          sha256sum build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
           echo "Final APK size:"
-          ls -lh build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
+          ls -lh build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
 
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
-          name: TapTranslate-1.125-FontFit-AutoFill-HyMT2-unsigned
-          path: build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
+          name: TapTranslate-1.125-FontFit-AutoFill-HyMT2-Vulkan-unsigned
+          path: build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
           if-no-files-found: error
           retention-days: 14
