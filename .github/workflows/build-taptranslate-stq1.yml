@@ -1,4 +1,4 @@
-name: Build Tap Translate STQ1_0 + Vulkan experimental # explicit SPIRV-Headers target wiring
+name: Build Tap Translate STQ1_0 + Vulkan experimental # current llama.cpp sampler API compatibility fix
 
 on:
   workflow_dispatch:
