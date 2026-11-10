@@ -52,6 +52,29 @@ jobs:
           git -C upstream/llama-android/llama.cpp checkout acca4facb4dfbecf3db123f1f99a5d013d518a29
           echo "LLAMA_ROOT=$GITHUB_WORKSPACE/upstream/llama-android/llama.cpp" >> "$GITHUB_ENV"
 
+      - name: Build host llama-cli and load the exact Tencent STQ1_0 GGUF
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S "$LLAMA_ROOT" -B build/host-stq \
+            -DGGML_VULKAN=OFF \
+            -DGGML_CPU=ON \
+            -DGGML_OPENMP=OFF \
+            -DGGML_BACKEND_DL=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TOOLS=ON
+          cmake --build build/host-stq --target llama-cli -j2
+          mkdir -p test-model
+          curl --fail --location --retry 5 --retry-all-errors \
+            "https://huggingface.co/tencent/Hy-MT2-1.8B-1.25Bit-GGUF/resolve/main/Hy-MT2-1.8B-1.25Bit.gguf?download=true" \
+            -o test-model/Hy-MT2-1.8B-1.25Bit.gguf
+          echo "cc497fe8f033b52b3b8b00a7669e9661435432f9d4cd43f7ed24400c01507a93  test-model/Hy-MT2-1.8B-1.25Bit.gguf" | sha256sum -c -
+          build/host-stq/bin/llama-cli \
+            -m test-model/Hy-MT2-1.8B-1.25Bit.gguf \
+            -p "Translate the following text into Russian. Output only the translation: Hello, world." \
+            -n 8 -c 256 -t 2 --temp 0.1 --no-display-prompt
+
       - name: Install pinned Vulkan and SPIR-V headers
         shell: bash
         run: |
