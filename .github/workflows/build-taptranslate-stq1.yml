@@ -50,6 +50,13 @@ jobs:
           rm -rf upstream/llama-android/llama.cpp
           git clone https://github.com/Zane-dev16/llama.cpp-voco.git upstream/llama-android/llama.cpp
           git -C upstream/llama-android/llama.cpp checkout acca4facb4dfbecf3db123f1f99a5d013d518a29
+          # This fork omits the generated build-info.cmake file from version control.
+          cat > upstream/llama-android/llama.cpp/cmake/build-info.cmake <<'EOF'
+          set(BUILD_NUMBER 0)
+          set(BUILD_COMMIT "acca4fac")
+          set(BUILD_COMPILER "unknown")
+          set(BUILD_TARGET "unknown")
+          EOF
           echo "LLAMA_ROOT=$GITHUB_WORKSPACE/upstream/llama-android/llama.cpp" >> "$GITHUB_ENV"
 
       - name: Build host llama-cli and load the exact Tencent STQ1_0 GGUF
