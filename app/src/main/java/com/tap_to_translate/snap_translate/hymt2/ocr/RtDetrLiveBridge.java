@@ -358,29 +358,17 @@ public final class RtDetrLiveBridge {
     private static Rect readOverlayBounds(Object overlay) {
         if (overlay == null) return null;
         try {
+            // Host overlay model Loh/m exposes bounds via b()=left, d()=top,
+            // c()=right, a()=bottom. These are the same accessors used by vh/j.l.
             Class<?> type = overlay.getClass();
-            Field left = field(type, "c");
-            Field right = field(type, "d");
-            Field top = field(type, "e");
-            Field bottom = field(type, "f");
-            int l = left.getInt(overlay);
-            int r = right.getInt(overlay);
-            int t = top.getInt(overlay);
-            int b = bottom.getInt(overlay);
-            if (r <= l || b <= t) return null;
-            return new Rect(l, t, r, b);
+            int left = ((Number) type.getMethod("b").invoke(overlay)).intValue();
+            int top = ((Number) type.getMethod("d").invoke(overlay)).intValue();
+            int right = ((Number) type.getMethod("c").invoke(overlay)).intValue();
+            int bottom = ((Number) type.getMethod("a").invoke(overlay)).intValue();
+            if (right <= left || bottom <= top) return null;
+            return new Rect(left, top, right, bottom);
         } catch (Throwable error) {
             return null;
-        }
-    }
-
-    private static Field field(Class<?> type, String name) throws NoSuchFieldException {
-        try {
-            return type.getField(name);
-        } catch (NoSuchFieldException ignored) {
-            Field result = type.getDeclaredField(name);
-            result.setAccessible(true);
-            return result;
         }
     }
 
