@@ -199,7 +199,7 @@ def patch_live_hybrid_ocr(base: Path) -> None:
         text = text[:insert] + "\n" + safe_frame_hook + text[insert:]
 
     # The host posts overlay delivery through synthetic Runnable u3/u (switch case 6).
-    # Sort the same List immediately before vh/k.c(List), retaining all entries.
+    # Sort the same List immediately before the callback object overwrites v0.
     priority_hook = "    invoke-static {v0, v1}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->prioritizeBubbleOverlays(Ljava/lang/Object;Ljava/util/List;)V\\n"
     runnable_path = base / "smali" / "u3" / "u.smali"
     if not runnable_path.exists():
@@ -213,11 +213,11 @@ def patch_live_hybrid_ocr(base: Path) -> None:
     if case_end < 0:
         raise RuntimeError("Could not bound OCR delivery switch case")
     case = runnable_text[case_start:case_end]
-    callback = "    invoke-interface {v0, v1}, Lvh/k;->c(Ljava/util/List;)V"
-    if callback not in case:
-        raise RuntimeError("Could not find OCR callback in u3/u case 6")
+    owner_to_callback = """    iget-object v0, v0, Lvh/j;->b:Ljava/lang/Object;"""
+    if owner_to_callback not in case:
+        raise RuntimeError("Could not find vh/j callback handoff in u3/u case 6")
     if priority_hook.strip() not in case:
-        case = case.replace(callback, priority_hook + callback, 1)
+        case = case.replace(owner_to_callback, priority_hook + owner_to_callback, 1)
         runnable_text = runnable_text[:case_start] + case + runnable_text[case_end:]
         runnable_path.write_text(runnable_text, encoding="utf-8")
 
