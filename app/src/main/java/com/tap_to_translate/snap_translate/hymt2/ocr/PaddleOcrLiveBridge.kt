@@ -97,12 +97,27 @@ object PaddleOcrLiveBridge {
             Log.i(TAG, "line[${line.index}] conf=${line.confidence} bubble=${line.bubbleId ?: "FREE_OR_UNMATCHED"} bounds=${line.bounds.flattenToString()} text=${line.text}")
         }
         val grouped = lines.filter { it.bubbleId != null }.groupBy { it.bubbleId!! }
+        val utteranceGroups = mutableListOf<PaddleOcrTextGroup>()
         grouped.forEach { (bubbleId, bubbleLines) ->
             val ordered = bubbleLines.sortedWith(compareBy<Line> { it.bounds.top }.thenBy { it.bounds.left })
             val utterance = ordered.joinToString(" ") { it.text }.replace(Regex("\\s+"), " ").trim()
+            val union = Rect(ordered.first().bounds)
+            ordered.drop(1).forEach { union.union(it.bounds) }
+            val confidence = ordered.map { it.confidence }.average().toFloat().coerceIn(0f, 1f)
+            utteranceGroups.add(PaddleOcrTextGroup(utterance, union, bubbleId, confidence, ordered.size))
             Log.i(TAG, "bubble_group id=${bubbleId} lines=${ordered.size} text=${utterance}")
         }
+        // Free/unmatched text is deliberately kept as independent blocks. A later
+        // renderer can place these underneath bubble overlays without losing SFX/signage.
+        lines.filter { it.bubbleId == null }.forEach { line ->
+            utteranceGroups.add(PaddleOcrTextGroup(
+                line.text, line.bounds, null, line.confidence, 1
+            ))
+        }
         val freeCount = lines.count { it.bubbleId == null }
-        Log.i(TAG, "grouping_summary bubbles=${grouped.size} grouped_lines=${lines.size - freeCount} free_or_unmatched=${freeCount}")
+        Log.i(TAG, "grouping_summary bubbles=${grouped.size} grouped_lines=${lines.size - freeCount} free_or_unmatched=${freeCount} output_groups=${utteranceGroups.size}")
+        utteranceGroups.forEachIndexed { i, group ->
+            Log.i(TAG, "host_group[${i}] bubble=${group.bubbleId ?: "FREE"} lines=${group.lineCount} conf=${group.confidence} bounds=${group.bounds.flattenToString()} text=${group.text}")
+        }
     }
 }
