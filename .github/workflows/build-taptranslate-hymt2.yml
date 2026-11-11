@@ -262,7 +262,9 @@ jobs:
           test -s "$decoded/smali_classes5/com/paddle/ocr/PaddleOCR.smali"
           test -s "$decoded/smali_classes5/com/paddle/ocr/engine/OCREngine.smali"
           test -s "$decoded/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrLiveBridge.smali"
+          test -s "$decoded/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrTextLine.smali"
           test -s "$decoded/smali_classes5/org/opencv/android/Utils.smali"
+          test -s "$decoded/smali_classes2/nf/b.smali"
           test -s "$decoded/assets/models/det/inference.onnx"
           test -s "$decoded/assets/models/rec/inference.onnx"
           test -s "$decoded/assets/models/rec/inference.yml"
@@ -273,13 +275,17 @@ jobs:
           required = (
               "PaddleOcrLiveBridge;->recognizeBlocking",
               "applyPaddleBubbleGroups",
-              "Paddle host handoff:",
-              "mlkit_fallback=",
+              "Paddle native bubble block created:",
+              "mlkit_required_for_bubbles=false",
           )
           missing = [marker for marker in required if marker not in bridge]
           if missing:
-              raise SystemExit("Paddle host handoff contract is incomplete: " + ", ".join(missing))
-          print("Paddle OCR classes, OpenCV, verified model assets, host handoff and ML Kit fallback are present.")
+              raise SystemExit("Paddle-native OCR handoff contract is incomplete: " + ", ".join(missing))
+          child = Path("build/ocr-final-check/smali_classes2/nf/b.smali").read_text()
+          constructor = "Ljava/lang/String;Landroid/graphics/Rect;Ljava/util/List;Ljava/lang/String;)V"
+          if constructor not in child or "Lgf/j;-><init>" not in child:
+              raise SystemExit("Host nf/b child OCR constructor for Paddle lines is missing")
+          print("Paddle OCR, OpenCV, Paddle-native line geometry, host child constructor and independent bubble handoff verified.")
           PY
 
       - name: Upload unsigned APK
