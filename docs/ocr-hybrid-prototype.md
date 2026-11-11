@@ -17,7 +17,7 @@ Class 0 is deliberately excluded from OCR crops. Classes 1 and 2 become the comm
 
 ## Runtime
 
-The experimental helper uses `com.microsoft.onnxruntime:onnxruntime-android:1.31.1` (MIT). The model is fetched by CI, checked against exact byte size and SHA-256, and packaged in helper assets. The APK merger copies both the `ai/onnxruntime` Java classes and ARM64 JNI libraries, as well as helper assets, into the final unsigned host APK. The merger verifies the model payload and native runtime libraries after packaging.
+The experimental helper uses `com.microsoft.onnxruntime:onnxruntime-android:1.20.0` (MIT). The model is fetched by CI, checked against exact byte size and SHA-256, and packaged in helper assets. The APK merger copies both the `ai/onnxruntime` Java classes and ARM64 JNI libraries, as well as helper assets, into the final unsigned host APK. The merger verifies the model payload and native runtime libraries after packaging.
 
 The Android adapter follows the reference implementation's preprocessing: resize to 640x640, pack RGB NCHW float32, and pass original dimensions separately. The reference implementation inspected is ciddwd/overlay-translator, specifically MangaBubbleDetectionDebugEngine and MangaBubbleInputWorkspace.
 
