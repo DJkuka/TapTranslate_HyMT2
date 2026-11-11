@@ -205,11 +205,12 @@ def patch_live_hybrid_ocr(base: Path) -> None:
     if not runnable_path.exists():
         raise RuntimeError("Could not find synthetic OCR delivery runnable u3/u.smali")
     runnable_text = runnable_path.read_text(encoding="utf-8")
-    case_marker = "    :pswitch_6\\n"
-    case_start = runnable_text.find(case_marker)
+    # Match labels without hard-coding line-ending escapes. The smali file may
+    # be normalized by Apktool with LF or CRLF line endings.
+    case_start = runnable_text.find(":pswitch_6")
     if case_start < 0:
         raise RuntimeError("Could not find OCR delivery switch case in u3/u.smali")
-    case_end = runnable_text.find("    :pswitch_7", case_start)
+    case_end = runnable_text.find(":pswitch_7", case_start + len(":pswitch_6"))
     if case_end < 0:
         raise RuntimeError("Could not bound OCR delivery switch case")
     case = runnable_text[case_start:case_end]
