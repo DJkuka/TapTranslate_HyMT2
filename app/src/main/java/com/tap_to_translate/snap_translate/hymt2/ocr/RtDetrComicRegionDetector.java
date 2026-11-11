@@ -1,0 +1,7 @@
+package com.tap_to_translate.snap_translate.hymt2.ocr;
+import android.graphics.*;import java.util.*;
+public final class RtDetrComicRegionDetector implements OcrRegionDetector,AutoCloseable {
+ private final RtDetrInference inference;private boolean closed;public RtDetrComicRegionDetector(RtDetrInference i){if(i==null)throw new IllegalArgumentException("inference");inference=i;}
+ public List<DetectedRegion> detect(OcrFrame frame)throws Exception{if(closed)throw new IllegalStateException("closed");Bitmap src=frame.getBitmap();Rect v=frame.getVisibleBounds();Bitmap crop=(v.left==0&&v.top==0&&v.right==src.getWidth()&&v.bottom==src.getHeight())?src:Bitmap.createBitmap(src,v.left,v.top,v.width(),v.height());try{RtDetrInferenceOutput raw=inference.run(crop);List<RtDetrOutputDecoder.Detection> ds=RtDetrOutputDecoder.decode(raw,crop.getWidth(),crop.getHeight(),.30f);List<DetectedRegion> out=new ArrayList<>();int n=0;for(RtDetrOutputDecoder.Detection d:ds){Rect b=d.bounds;b.offset(v.left,v.top);Rect clipped=frame.clampToVisibleBounds(b);if(clipped!=null)out.add(new DetectedRegion("rtdetr:"+(n++),d.kind,clipped,d.confidence,null));}return out;}finally{if(crop!=src&&!crop.isRecycled())crop.recycle();}}
+ public void close(){if(!closed){closed=true;inference.close();}}
+}

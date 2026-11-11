@@ -1,0 +1,8 @@
+package com.tap_to_translate.snap_translate.hymt2.ocr;
+import android.content.Context;import java.io.*;import java.security.MessageDigest;
+public final class RtDetrModelProvider {
+ public static final String ASSET="models/bubble_detection/detector-v4-s_int8.onnx";public static final long BYTES=11120765L;public static final String SHA256="5fe9e4f576e49d4e7e8b0e029d6d3cdc252abd4694113e1cae120e62c931ea79";
+ private RtDetrModelProvider(){}
+ public static File prepare(Context c)throws IOException{File f=new File(c.getNoBackupFilesDir(),"ocr_models/detector-v4-s_int8.onnx");if(valid(f))return f;File dir=f.getParentFile();if(!dir.isDirectory()&&!dir.mkdirs())throw new IOException("Cannot create model directory");File tmp=new File(dir,f.getName()+".tmp");try(InputStream in=c.getAssets().open(ASSET);FileOutputStream out=new FileOutputStream(tmp)){byte[] b=new byte[65536];int n;while((n=in.read(b))!=-1)out.write(b,0,n);out.getFD().sync();}if(!valid(tmp)){tmp.delete();throw new IOException("RT-DETR model checksum/size mismatch");}if(f.exists()&&!f.delete())throw new IOException("Cannot replace model");if(!tmp.renameTo(f))throw new IOException("Cannot publish model");return f;}
+ private static boolean valid(File f){try{if(!f.isFile()||f.length()!=BYTES)return false;MessageDigest d=MessageDigest.getInstance("SHA-256");try(InputStream in=new FileInputStream(f)){byte[] b=new byte[65536];int n;while((n=in.read(b))!=-1)d.update(b,0,n);}StringBuilder s=new StringBuilder();for(byte b:d.digest())s.append(String.format("%02x",b));return SHA256.equals(s.toString());}catch(Exception e){return false;}}
+}
