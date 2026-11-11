@@ -201,10 +201,10 @@ public final class RtDetrLiveBridge {
             List<PaddleOcrTextGroup> paddleGroups = PaddleOcrLiveBridge.recognizeBlocking(
                     ignoredContext, source, regions, 15000L);
             if (paddleGroups != null && !paddleGroups.isEmpty()) {
-                int replaced = applyPaddleBubbleGroups(blocks, paddleGroups);
-                Log.i(TAG, "Paddle host handoff: groups=" + paddleGroups.size()
-                        + " bubble_blocks_replaced=" + replaced
-                        + " mlkit_fallback=" + (replaced == 0));
+                int created = applyPaddleBubbleGroups(blocks, paddleGroups, regions);
+                Log.i(TAG, "Paddle host handoff completed: groups=" + paddleGroups.size()
+                        + " native_bubble_blocks=" + created
+                        + " mlkit_fallback=" + (created == 0));
             } else {
                 Log.i(TAG, "Paddle host handoff unavailable; ML Kit result retained");
             }
@@ -225,20 +225,30 @@ public final class RtDetrLiveBridge {
      * per-line child rectangles. Existing ML Kit blocks are retained only when they
      * belong to free/unknown text outside RT-DETR speech-bubble containers.
      */
+    /**
+     * Build host OCR bubble blocks from Paddle's own text and line geometry.
+     * ML Kit is not required to detect the same phrase. Existing ML Kit blocks are
+     * retained only for bubbles where Paddle did not produce a replacement and
+     * for independent free/unknown text.
+     */
     private static int applyPaddleBubbleGroups(
             List<Object> blocks,
             List<PaddleOcrTextGroup> groups,
             List<DetectedRegion> regions) {
         try {
             ArrayList<PaddleOcrTextGroup> bubbles = new ArrayList<>();
+            java.util.HashSet<String> paddleBubbleIds = new java.util.HashSet<>();
             for (PaddleOcrTextGroup group : groups) {
                 if (group != null && group.getBubbleId() != null
                         && group.getText() != null && !group.getText().trim().isEmpty()) {
                     bubbles.add(group);
+                    paddleBubbleIds.add(group.getBubbleId());
                 }
             }
             if (bubbles.isEmpty()) return 0;
 
+            // nf/b is the host's child text-line class. Its constructor is injected
+            // by merge_apk.py and delegates to the existing gf/j data constructor.
             Class<?> childClass = Class.forName("nf.b");
             Constructor<?> childConstructor = childClass.getDeclaredConstructor(
                     String.class, Rect.class, List.class, String.class);
@@ -250,16 +260,14 @@ public final class RtDetrLiveBridge {
                     java.util.AbstractList.class);
             parentConstructor.setAccessible(true);
 
-            ArrayList<Object> replacement = new ArrayList<>();
+            ArrayList<Object> paddleBlocks = new ArrayList<>();
             int generated = 0;
             for (PaddleOcrTextGroup group : bubbles) {
-                ArrayList<PaddleOcrTextLine> lines =
-                        new ArrayList<>(group.getLines());
+                ArrayList<PaddleOcrTextLine> lines = new ArrayList<>(group.getLines());
                 if (lines.isEmpty()) {
                     lines.add(new PaddleOcrTextLine(
                             group.getText(), group.getBounds(), group.getConfidence()));
                 }
-
                 ArrayList<Object> children = new ArrayList<>();
                 for (PaddleOcrTextLine line : lines) {
                     if (line == null || line.getText() == null
@@ -280,7 +288,7 @@ public final class RtDetrLiveBridge {
                 Rect bounds = group.getBounds();
                 Object parent = parentConstructor.newInstance(
                         group.getText(), bounds, rectanglePolygon(bounds), "en", children);
-                replacement.add(parent);
+                paddleBlocks.add(parent);
                 generated++;
                 Log.i(TAG, "Paddle native bubble block created: id=" + group.getBubbleId()
                         + " lines=" + children.size()
@@ -289,46 +297,37 @@ public final class RtDetrLiveBridge {
             }
             if (generated == 0) return 0;
 
-            // Preserve the host's independent ML Kit text blocks outside speech bubbles.
-            // Bubble blocks are fully replaced by Paddle blocks, never gated by ML Kit.
-            ArrayList<Object> retainedFreeText = new ArrayList<>();
-            int removedMlKitBubbleBlocks = 0;
+            // Replace ML Kit only for the exact RT-DETR bubble IDs represented in
+            // the Paddle output. If Paddle missed another bubble, its ML Kit block
+            // remains as a fallback. A Paddle-only hit like CERTAINLY is still added.
+            ArrayList<Object> retainedMlKit = new ArrayList<>();
+            int replacedMlKitBubbleBlocks = 0;
             for (Object block : blocks) {
                 Rect bounds = readBlockBounds(block);
-                if (bounds == null) {
-                    retainedFreeText.add(block);
-                    continue;
+                String bubbleId = bounds == null ? null : findBubbleContainerId(bounds, regions);
+                if (bubbleId != null && paddleBubbleIds.contains(bubbleId)) {
+                    replacedMlKitBubbleBlocks++;
+                } else {
+                    retainedMlKit.add(block);
                 }
-                boolean belongsToBubble =
-                        findBubbleContainer(bounds, regions) >= 0
-                        || bestTextRegionScore(bounds, regions, OcrRegionKind.SPEECH_BUBBLE) > 0d;
-                if (!belongsToBubble) {
-                    for (PaddleOcrTextGroup group : bubbles) {
-                        Rect paddleBounds = group.getBounds();
-                        Rect intersection = new Rect(bounds);
-                        if (intersection.intersect(paddleBounds)) {
-                            long inter = (long) intersection.width() * intersection.height();
-                            long smaller = Math.min(
-                                    (long) bounds.width() * bounds.height(),
-                                    (long) paddleBounds.width() * paddleBounds.height());
-                            if (smaller > 0L && (double) inter / smaller >= 0.18d) {
-                                belongsToBubble = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-                if (belongsToBubble) removedMlKitBubbleBlocks++;
-                else retainedFreeText.add(block);
             }
 
-            replacement.addAll(retainedFreeText);
+            ArrayList<Object> replacement = new ArrayList<>(paddleBlocks);
+            replacement.addAll(retainedMlKit);
+            replacement.sort((left, right) -> {
+                Rect a = readBlockBounds(left);
+                Rect b = readBlockBounds(right);
+                if (a == null) return b == null ? 0 : 1;
+                if (b == null) return -1;
+                int byTop = Integer.compare(a.top, b.top);
+                return byTop != 0 ? byTop : Integer.compare(a.left, b.left);
+            });
             blocks.clear();
             blocks.addAll(replacement);
             Log.i(TAG, "Paddle host handoff: paddle_bubbles=" + bubbles.size()
                     + " native_blocks_created=" + generated
-                    + " mlkit_bubble_blocks_removed=" + removedMlKitBubbleBlocks
-                    + " mlkit_free_or_unknown_preserved=" + retainedFreeText.size()
+                    + " mlkit_bubble_blocks_replaced=" + replacedMlKitBubbleBlocks
+                    + " mlkit_free_or_unmatched_preserved=" + retainedMlKit.size()
                     + " mlkit_required_for_bubbles=false");
             return generated;
         } catch (Throwable error) {
@@ -541,6 +540,21 @@ public final class RtDetrLiveBridge {
             if (score >= 0.18d && score > best) best = score;
         }
         return best;
+    }
+
+    private static String findBubbleContainerId(Rect text, List<DetectedRegion> regions) {
+        ArrayList<BubbleRegionMatcher.Bounds> bubbles = new ArrayList<>();
+        ArrayList<String> ids = new ArrayList<>();
+        for (DetectedRegion region : regions) {
+            if (region.getKind() != OcrRegionKind.BUBBLE_CONTAINER) continue;
+            Rect bounds = region.getBounds();
+            bubbles.add(new BubbleRegionMatcher.Bounds(
+                    bounds.left, bounds.top, bounds.right, bounds.bottom));
+            ids.add(region.getId());
+        }
+        int index = BubbleRegionMatcher.findBestContainer(
+                text.left, text.top, text.right, text.bottom, bubbles);
+        return index >= 0 && index < ids.size() ? ids.get(index) : null;
     }
 
     private static int findBubbleContainer(Rect text, List<DetectedRegion> regions) {
