@@ -231,24 +231,35 @@ public final class RtDetrLiveBridge {
      * retained only for bubbles where Paddle did not produce a replacement and
      * for independent free/unknown text.
      */
+    /**
+     * Build host OCR blocks from Paddle's own text and line geometry.
+     * Bubble and free-text blocks both originate from Paddle. ML Kit blocks are
+     * retained only where Paddle produced no corresponding text.
+     */
     private static int applyPaddleBubbleGroups(
             List<Object> blocks,
             List<PaddleOcrTextGroup> groups,
             List<DetectedRegion> regions) {
         try {
-            ArrayList<PaddleOcrTextGroup> bubbles = new ArrayList<>();
+            ArrayList<PaddleOcrTextGroup> paddleGroups = new ArrayList<>();
             java.util.HashSet<String> paddleBubbleIds = new java.util.HashSet<>();
+            int paddleBubbleGroups = 0;
+            int paddleFreeGroups = 0;
             for (PaddleOcrTextGroup group : groups) {
-                if (group != null && group.getBubbleId() != null
-                        && group.getText() != null && !group.getText().trim().isEmpty()) {
-                    bubbles.add(group);
+                if (group == null || group.getText() == null
+                        || group.getText().trim().isEmpty()) continue;
+                paddleGroups.add(group);
+                if (group.getBubbleId() != null) {
                     paddleBubbleIds.add(group.getBubbleId());
+                    paddleBubbleGroups++;
+                } else {
+                    paddleFreeGroups++;
                 }
             }
-            if (bubbles.isEmpty()) return 0;
+            if (paddleGroups.isEmpty()) return 0;
 
             // nf/b is the host's child text-line class. Its constructor is injected
-            // by merge_apk.py and delegates to the existing gf/j data constructor.
+            // by merge_apk.py and delegates to the existing gf/j geometry constructor.
             Class<?> childClass = Class.forName("nf.b");
             Constructor<?> childConstructor = childClass.getDeclaredConstructor(
                     String.class, Rect.class, List.class, String.class);
@@ -262,7 +273,7 @@ public final class RtDetrLiveBridge {
 
             ArrayList<Object> paddleBlocks = new ArrayList<>();
             int generated = 0;
-            for (PaddleOcrTextGroup group : bubbles) {
+            for (PaddleOcrTextGroup group : paddleGroups) {
                 ArrayList<PaddleOcrTextLine> lines = new ArrayList<>(group.getLines());
                 if (lines.isEmpty()) {
                     lines.add(new PaddleOcrTextLine(
@@ -280,7 +291,7 @@ public final class RtDetrLiveBridge {
                     children.add(child);
                 }
                 if (children.isEmpty()) {
-                    Log.w(TAG, "Paddle group skipped: no valid child line geometry; id="
+                    Log.w(TAG, "Paddle group skipped: no valid child line geometry; bubble="
                             + group.getBubbleId() + " text=" + group.getText());
                     continue;
                 }
@@ -290,26 +301,46 @@ public final class RtDetrLiveBridge {
                         group.getText(), bounds, rectanglePolygon(bounds), "en", children);
                 paddleBlocks.add(parent);
                 generated++;
-                Log.i(TAG, "Paddle native bubble block created: id=" + group.getBubbleId()
+                Log.i(TAG, "Paddle native OCR block created: type="
+                        + (group.getBubbleId() == null ? "FREE_TEXT" : "BUBBLE")
+                        + " id=" + group.getBubbleId()
                         + " lines=" + children.size()
                         + " bounds=" + bounds.flattenToString()
                         + " text=" + group.getText());
             }
             if (generated == 0) return 0;
 
-            // Replace ML Kit only for the exact RT-DETR bubble IDs represented in
-            // the Paddle output. If Paddle missed another bubble, its ML Kit block
-            // remains as a fallback. A Paddle-only hit like CERTAINLY is still added.
+            // Remove an ML Kit block if Paddle represented that exact RT-DETR bubble,
+            // or if its geometry overlaps a Paddle free-text line. Keep ML Kit blocks
+            // for bubbles/areas which Paddle failed to recognize as a fallback.
             ArrayList<Object> retainedMlKit = new ArrayList<>();
-            int replacedMlKitBubbleBlocks = 0;
+            int replacedMlKitBlocks = 0;
             for (Object block : blocks) {
                 Rect bounds = readBlockBounds(block);
-                String bubbleId = bounds == null ? null : findBubbleContainerId(bounds, regions);
-                if (bubbleId != null && paddleBubbleIds.contains(bubbleId)) {
-                    replacedMlKitBubbleBlocks++;
-                } else {
+                if (bounds == null) {
                     retainedMlKit.add(block);
+                    continue;
                 }
+                String bubbleId = findBubbleContainerId(bounds, regions);
+                boolean representedByPaddle = bubbleId != null
+                        && paddleBubbleIds.contains(bubbleId);
+                if (!representedByPaddle) {
+                    for (PaddleOcrTextGroup group : paddleGroups) {
+                        Rect paddleBounds = group.getBounds();
+                        Rect intersection = new Rect(bounds);
+                        if (!intersection.intersect(paddleBounds)) continue;
+                        long inter = (long) intersection.width() * intersection.height();
+                        long smaller = Math.min(
+                                (long) bounds.width() * bounds.height(),
+                                (long) paddleBounds.width() * paddleBounds.height());
+                        if (smaller > 0L && (double) inter / smaller >= 0.18d) {
+                            representedByPaddle = true;
+                            break;
+                        }
+                    }
+                }
+                if (representedByPaddle) replacedMlKitBlocks++;
+                else retainedMlKit.add(block);
             }
 
             ArrayList<Object> replacement = new ArrayList<>(paddleBlocks);
@@ -324,11 +355,12 @@ public final class RtDetrLiveBridge {
             });
             blocks.clear();
             blocks.addAll(replacement);
-            Log.i(TAG, "Paddle host handoff: paddle_bubbles=" + bubbles.size()
+            Log.i(TAG, "Paddle host handoff: paddle_bubble_groups=" + paddleBubbleGroups
+                    + " paddle_free_text_groups=" + paddleFreeGroups
                     + " native_blocks_created=" + generated
-                    + " mlkit_bubble_blocks_replaced=" + replacedMlKitBubbleBlocks
-                    + " mlkit_free_or_unmatched_preserved=" + retainedMlKit.size()
-                    + " mlkit_required_for_bubbles=false");
+                    + " mlkit_blocks_replaced=" + replacedMlKitBlocks
+                    + " mlkit_fallback_blocks_preserved=" + retainedMlKit.size()
+                    + " mlkit_required_for_paddle_text=false");
             return generated;
         } catch (Throwable error) {
             Log.w(TAG, "Paddle native block conversion failed; original ML Kit result retained", error);
