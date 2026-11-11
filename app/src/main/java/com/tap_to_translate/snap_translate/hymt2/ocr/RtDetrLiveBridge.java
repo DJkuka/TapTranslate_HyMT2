@@ -301,6 +301,112 @@ public final class RtDetrLiveBridge {
         }
     }
 
+    /**
+     * Keeps every recognized overlay, but changes draw order so bubble text is painted
+     * after free text. The host renderer (rh/f.onDraw) paints list entries in order,
+     * so bubble groups must be moved to the tail of the list.
+     */
+    public static void prioritizeBubbleOverlays(Object owner, List<?> overlayGroups) {
+        if (owner == null || overlayGroups == null || overlayGroups.size() < 2) return;
+        final List<DetectedRegion> regions;
+        synchronized (LOCK) {
+            regions = ACTIVE_REGIONS.get(owner);
+        }
+        if (regions == null || regions.isEmpty()) return;
+
+        try {
+            ArrayList<Object> underlays = new ArrayList<>();
+            ArrayList<Object> bubbleOverlays = new ArrayList<>();
+            int unreadable = 0;
+            for (Object group : overlayGroups) {
+                Rect bounds = readOverlayBounds(group);
+                if (bounds == null) {
+                    unreadable++;
+                    underlays.add(group);
+                    continue;
+                }
+
+                double bubbleTextScore = bestTextRegionScore(
+                        bounds, regions, OcrRegionKind.SPEECH_BUBBLE);
+                double freeTextScore = bestTextRegionScore(
+                        bounds, regions, OcrRegionKind.FREE_TEXT);
+
+                // Direct class-1 evidence wins ties. If neither text class matched,
+                // use the class-0 bubble container as a conservative fallback.
+                boolean isBubbleText = bubbleTextScore > 0d
+                        ? bubbleTextScore >= freeTextScore
+                        : freeTextScore == 0d && findBubbleContainer(bounds, regions) >= 0;
+
+                if (isBubbleText) bubbleOverlays.add(group);
+                else underlays.add(group);
+            }
+
+            if (bubbleOverlays.isEmpty()) return;
+            @SuppressWarnings("unchecked")
+            List<Object> mutable = (List<Object>) overlayGroups;
+            mutable.clear();
+            mutable.addAll(underlays);
+            mutable.addAll(bubbleOverlays);
+            Log.i(TAG, "overlay draw priority: free_or_unknown_first=" + underlays.size()
+                    + " bubble_last=" + bubbleOverlays.size()
+                    + " unreadable_bounds=" + unreadable);
+        } catch (Throwable error) {
+            Log.w(TAG, "Overlay draw priority failed; original order retained", error);
+        }
+    }
+
+    private static Rect readOverlayBounds(Object overlay) {
+        if (overlay == null) return null;
+        try {
+            Class<?> type = overlay.getClass();
+            Field left = field(type, "c");
+            Field right = field(type, "d");
+            Field top = field(type, "e");
+            Field bottom = field(type, "f");
+            int l = left.getInt(overlay);
+            int r = right.getInt(overlay);
+            int t = top.getInt(overlay);
+            int b = bottom.getInt(overlay);
+            if (r <= l || b <= t) return null;
+            return new Rect(l, t, r, b);
+        } catch (Throwable error) {
+            return null;
+        }
+    }
+
+    private static Field field(Class<?> type, String name) throws NoSuchFieldException {
+        try {
+            return type.getField(name);
+        } catch (NoSuchFieldException ignored) {
+            Field result = type.getDeclaredField(name);
+            result.setAccessible(true);
+            return result;
+        }
+    }
+
+    private static double bestTextRegionScore(
+            Rect text, List<DetectedRegion> regions, OcrRegionKind kind) {
+        long textArea = (long) text.width() * text.height();
+        if (textArea <= 0L) return 0d;
+        double best = 0d;
+        int centerX = text.centerX();
+        int centerY = text.centerY();
+        for (DetectedRegion region : regions) {
+            if (region.getKind() != kind) continue;
+            Rect detected = region.getBounds();
+            Rect intersection = new Rect(text);
+            if (!intersection.intersect(detected)) continue;
+            long intersectionArea = (long) intersection.width() * intersection.height();
+            long detectedArea = (long) detected.width() * detected.height();
+            long smallerArea = Math.min(textArea, detectedArea);
+            if (smallerArea <= 0L) continue;
+            double score = (double) intersectionArea / (double) smallerArea;
+            if (detected.contains(centerX, centerY)) score = Math.max(score, 0.5d);
+            if (score >= 0.18d && score > best) best = score;
+        }
+        return best;
+    }
+
     private static int findBubbleContainer(Rect text, List<DetectedRegion> regions) {
         ArrayList<BubbleRegionMatcher.Bounds> bubbles = new ArrayList<>();
         for (DetectedRegion region : regions) {
