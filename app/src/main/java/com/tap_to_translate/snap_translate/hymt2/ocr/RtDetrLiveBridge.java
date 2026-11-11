@@ -154,7 +154,7 @@ public final class RtDetrLiveBridge {
         }
 
         // Diagnostic parallel run on the same frame; translation still uses ML Kit.
-        PaddleOcrLiveBridge.submit(ignoredContext, source);
+        PaddleOcrLiveBridge.submit(ignoredContext, source, regions);
 
         if (regions == null || regions.isEmpty()) {
             Log.w(TAG, "RT-DETR returned no text regions; original OCR retained");
