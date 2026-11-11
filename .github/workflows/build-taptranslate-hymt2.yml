@@ -201,8 +201,17 @@ jobs:
               raise SystemExit("Obsolete early screenshot hook remains in vh/j->j")
           if "RtDetrLiveBridge;->filter" not in result:
               raise SystemExit("RT-DETR results are not applied to the live ML Kit result")
-          if result.count("RtDetrLiveBridge;->allowGrouping") != 2:
-              raise SystemExit("Both live paragraph-grouping edges must be guarded")
+          import re
+          guarded_edges = re.findall(
+              r"invoke-static \\{v0, v2, v8, v13\\}, "
+              r"Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->allowGrouping"
+              r"\\(Ljava/lang/Object;Ljava/lang/Object;II\\)Z\\s+"
+              r"move-result v20\\s+if-eqz v20, :hymt2_skip_bubble_edge_[01]\\s+"
+              r"new-instance v6, Lwh/d;",
+              result,
+          )
+          if len(guarded_edges) != 2:
+              raise SystemExit("Each original grouping edge must have its own immediately preceding guard")
           print("Verified exact ML Kit Bitmap handoff, OCR result filter and both cross-bubble grouping guards.")
           PY
           echo "RT-DETR detector, ONNX Runtime classes and OCR pipeline are present in the unsigned APK."
