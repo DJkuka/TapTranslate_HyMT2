@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.ceil
 import kotlin.math.floor
 
-/** Diagnostic-only PP-OCRv6 bridge. Host ML Kit remains authoritative in this prototype. */
+/** PP-OCRv6 recognition adapter. RT-DETR supplies bubble boundaries; ML Kit is only a free-text fallback. */
 object PaddleOcrLiveBridge {
     private const val TAG = "TapTranslatePaddle"
     private val busy = AtomicBoolean(false)
@@ -126,14 +126,18 @@ object PaddleOcrLiveBridge {
             val union = Rect(ordered.first().bounds)
             ordered.drop(1).forEach { union.union(it.bounds) }
             val confidence = ordered.map { it.confidence }.average().toFloat().coerceIn(0f, 1f)
-            utteranceGroups.add(PaddleOcrTextGroup(utterance, union, bubbleId, confidence, ordered.size))
+            val lineModels = ordered.map { PaddleOcrTextLine(it.text, it.bounds, it.confidence) }
+            utteranceGroups.add(PaddleOcrTextGroup(
+                utterance, union, bubbleId, confidence, ordered.size, lineModels
+            ))
             Log.i(TAG, "bubble_group id=${bubbleId} lines=${ordered.size} text=${utterance}")
         }
         // Free/unmatched text is deliberately kept as independent blocks. A later
         // renderer can place these underneath bubble overlays without losing SFX/signage.
         lines.filter { it.bubbleId == null }.forEach { line ->
             utteranceGroups.add(PaddleOcrTextGroup(
-                line.text, line.bounds, null, line.confidence, 1
+                line.text, line.bounds, null, line.confidence, 1,
+                listOf(PaddleOcrTextLine(line.text, line.bounds, line.confidence))
             ))
         }
         val freeCount = lines.count { it.bubbleId == null }
