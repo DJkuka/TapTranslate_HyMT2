@@ -161,6 +161,39 @@ def patch_engine_list(base: Path) -> None:
         path.write_text(text, encoding="utf-8")
 
 
+def patch_paddle_child_constructor(base: Path) -> None:
+    """
+    Add the constructor absent from the obfuscated host child class nf/b.
+    nf/b extends gf/j; this delegates to the host's existing geometry constructor,
+    which copies the Rect and Point polygon in exactly the same way as ML Kit blocks.
+    """
+    path = base / "smali_classes2/nf/b.smali"
+    if not path.is_file():
+        raise RuntimeError("Could not find host ML Kit child OCR class nf/b.smali")
+    text = path.read_text(encoding="utf-8")
+    descriptor = ".method public constructor <init>(Ljava/lang/String;Landroid/graphics/Rect;Ljava/util/List;Ljava/lang/String;)V"
+    if descriptor not in text:
+        if ".super Lgf/j;" not in text:
+            raise RuntimeError("Unexpected nf/b superclass; refusing to patch child OCR constructor")
+        constructor = """
+# Constructor used by the Paddle adapter to create child text-line geometry.
+.method public constructor <init>(Ljava/lang/String;Landroid/graphics/Rect;Ljava/util/List;Ljava/lang/String;)V
+    .locals 0
+
+    invoke-direct {p0, p1, p2, p3, p4}, Lgf/j;-><init>(Ljava/lang/String;Landroid/graphics/Rect;Ljava/util/List;Ljava/lang/String;)V
+
+    return-void
+.end method
+"""
+        text = text.rstrip() + "\n\n" + constructor
+        path.write_text(text, encoding="utf-8")
+
+    verified = path.read_text(encoding="utf-8")
+    if descriptor not in verified or "Lgf/j;-><init>(Ljava/lang/String;Landroid/graphics/Rect;Ljava/util/List;Ljava/lang/String;)V" not in verified:
+        raise RuntimeError("Paddle child OCR constructor was not installed correctly")
+    print("Added/verified nf/b constructor for Paddle-native OCR line geometry")
+
+
 def patch_live_hybrid_ocr(base: Path) -> None:
     """Wire RT-DETR into the actual screenshot -> ML Kit -> translation path."""
     path = base / "smali_classes3/vh/j.smali"
@@ -863,6 +896,7 @@ def main() -> int:
     patch_engine_list(base)
     patch_dispatcher(base)
     patch_live_hybrid_ocr(base)
+    patch_paddle_child_constructor(base)
     patch_picker_callbacks(base)
     patch_settings_click(base)
     patch_resources(base)
