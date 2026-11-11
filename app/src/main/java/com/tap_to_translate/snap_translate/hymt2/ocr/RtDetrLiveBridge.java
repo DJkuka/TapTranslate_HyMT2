@@ -3,9 +3,11 @@ package com.tap_to_translate.snap_translate.hymt2.ocr;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Rect;
+import android.graphics.Point;
 import android.util.Log;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Constructor;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -153,9 +155,6 @@ public final class RtDetrLiveBridge {
                     : new ArrayList<>(regions));
         }
 
-        // Diagnostic parallel run on the same frame; translation still uses ML Kit.
-        PaddleOcrLiveBridge.submit(ignoredContext, source, regions);
-
         if (regions == null || regions.isEmpty()) {
             Log.w(TAG, "RT-DETR returned no text regions; original OCR retained");
             return;
@@ -196,9 +195,126 @@ public final class RtDetrLiveBridge {
                     + " detector_matched=" + detectorMatched
                     + " detector_unmatched=" + detectorUnmatched
                     + " filtering=disabled unreadable_bounds=" + unreadable);
+
+            // This method is reached from the host's dedicated OCR callback executor.
+            // Wait only there (never on the UI thread); keep ML Kit intact on timeout/failure.
+            List<PaddleOcrTextGroup> paddleGroups = PaddleOcrLiveBridge.recognizeBlocking(
+                    ignoredContext, source, regions, 15000L);
+            if (paddleGroups != null && !paddleGroups.isEmpty()) {
+                int replaced = applyPaddleBubbleGroups(blocks, paddleGroups);
+                Log.i(TAG, "Paddle host handoff: groups=" + paddleGroups.size()
+                        + " bubble_blocks_replaced=" + replaced
+                        + " mlkit_fallback=" + (replaced == 0));
+            } else {
+                Log.i(TAG, "Paddle host handoff unavailable; ML Kit result retained");
+            }
         } catch (Throwable error) {
             Log.w(TAG, "Hybrid OCR filtering failed; original OCR retained", error);
         }
+    }
+
+
+    /**
+     * Replace only ML Kit speech-bubble blocks with Paddle utterances. Existing ML Kit
+     * child word boxes are reused for the host's geometry/colour pipeline. Free text
+     * remains untouched in this stage, so signage/SFX cannot be silently discarded.
+     */
+    private static int applyPaddleBubbleGroups(
+            List<Object> blocks, List<PaddleOcrTextGroup> groups) {
+        try {
+            ArrayList<PaddleOcrTextGroup> bubbles = new ArrayList<>();
+            for (PaddleOcrTextGroup group : groups) {
+                if (group != null && group.getBubbleId() != null
+                        && group.getText() != null && !group.getText().trim().isEmpty()) {
+                    bubbles.add(group);
+                }
+            }
+            if (bubbles.isEmpty() || blocks.isEmpty()) return 0;
+
+            ArrayList<ArrayList<Object>> assigned = new ArrayList<>();
+            for (int i = 0; i < bubbles.size(); i++) assigned.add(new ArrayList<Object>());
+            ArrayList<Object> unmatched = new ArrayList<>();
+            for (Object block : blocks) {
+                Rect bounds = readBlockBounds(block);
+                if (bounds == null) { unmatched.add(block); continue; }
+                int best = -1;
+                double bestScore = 0.18d;
+                for (int i = 0; i < bubbles.size(); i++) {
+                    Rect bubble = bubbles.get(i).getBounds();
+                    Rect intersection = new Rect(bounds);
+                    if (!intersection.intersect(bubble)) continue;
+                    long inter = (long) intersection.width() * intersection.height();
+                    long smaller = Math.min((long) bounds.width() * bounds.height(),
+                            (long) bubble.width() * bubble.height());
+                    double score = smaller <= 0 ? 0d : (double) inter / smaller;
+                    if (bubble.contains(bounds.centerX(), bounds.centerY())) score = Math.max(score, 0.5d);
+                    if (score > bestScore) { bestScore = score; best = i; }
+                }
+                if (best >= 0) assigned.get(best).add(block);
+                else unmatched.add(block);
+            }
+
+            Class<?> parentClass = Class.forName("nf.c");
+            Constructor<?> constructor = parentClass.getDeclaredConstructor(
+                    String.class, Rect.class, List.class, String.class, java.util.AbstractList.class);
+            constructor.setAccessible(true);
+            ArrayList<Object> replacement = new ArrayList<>();
+            int replaced = 0;
+            for (int i = 0; i < bubbles.size(); i++) {
+                ArrayList<Object> sourceBlocks = assigned.get(i);
+                if (sourceBlocks.isEmpty()) continue;
+                PaddleOcrTextGroup group = bubbles.get(i);
+                ArrayList<Object> children = new ArrayList<>();
+                String language = "en";
+                for (Object sourceBlock : sourceBlocks) {
+                    try {
+                        Object lang = sourceBlock.getClass().getField("d").get(sourceBlock);
+                        if (lang instanceof String && !((String) lang).isEmpty()) language = (String) lang;
+                    } catch (Throwable ignored) {}
+                    Object childList = sourceBlock.getClass().getMethod("f").invoke(sourceBlock);
+                    if (childList instanceof List<?>) {
+                        for (Object child : (List<?>) childList) {
+                            if (child != null && !containsIdentity(children, child)) children.add(child);
+                        }
+                    }
+                }
+                if (children.isEmpty()) {
+                    unmatched.addAll(sourceBlocks);
+                    continue;
+                }
+                Rect b = group.getBounds();
+                ArrayList<Point> polygon = new ArrayList<>();
+                polygon.add(new Point(b.left, b.top));
+                polygon.add(new Point(b.right, b.top));
+                polygon.add(new Point(b.right, b.bottom));
+                polygon.add(new Point(b.left, b.bottom));
+                Object merged = constructor.newInstance(
+                        group.getText(), b, polygon, language, children);
+                replacement.add(merged);
+                replaced++;
+            }
+            replacement.addAll(unmatched);
+            if (replaced == 0) return 0;
+            replacement.sort((a, b) -> {
+                Rect ra = readBlockBounds(a);
+                Rect rb = readBlockBounds(b);
+                if (ra == null) return rb == null ? 0 : 1;
+                if (rb == null) return -1;
+                int top = Integer.compare(ra.top, rb.top);
+                return top != 0 ? top : Integer.compare(ra.left, rb.left);
+            });
+            blocks.clear();
+            blocks.addAll(replacement);
+            return replaced;
+        } catch (Throwable error) {
+            Log.w(TAG, "Paddle host block conversion failed; ML Kit result retained", error);
+            return 0;
+        }
+    }
+
+    private static boolean containsIdentity(List<Object> list, Object value) {
+        for (Object item : list) if (item == value) return true;
+        return false;
     }
 
     private static Context resolveContext(Object owner) {
