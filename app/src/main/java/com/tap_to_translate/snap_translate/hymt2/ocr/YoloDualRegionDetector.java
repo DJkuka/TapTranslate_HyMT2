@@ -92,7 +92,7 @@ public final class YoloDualRegionDetector implements OcrRegionDetector, AutoClos
                 if (localBounds == null) continue;
                 regions.add(new DetectedRegion(
                         "yolo:" + index++, detection.getKind(), localBounds,
-                        detection.getConfidence(), null));
+                        detection.getConfidence(), null, detection.getMaskCoefficients()));
             }
             return regions;
         } finally {
