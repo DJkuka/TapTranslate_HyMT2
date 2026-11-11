@@ -287,13 +287,30 @@ public final class RtDetrLiveBridge {
             Rect second = readBlockBounds(blocks.get(secondIndex));
             if (first == null || second == null) return true;
 
+            // Prefer the detector's class-1 text-in-bubble regions. Two balloons
+            // joined by a narrow tail/bridge may share one class-0 outer container,
+            // while their text regions can still be detected independently.
+            int firstSpeechRegion = findSpeechBubbleTextRegion(first, regions);
+            int secondSpeechRegion = findSpeechBubbleTextRegion(second, regions);
+            if (firstSpeechRegion >= 0 && secondSpeechRegion >= 0) {
+                if (firstSpeechRegion != secondSpeechRegion) {
+                    Log.i(TAG, "prevented cross-bubble OCR grouping: blocks="
+                            + firstIndex + "," + secondIndex
+                            + " text_regions=" + firstSpeechRegion + "," + secondSpeechRegion);
+                    return false;
+                }
+                return true;
+            }
+
+            // If class-1 regions are unavailable for either block, retain the
+            // original class-0 container fallback.
             int firstContainer = findBubbleContainer(first, regions);
             int secondContainer = findBubbleContainer(second, regions);
             if (firstContainer >= 0 && secondContainer >= 0
                     && firstContainer != secondContainer) {
                 Log.i(TAG, "prevented cross-bubble OCR grouping: blocks="
                         + firstIndex + "," + secondIndex
-                        + " contours=" + firstContainer + "," + secondContainer);
+                        + " containers=" + firstContainer + "," + secondContainer);
                 return false;
             }
             return true;
@@ -301,6 +318,53 @@ public final class RtDetrLiveBridge {
             Log.w(TAG, "Bubble grouping guard failed; legacy grouping retained", error);
             return true;
         }
+    }
+
+    /**
+     * Assigns an ML Kit block to the most relevant class-1 text-in-bubble region.
+     * This is more reliable than the outer bubble rectangle when two balloons
+     * touch or are connected by a narrow speech tail.
+     */
+    private static int findSpeechBubbleTextRegion(
+            Rect text, List<DetectedRegion> regions) {
+        long textArea = (long) text.width() * text.height();
+        if (textArea <= 0L) return -1;
+
+        int centerX = text.centerX();
+        int centerY = text.centerY();
+        int best = -1;
+        double bestOverlap = 0d;
+        long bestRegionArea = Long.MAX_VALUE;
+
+        for (int i = 0; i < regions.size(); i++) {
+            DetectedRegion region = regions.get(i);
+            if (region.getKind() != OcrRegionKind.SPEECH_BUBBLE) continue;
+
+            Rect detected = region.getBounds();
+            Rect intersection = new Rect(text);
+            long intersectionArea = intersection.intersect(detected)
+                    ? (long) intersection.width() * intersection.height() : 0L;
+            long detectedArea = (long) detected.width() * detected.height();
+            if (intersectionArea <= 0L || detectedArea <= 0L) continue;
+
+            double overlapOfSmaller = (double) intersectionArea
+                    / (double) Math.min(textArea, detectedArea);
+            boolean centerInside = detected.contains(centerX, centerY);
+            if (!centerInside && overlapOfSmaller < 0.18d) continue;
+
+            // Prefer the strongest containment; use the smaller region as a
+            // deterministic tie-breaker for nearby/overlapping detections.
+            double score = centerInside ? Math.max(overlapOfSmaller, 0.50d)
+                    : overlapOfSmaller;
+            if (score > bestOverlap
+                    || (Math.abs(score - bestOverlap) < 0.0001d
+                    && detectedArea < bestRegionArea)) {
+                best = i;
+                bestOverlap = score;
+                bestRegionArea = detectedArea;
+            }
+        }
+        return best;
     }
 
     private static int findBubbleContainer(Rect text, List<DetectedRegion> regions) {
