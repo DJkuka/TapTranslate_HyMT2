@@ -103,7 +103,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          java -jar tools/apktool.jar d -f -s -o build/ocr-final-check build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
+          java -jar tools/apktool.jar d -f -o build/ocr-final-check build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
           root=build/ocr-final-check/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr
           for cls in OcrRegionKind OcrFrame DetectedRegion RecognizedText OcrTextRegion OcrRegionDetector RegionTextRecognizer OcrPipelineResult HybridOcrPipeline; do
             test -s "$root/$cls.smali" || { echo "Missing merged OCR class: $cls"; exit 1; }
