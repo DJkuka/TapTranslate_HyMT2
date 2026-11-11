@@ -29,6 +29,9 @@ PRESERVE_OCR_SMALI = (
 PRESERVE_METHOD = ("smali_classes3/yh/f.smali", r".method public final e(Ljava/lang/String;)V")
 METADATA_PATH = "res/raw/translate_models_metadata.json"
 TESSERACT_SO_PATH = "lib/arm64-v8a/libtesseract.so"
+RTDETR_MODEL_ASSET = "assets/models/bubble_detection/detector-v4-s_int8.onnx"
+RTDETR_MODEL_BYTES = 11_120_765
+RTDETR_MODEL_SHA256 = "5fe9e4f576e49d4e7e8b0e029d6d3cdc252abd4694113e1cae120e62c931ea79"
 
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -81,6 +84,15 @@ def verify_final_host_payload(base_apk: Path, final_apk: Path) -> None:
                 raise RuntimeError(f"Original host payload missing after merge: {rel}")
             if original.read(rel) != built.read(rel):
                 raise RuntimeError(f"Original host payload changed during merge: {rel}")
+
+        if RTDETR_MODEL_ASSET not in built_names:
+            raise RuntimeError("Final APK is missing the RT-DETR model asset")
+        model_data = built.read(RTDETR_MODEL_ASSET)
+        if len(model_data) != RTDETR_MODEL_BYTES or sha256_bytes(model_data) != RTDETR_MODEL_SHA256:
+            raise RuntimeError("Final APK contains an invalid RT-DETR model asset")
+        for runtime_name in ("lib/arm64-v8a/libonnxruntime.so", "lib/arm64-v8a/libonnxruntime4j_jni.so"):
+            if runtime_name not in built_names:
+                raise RuntimeError("Final APK is missing ONNX Runtime library: " + runtime_name)
 
         metadata = __import__("json").loads(built.read(METADATA_PATH))
         if "PKG_LOW" not in metadata or "PKG_HIGH" not in metadata:
