@@ -339,7 +339,14 @@ class HyMT2SettingsActivity : Activity() {
         if (requestCode != REQUEST_MODEL) return
         if (resultCode != RESULT_OK || data?.data == null) {
             Log.i(TAG, "Document picker cancelled or returned no URI")
-            if (autoPicker) finish()
+            if (autoPicker) {
+                finish()
+            } else {
+                // launchPicker disables the controls while unloading the previous
+                // model. A user cancellation must restore the normal button state.
+                status.text = "Выбор файла отменён. Можно выбрать модель снова."
+                refreshState()
+            }
             return
         }
         val uri = data.data!!
