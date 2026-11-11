@@ -175,10 +175,14 @@ def patch_live_hybrid_ocr(base: Path) -> None:
         start = text.find(frame_method)
         if start < 0:
             raise RuntimeError("Could not find ML Kit bitmap submission vh/j->a(Lnf/e,Bitmap,Z)")
-        body = text.find("    .locals 20\\n", start)
-        if body < 0:
-            raise RuntimeError("Could not find vh/j->a local register declaration")
-        insert = body + len("    .locals 20\\n")
+        method_end = text.find(".end method", start)
+        if method_end < 0:
+            raise RuntimeError("Could not isolate vh/j->a ML Kit submission method")
+        method = text[start:method_end]
+        registers = re.search(r"(?m)^    \\.(?:locals|registers) \\d+[ \\t]*$", method)
+        if registers is None:
+            raise RuntimeError("Could not find vh/j->a register declaration")
+        insert = start + registers.end()
         text = text[:insert] + "\\n" + frame_hook + text[insert:]
 
     result_hook = "    invoke-static/range {p0 .. p3}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->filter(Ljava/lang/Object;Landroid/content/Context;Ljava/lang/Object;Landroid/graphics/Bitmap;)V\n"
