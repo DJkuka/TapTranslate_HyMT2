@@ -125,11 +125,22 @@ object HyMT2Runtime {
                 val message = try {
                     inferenceMutex.withLock {
                         modelMutex.withLock {
-                            loadedModel?.let { Llama.releaseModel(it) }
+                            // Clear the published state first so the settings screen can
+                            // recover and select another model even if native release throws.
+                            val previousModel = loadedModel
+                            val previousDescriptor = loadedDescriptor
                             loadedModel = null
                             loadedSource = null
-                            loadedDescriptor?.close()
                             loadedDescriptor = null
+                            try {
+                                previousModel?.let { Llama.releaseModel(it) }
+                            } finally {
+                                try {
+                                    previousDescriptor?.close()
+                                } catch (closeError: Throwable) {
+                                    Log.w(TAG, "Could not close previous model descriptor", closeError)
+                                }
+                            }
                         }
                     }
                     "Модель выгружена из памяти. GGUF-файл остался на исходном носителе."
