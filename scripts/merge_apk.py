@@ -612,6 +612,7 @@ def copy_helper_payload(helper: Path, base: Path) -> None:
         "kotlinx",
         "kotlin",
         "org/jetbrains/annotations",
+        "ai/onnxruntime",
     )
     count = copy_package(helper_dirs, base, prefixes)
     if count == 0:
@@ -643,12 +644,30 @@ def copy_helper_payload(helper: Path, base: Path) -> None:
     required_runtime = {
         "libllama_jni.so", "libllama.so", "libggml.so",
         "libggml-base.so", "libggml-cpu.so", "libggml-vulkan.so",
-        "libhymt2_jni.so",
+        "libhymt2_jni.so", "libonnxruntime.so", "libonnxruntime4j_jni.so",
     }
     missing_runtime = sorted(name for name in required_runtime if not (out_lib / name).is_file())
     if missing_runtime:
         raise RuntimeError("Vulkan runtime libraries missing from helper APK: " + ", ".join(missing_runtime))
     print("Copied/replaced native libraries:", ", ".join(sorted(p.name for p in so_files)))
+
+    # Preserve helper assets (RT-DETR weights and legal notices) in the final host APK.
+    helper_assets = helper / "assets"
+    copied_assets = 0
+    if helper_assets.exists():
+        for source in helper_assets.rglob("*"):
+            if not source.is_file():
+                continue
+            relative = source.relative_to(helper_assets)
+            destination = base / "assets" / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists():
+                if destination.read_bytes() != source.read_bytes():
+                    raise RuntimeError(f"Helper asset conflicts with host asset: {relative.as_posix()}")
+                continue
+            shutil.copy2(source, destination)
+            copied_assets += 1
+    print(f"Copied {copied_assets} helper assets into final APK")
 
     # Coroutines can discover Android's Main dispatcher via META-INF service files.
     helper_services = helper / "unknown/META-INF/services"
