@@ -221,7 +221,7 @@ object HyMT2Runtime {
                                 val proportionalLimit = (sourceTokenEstimate.toLong() * 4L + 32L)
                                     .coerceAtMost(Int.MAX_VALUE.toLong())
                                     .toInt()
-                                    .coerceIn(64, options.maxTokens)
+                                    .coerceIn(16, options.maxTokens)
                                 val effectiveMaxTokens = min(proportionalLimit, availableOutputTokens)
                                 Log.d(TAG, "OCR block ${index + 1}/${sourceBlocks.size}: sourceTokens=$sourceTokenEstimate, promptTokens=$promptTokens, outputBudget=$effectiveMaxTokens")
                                 val completion = HyMT2PenaltyNative.complete(
