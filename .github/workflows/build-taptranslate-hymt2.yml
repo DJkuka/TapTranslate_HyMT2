@@ -203,10 +203,10 @@ jobs:
               raise SystemExit("RT-DETR results are not applied to the live ML Kit result")
           import re
           guarded_edges = re.findall(
-              r"invoke-static \\{v0, v2, v8, v13\\}, "
+              r"invoke-static \{v0, v2, v8, v13\}, "
               r"Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->allowGrouping"
-              r"\\(Ljava/lang/Object;Ljava/lang/Object;II\\)Z\\s+"
-              r"move-result v20\\s+if-eqz v20, :hymt2_skip_bubble_edge_[01]\\s+"
+              r"\(Ljava/lang/Object;Ljava/lang/Object;II\)Z\s+"
+              r"move-result v20\s+if-eqz v20, :hymt2_skip_bubble_edge_[01]\s+"
               r"new-instance v6, Lwh/d;",
               result,
           )
