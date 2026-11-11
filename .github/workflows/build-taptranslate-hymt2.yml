@@ -217,17 +217,15 @@ jobs:
                   "Expected two independent allowGrouping guards; found "
                   + repr(guard_targets)
               )
+          result_lines = [line.strip() for line in result.splitlines()]
           for target in guard_targets:
-              # A target may be referenced elsewhere in the same method; count
-              # only its standalone label declaration, not all textual uses.
-              declarations = re.findall(
-                  r"(?m)^\\s*" + re.escape(target) + r"\\s*$",
-                  result,
-              )
-              if len(declarations) != 1:
+              # Count standalone smali label lines without a regex. Baksmali
+              # may choose :cond_N labels; whitespace is irrelevant here.
+              declarations = sum(1 for line in result_lines if line == target)
+              if declarations != 1:
                   raise SystemExit(
                       "Grouping guard target must have exactly one label declaration: "
-                      + target + " (found " + str(len(declarations)) + ")"
+                      + target + " (found " + str(declarations) + ")"
                   )
           print("Verified exact ML Kit Bitmap handoff, OCR result filter and both cross-bubble grouping guards.")
           PY
