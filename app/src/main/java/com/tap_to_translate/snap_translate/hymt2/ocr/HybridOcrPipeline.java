@@ -78,7 +78,7 @@ public final class HybridOcrPipeline {
                 if (cleanText.isEmpty()) continue;
 
                 Rect frameBounds = frame.clampToVisibleBounds(item.getBounds());
-                if (frameBounds == null || intersectionOverUnion(frameBounds, region.getBounds()) < 0.10f) {
+                if (frameBounds == null || coverageOfFirst(frameBounds, region.getBounds()) < 0.25f) {
                     continue;
                 }
                 Rect screenBounds = frame.toScreenBounds(frameBounds);
@@ -128,6 +128,15 @@ public final class HybridOcrPipeline {
 
     private static String normalize(String value) {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT).replaceAll("\\s+", " ");
+    }
+
+    /** Fraction of the OCR text rectangle covered by its detected parent region. */
+    private static float coverageOfFirst(Rect textBounds, Rect parentBounds) {
+        Rect intersection = new Rect(textBounds);
+        if (!intersection.intersect(parentBounds)) return 0f;
+        long intersectionArea = (long) intersection.width() * intersection.height();
+        long textArea = (long) textBounds.width() * textBounds.height();
+        return textArea <= 0 ? 0f : (float) intersectionArea / (float) textArea;
     }
 
     private static float intersectionOverUnion(Rect first, Rect second) {
