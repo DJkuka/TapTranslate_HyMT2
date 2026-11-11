@@ -169,7 +169,7 @@ def patch_live_hybrid_ocr(base: Path) -> None:
     # Bind detector inference to the exact Bitmap retained by the ML Kit callback.
     # vh/j->a(...) creates vh/i with the same p2 object and later vh/j->d(...) receives it.
     # Hooking the earlier j(Bitmap) entry can see a different capture bitmap and fail identity matching.
-    frame_hook = "    invoke-static {p0, p2}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->onFrame(Ljava/lang/Object;Landroid/graphics/Bitmap;)V\\n"
+    frame_hook = "    invoke-static {p0, p2}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->onFrame(Ljava/lang/Object;Landroid/graphics/Bitmap;)V\n"
     frame_method = ".method public final a(Lnf/e;Landroid/graphics/Bitmap;Z)V"
     if frame_hook.strip() not in text:
         start = text.find(frame_method)
@@ -192,11 +192,11 @@ def patch_live_hybrid_ocr(base: Path) -> None:
         # p0 and p2 live above v15 in this method; copy them to low scratch registers
         # before invoke-static, then the original prologue overwrites v0/v1 as usual.
         safe_frame_hook = (
-            "    move-object/from16 v0, p0\\n"
-            "    move-object/from16 v1, p2\\n"
-            "    invoke-static {v0, v1}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->onFrame(Ljava/lang/Object;Landroid/graphics/Bitmap;)V\\n"
+            "    move-object/from16 v0, p0\n"
+            "    move-object/from16 v1, p2\n"
+            "    invoke-static {v0, v1}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->onFrame(Ljava/lang/Object;Landroid/graphics/Bitmap;)V\n"
         )
-        text = text[:insert] + "\\n" + safe_frame_hook + text[insert:]
+        text = text[:insert] + "\n" + safe_frame_hook + text[insert:]
 
     result_hook = "    invoke-static/range {p0 .. p3}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->filter(Ljava/lang/Object;Landroid/content/Context;Ljava/lang/Object;Landroid/graphics/Bitmap;)V\n"
     result_method = ".method public final d(Landroid/content/Context;Lnf/d;Landroid/graphics/Bitmap;Z)V"
