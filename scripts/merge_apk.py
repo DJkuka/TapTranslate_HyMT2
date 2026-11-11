@@ -166,17 +166,20 @@ def patch_live_hybrid_ocr(base: Path) -> None:
     path = base / "smali_classes3/vh/j.smali"
     text = path.read_text(encoding="utf-8")
 
-    frame_hook = "    invoke-static {p0, p1}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->onFrame(Ljava/lang/Object;Landroid/graphics/Bitmap;)V\n"
-    frame_method = ".method public final j(Landroid/graphics/Bitmap;)V"
+    # Bind detector inference to the exact Bitmap retained by the ML Kit callback.
+    # vh/j->a(...) creates vh/i with the same p2 object and later vh/j->d(...) receives it.
+    # Hooking the earlier j(Bitmap) entry can see a different capture bitmap and fail identity matching.
+    frame_hook = "    invoke-static {p0, p2}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->onFrame(Ljava/lang/Object;Landroid/graphics/Bitmap;)V\\n"
+    frame_method = ".method public final a(Lnf/e;Landroid/graphics/Bitmap;Z)V"
     if frame_hook.strip() not in text:
         start = text.find(frame_method)
         if start < 0:
-            raise RuntimeError("Could not find live OCR bitmap entry vh/j->j(Bitmap)")
-        body = text.find("    .locals 3\n", start)
+            raise RuntimeError("Could not find ML Kit bitmap submission vh/j->a(Lnf/e,Bitmap,Z)")
+        body = text.find("    .locals 20\\n", start)
         if body < 0:
-            raise RuntimeError("Could not find vh/j->j local register declaration")
-        insert = body + len("    .locals 3\n")
-        text = text[:insert] + "\n" + frame_hook + text[insert:]
+            raise RuntimeError("Could not find vh/j->a local register declaration")
+        insert = body + len("    .locals 20\\n")
+        text = text[:insert] + "\\n" + frame_hook + text[insert:]
 
     result_hook = "    invoke-static/range {p0 .. p3}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->filter(Ljava/lang/Object;Landroid/content/Context;Ljava/lang/Object;Landroid/graphics/Bitmap;)V\n"
     result_method = ".method public final d(Landroid/content/Context;Lnf/d;Landroid/graphics/Bitmap;Z)V"

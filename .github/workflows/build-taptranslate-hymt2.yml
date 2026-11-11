@@ -178,10 +178,31 @@ jobs:
           test -s build/ocr-final-check/smali_classes5/ai/onnxruntime/OrtEnvironment.smali
           test -s build/ocr-final-check/smali_classes5/ai/onnxruntime/OrtSession.smali
           live="build/ocr-final-check/smali_classes3/vh/j.smali"
-          grep -Fq 'RtDetrLiveBridge;->onFrame' "$live" || { echo "RT-DETR is not called from the live screenshot OCR entry"; exit 1; }
-          grep -Fq 'RtDetrLiveBridge;->filter' "$live" || { echo "RT-DETR results are not applied to the live ML Kit result"; exit 1; }
-          grep -Fq 'RtDetrLiveBridge;->allowGrouping' "$live" || { echo "RT-DETR bubble grouping guard is missing"; exit 1; }
-          echo "Verified live RT-DETR calls in vh/j: screenshot entry, ML Kit filtering and bubble grouping guard."
+          python - <<'PY'
+          from pathlib import Path
+          live = Path("build/ocr-final-check/smali_classes3/vh/j.smali").read_text()
+          def method_body(header):
+              start = live.find(header)
+              if start < 0:
+                  raise SystemExit("Missing host OCR method: " + header)
+              end = live.find(".end method", start)
+              if end < 0:
+                  raise SystemExit("Unterminated host OCR method: " + header)
+              return live[start:end]
+          submit = method_body(".method public final a(Lnf/e;Landroid/graphics/Bitmap;Z)V")
+          result = method_body(".method public final d(Landroid/content/Context;Lnf/d;Landroid/graphics/Bitmap;Z)V")
+          capture = method_body(".method public final j(Landroid/graphics/Bitmap;)V")
+          expected = "RtDetrLiveBridge;->onFrame(Ljava/lang/Object;Landroid/graphics/Bitmap;)V"
+          if expected not in submit:
+              raise SystemExit("RT-DETR must capture the exact Bitmap submitted to ML Kit in vh/j->a")
+          if expected in capture:
+              raise SystemExit("Obsolete early screenshot hook remains in vh/j->j")
+          if "RtDetrLiveBridge;->filter" not in result:
+              raise SystemExit("RT-DETR results are not applied to the live ML Kit result")
+          if result.count("RtDetrLiveBridge;->allowGrouping") != 2:
+              raise SystemExit("Both live paragraph-grouping edges must be guarded")
+          print("Verified exact ML Kit Bitmap handoff, OCR result filter and both cross-bubble grouping guards.")
+          PY
           echo "RT-DETR detector, ONNX Runtime classes and OCR pipeline are present in the unsigned APK."
 
       - name: Upload unsigned APK
