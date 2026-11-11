@@ -90,7 +90,12 @@ def main() -> int:
 
     # The optimized STQ1_0 ARM NEON path is bypassed on Android while its
     # numerical parity is being checked against the reference implementation.
-    stq_kernel_anchor = """#if defined(__ARM_NEON)
+    stq_kernel_anchor = """    const block_stq1_0 * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+#if defined(__ARM_NEON)
     float sumf = 0.0f;
 
     const uint8x16_t m3 = vdupq_n_u8(3);"""
