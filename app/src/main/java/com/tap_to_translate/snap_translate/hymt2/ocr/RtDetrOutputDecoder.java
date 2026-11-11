@@ -6,7 +6,7 @@ public final class RtDetrOutputDecoder {
   if(o==null||w<=0||h<=0||!Float.isFinite(threshold)||threshold<0||threshold>1)throw new IllegalArgumentException("Invalid RT-DETR input");
   List<Detection> out=new ArrayList<>();
   for(int i=0,n=Math.min(o.labels.length,Math.min(o.boxes.length,o.scores.length));i<n;i++){
-   int label=(int)o.labels[i];OcrRegionKind kind=label==1?OcrRegionKind.SPEECH_BUBBLE:label==2?OcrRegionKind.FREE_TEXT:null;
+   int label=(int)o.labels[i];OcrRegionKind kind=label==0?OcrRegionKind.BUBBLE_CONTAINER:label==1?OcrRegionKind.SPEECH_BUBBLE:label==2?OcrRegionKind.FREE_TEXT:null;
    if(kind==null||!Float.isFinite(o.scores[i])||o.scores[i]<threshold||o.boxes[i]==null||o.boxes[i].length<4)continue;
    float[] b=o.boxes[i];boolean valid=true;for(int k=0;k<4;k++)if(!Float.isFinite(b[k]))valid=false;if(!valid)continue;
    int l=Math.max(0,(int)Math.floor(b[0])),t=Math.max(0,(int)Math.floor(b[1])),r=Math.min(w,(int)Math.ceil(b[2])),bt=Math.min(h,(int)Math.ceil(b[3]));

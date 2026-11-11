@@ -123,7 +123,7 @@ jobs:
           test -d "$decoded"
           for root in "$decoded"/smali*; do
             [ -d "$root" ] || continue
-            for package in vh xh loh rh nf; do
+            for package in vh xh loh rh nf gi gf; do
               if [ -d "$root/$package" ]; then
                 mkdir -p "$trace/smali/$(basename "$root")"
                 cp -R "$root/$package" "$trace/smali/$(basename "$root")/"
@@ -180,7 +180,8 @@ jobs:
           live="build/ocr-final-check/smali_classes3/vh/j.smali"
           grep -Fq 'RtDetrLiveBridge;->onFrame' "$live" || { echo "RT-DETR is not called from the live screenshot OCR entry"; exit 1; }
           grep -Fq 'RtDetrLiveBridge;->filter' "$live" || { echo "RT-DETR results are not applied to the live ML Kit result"; exit 1; }
-          echo "Verified live RT-DETR calls in vh/j: screenshot entry and ML Kit result filtering."
+          grep -Fq 'RtDetrLiveBridge;->allowGrouping' "$live" || { echo "RT-DETR bubble grouping guard is missing"; exit 1; }
+          echo "Verified live RT-DETR calls in vh/j: screenshot entry, ML Kit filtering and bubble grouping guard."
           echo "RT-DETR detector, ONNX Runtime classes and OCR pipeline are present in the unsigned APK."
 
       - name: Upload unsigned APK

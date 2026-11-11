@@ -30,6 +30,8 @@ public final class RtDetrLiveBridge {
     private static final Object LOCK = new Object();
     private static final Map<Object, PendingFrame> PENDING =
             Collections.synchronizedMap(new WeakHashMap<Object, PendingFrame>());
+    private static final Map<Object, List<DetectedRegion>> ACTIVE_REGIONS =
+            Collections.synchronizedMap(new WeakHashMap<Object, List<DetectedRegion>>());
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor(
             new ThreadFactory() {
                 @Override public Thread newThread(Runnable task) {
@@ -60,6 +62,7 @@ public final class RtDetrLiveBridge {
             if (previous != null && previous.source == source && !previous.task.isDone()) {
                 return;
             }
+            ACTIVE_REGIONS.remove(owner);
             if (previous != null && !previous.task.isDone()) {
                 previous.task.cancel(true);
             }
@@ -82,16 +85,19 @@ public final class RtDetrLiveBridge {
                                     new Rect(0, 0, snapshot.getWidth(), snapshot.getHeight()),
                                     0, 0, 1f, 1f);
                             List<DetectedRegion> result = active.detect(frame);
-                            int bubble = 0;
+                            int containers = 0;
+                            int bubbleText = 0;
                             int free = 0;
                             if (result != null) {
                                 for (DetectedRegion region : result) {
-                                    if (region.getKind() == OcrRegionKind.SPEECH_BUBBLE) bubble++;
+                                    if (region.getKind() == OcrRegionKind.BUBBLE_CONTAINER) containers++;
+                                    else if (region.getKind() == OcrRegionKind.SPEECH_BUBBLE) bubbleText++;
                                     else if (region.getKind() == OcrRegionKind.FREE_TEXT) free++;
                                 }
                             }
                             Log.i(TAG, "detected: total=" + (result == null ? 0 : result.size())
-                                    + " text_bubble=" + bubble + " text_free=" + free
+                                    + " bubble_containers=" + containers
+                                    + " text_bubble=" + bubbleText + " text_free=" + free
                                     + " frame=" + snapshot.getWidth() + "x" + snapshot.getHeight());
                             return result == null ? Collections.<DetectedRegion>emptyList() : result;
                         } catch (Throwable error) {
@@ -112,13 +118,25 @@ public final class RtDetrLiveBridge {
      */
     public static void filter(
             Object owner, Context ignoredContext, Object mlKitResult, Bitmap source) {
-        if (owner == null || mlKitResult == null || source == null) return;
+        if (owner == null || mlKitResult == null || source == null) {
+            Log.w(TAG, "hybrid OCR skipped: null owner/result/source");
+            return;
+        }
 
         final PendingFrame pending;
         synchronized (LOCK) {
             pending = PENDING.get(owner);
         }
-        if (pending == null || pending.source != source) return;
+        if (pending == null) {
+            Log.w(TAG, "hybrid OCR skipped: no pending RT-DETR frame for OCR owner");
+            return;
+        }
+        if (pending.source != source) {
+            Log.w(TAG, "hybrid OCR skipped: bitmap identity mismatch; frame="
+                    + source.getWidth() + "x" + source.getHeight()
+                    + " pending=" + pending.source.getWidth() + "x" + pending.source.getHeight());
+            return;
+        }
 
         final List<DetectedRegion> regions;
         try {
@@ -129,6 +147,11 @@ public final class RtDetrLiveBridge {
             return;
         }
         removeIfCurrent(owner, pending);
+        synchronized (LOCK) {
+            ACTIVE_REGIONS.put(owner, regions == null
+                    ? Collections.<DetectedRegion>emptyList()
+                    : new ArrayList<>(regions));
+        }
 
         if (regions == null || regions.isEmpty()) {
             Log.w(TAG, "RT-DETR returned no text regions; original OCR retained");
@@ -227,6 +250,7 @@ public final class RtDetrLiveBridge {
         long textArea = (long) text.width() * text.height();
         if (textArea <= 0L) return false;
         for (DetectedRegion region : regions) {
+            if (region.getKind() == OcrRegionKind.BUBBLE_CONTAINER) continue;
             Rect detected = region.getBounds();
             Rect intersection = new Rect(text);
             if (!intersection.intersect(detected)) continue;
@@ -238,6 +262,72 @@ public final class RtDetrLiveBridge {
             }
         }
         return false;
+    }
+
+    /**
+     * Called by the host's pairwise text-block grouping loop. The legacy algorithm may
+     * merge nearby OCR blocks into one paragraph; do not connect blocks assigned to
+     * different RT-DETR speech-balloon contours. Unknown/free-text blocks keep legacy behavior.
+     */
+    public static boolean allowGrouping(
+            Object owner, Object blockListValue, int firstIndex, int secondIndex) {
+        try {
+            if (!(blockListValue instanceof List<?>)) return true;
+            List<?> blocks = (List<?>) blockListValue;
+            if (firstIndex < 0 || secondIndex < 0
+                    || firstIndex >= blocks.size() || secondIndex >= blocks.size()) return true;
+
+            final List<DetectedRegion> regions;
+            synchronized (LOCK) {
+                regions = ACTIVE_REGIONS.get(owner);
+            }
+            if (regions == null || regions.isEmpty()) return true;
+
+            Rect first = readBlockBounds(blocks.get(firstIndex));
+            Rect second = readBlockBounds(blocks.get(secondIndex));
+            if (first == null || second == null) return true;
+
+            int firstContainer = findBubbleContainer(first, regions);
+            int secondContainer = findBubbleContainer(second, regions);
+            if (firstContainer >= 0 && secondContainer >= 0
+                    && firstContainer != secondContainer) {
+                Log.i(TAG, "prevented cross-bubble OCR grouping: blocks="
+                        + firstIndex + "," + secondIndex
+                        + " contours=" + firstContainer + "," + secondContainer);
+                return false;
+            }
+            return true;
+        } catch (Throwable error) {
+            Log.w(TAG, "Bubble grouping guard failed; legacy grouping retained", error);
+            return true;
+        }
+    }
+
+    private static int findBubbleContainer(Rect text, List<DetectedRegion> regions) {
+        int best = -1;
+        long bestArea = Long.MAX_VALUE;
+        int centerX = text.centerX();
+        int centerY = text.centerY();
+        long textArea = (long) text.width() * text.height();
+        if (textArea <= 0L) return -1;
+
+        for (int i = 0; i < regions.size(); i++) {
+            DetectedRegion region = regions.get(i);
+            if (region.getKind() != OcrRegionKind.BUBBLE_CONTAINER) continue;
+            Rect bubble = region.getBounds();
+            Rect intersection = new Rect(text);
+            boolean centerInside = bubble.contains(centerX, centerY);
+            long overlap = intersection.intersect(bubble)
+                    ? (long) intersection.width() * intersection.height() : 0L;
+            if (!centerInside && (double) overlap / textArea < 0.60d) continue;
+
+            long area = (long) bubble.width() * bubble.height();
+            if (area < bestArea) {
+                bestArea = area;
+                best = i;
+            }
+        }
+        return best;
     }
 
     private static void removeIfCurrent(Object owner, PendingFrame expected) {

@@ -66,6 +66,8 @@ public final class HybridOcrPipeline {
 
         List<OcrTextRegion> output = new ArrayList<>();
         for (DetectedRegion region : accepted) {
+            // A bubble contour is a grouping boundary, not an OCR crop.
+            if (region.getKind() == OcrRegionKind.BUBBLE_CONTAINER) continue;
             RegionTextRecognizer recognizer = region.getKind() == OcrRegionKind.SPEECH_BUBBLE
                     ? bubbleRecognizer : freeTextRecognizer;
             List<RecognizedText> recognized = recognizer.recognize(frame, region);

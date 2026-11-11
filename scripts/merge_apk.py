@@ -190,10 +190,45 @@ def patch_live_hybrid_ocr(base: Path) -> None:
         insert = body + len("    .locals 21\n")
         text = text[:insert] + "\n" + result_hook + text[insert:]
 
+    # Gate the two pair-edge creation sites in the host's paragraph grouping loop.
+    method_start = text.find(result_method)
+    method_end = text.find(".end method", method_start)
+    if method_start < 0 or method_end < 0:
+        raise RuntimeError("Could not isolate vh/j->d grouping method")
+    method = text[method_start:method_end]
+    edge_block = """    new-instance v6, Lwh/d;
+
+    invoke-direct {v6, v8, v13}, Lwh/d;-><init>(II)V
+
+    invoke-virtual {v4, v6}, Ljava/util/ArrayList;->add(Ljava/lang/Object;)Z
+
+    move/from16 v14, p2"""
+    if "RtDetrLiveBridge;->allowGrouping" not in method:
+        if method.count(edge_block) != 2:
+            raise RuntimeError(
+                "Expected exactly two OCR grouping-edge sites in vh/j->d; found "
+                + str(method.count(edge_block))
+            )
+        for edge_index in range(2):
+            label = ":hymt2_skip_bubble_edge_" + str(edge_index)
+            guarded = """    invoke-static {v0, v2, v8, v13}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->allowGrouping(Ljava/lang/Object;Ljava/lang/Object;II)Z
+
+    move-result v20
+
+    if-eqz v20, """ + label + """
+
+""" + edge_block + """
+
+    """ + label
+            method = method.replace(edge_block, guarded, 1)
+        text = text[:method_start] + method + text[method_end:]
+
     if frame_hook.strip() not in text or result_hook.strip() not in text:
         raise RuntimeError("RT-DETR hooks were not written into the live OCR call chain")
+    if "RtDetrLiveBridge;->allowGrouping" not in text:
+        raise RuntimeError("RT-DETR bubble grouping guard was not inserted")
     path.write_text(text, encoding="utf-8")
-    print("Wired RT-DETR into vh/j->j(Bitmap) capture and vh/j->d(...) ML Kit result path")
+    print("Wired RT-DETR into capture, ML Kit filtering and cross-bubble grouping guard")
 
 
 def patch_dispatcher(base: Path) -> None:
