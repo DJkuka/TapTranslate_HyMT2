@@ -218,8 +218,17 @@ jobs:
                   + repr(guard_targets)
               )
           for target in guard_targets:
-              if result.count(target) != 2:
-                  raise SystemExit("Grouping guard branch target is missing or duplicated: " + target)
+              # A target may be referenced elsewhere in the same method; count
+              # only its standalone label declaration, not all textual uses.
+              declarations = re.findall(
+                  r"(?m)^\\s*" + re.escape(target) + r"\\s*$",
+                  result,
+              )
+              if len(declarations) != 1:
+                  raise SystemExit(
+                      "Grouping guard target must have exactly one label declaration: "
+                      + target + " (found " + str(len(declarations)) + ")"
+                  )
           print("Verified exact ML Kit Bitmap handoff, OCR result filter and both cross-bubble grouping guards.")
           PY
           echo "RT-DETR detector, ONNX Runtime classes and OCR pipeline are present in the unsigned APK."
