@@ -59,7 +59,7 @@ std::vector<llama_token> tokenize(const llama_vocab *vocab, const std::string &t
 
 std::string token_piece(const llama_vocab *vocab, llama_token token) {
     char buffer[512];
-    int size = llama_token_to_piece(vocab, token, buffer, sizeof(buffer), 0, true);
+    int size = llama_token_to_piece(vocab, token, buffer, sizeof(buffer), 0, false);
     if (size <= 0) return {};
     return std::string(buffer, static_cast<size_t>(size));
 }
@@ -179,7 +179,10 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
     int generated = 0;
     for (; generated < max_tokens; ++generated) {
         const llama_token token = llama_sampler_sample(sampler, context->ctx, -1);
-        if (llama_vocab_is_eog(vocab, token)) break;
+        // Hy-MT2's BOS token is only valid at the beginning of the prompt.
+        // If generation emits it again, stop rather than printing the control
+        // token (Tencent's reference decoder uses skip_special_tokens=true).
+        if (llama_vocab_is_eog(vocab, token) || token == llama_vocab_bos(vocab)) break;
         llama_sampler_accept(sampler, token);
         output += token_piece(vocab, token);
         llama_batch next = llama_batch_get_one(
