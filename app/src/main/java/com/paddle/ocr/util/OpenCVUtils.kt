@@ -15,19 +15,31 @@
 package com.paddle.ocr.util
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 
 object OpenCVUtils {
 
-    private var initialized = false
+    private const val TAG = "OpenCVUtils"
+    @Volatile private var initialized = false
 
+    @Synchronized
     fun init(context: Context): Boolean {
         if (initialized) return true
+        val appContext = context.applicationContext ?: context
+        Log.i(
+            TAG,
+            "Loading opencv_java4; nativeLibraryDir=${appContext.applicationInfo.nativeLibraryDir}; " +
+                "supportedAbis=${Build.SUPPORTED_ABIS.joinToString()}"
+        )
         try {
             System.loadLibrary("opencv_java4")
             initialized = true
+            Log.i(TAG, "opencv_java4 loaded successfully")
         } catch (e: UnsatisfiedLinkError) {
-            Log.e("OpenCVUtils", "Failed to initialize OpenCV: ${e.message}")
+            Log.e(TAG, "Failed to load opencv_java4", e)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "SecurityException while loading opencv_java4", e)
         }
         return initialized
     }
