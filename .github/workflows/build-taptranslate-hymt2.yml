@@ -3,7 +3,7 @@ name: Build Tap Translate 1.125 FontFit AutoFill + Hy-MT2 Vulkan
 on:
   workflow_dispatch:
   push:
-    branches: [ main, vulkan-v12-integration ]
+    branches: [ main, vulkan-v12-integration, ocr-hybrid-prototype ]
 
 permissions:
   contents: read
@@ -76,6 +76,9 @@ jobs:
           echo "Base APK SHA-256:"
           sha256sum input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
 
+      - name: Run OCR geometry and outer-ring colour unit tests
+        run: gradle --no-daemon -PllamaRoot="$LLAMA_ROOT" -PvulkanAarNativeDir="$VULKAN_AAR_NATIVE_DIR" :app:testDebugUnitTest
+
       - name: Build Hy-MT2 Vulkan runtime helper and JNI extension
         run: gradle --no-daemon -PllamaRoot="$LLAMA_ROOT" -PvulkanAarNativeDir="$VULKAN_AAR_NATIVE_DIR" :app:assembleDebug
 
@@ -105,7 +108,7 @@ jobs:
           set -euo pipefail
           java -jar tools/apktool.jar d -f -o build/ocr-final-check build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
           root=build/ocr-final-check/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr
-          for cls in OcrRegionKind OcrFrame DetectedRegion RecognizedText OcrTextRegion OcrRegionDetector RegionTextRecognizer OcrPipelineResult HybridOcrPipeline; do
+          for cls in OcrRegionKind OcrFrame DetectedRegion RecognizedText OcrTextRegion OcrRegionDetector RegionTextRecognizer OcrPipelineResult HybridOcrPipeline BackgroundSample OuterRingColorEstimator BitmapOuterRingSampler; do
             test -s "$root/$cls.smali" || { echo "Missing merged OCR class: $cls"; exit 1; }
           done
           echo "All nine engine-neutral OCR pipeline classes are present in the unsigned APK."
