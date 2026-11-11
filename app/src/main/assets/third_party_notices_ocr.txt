@@ -1,0 +1,6 @@
+Experimental hybrid OCR third-party notices
+RT-DETR-v2 comic text/bubble detector: ogkalu/comic-text-and-bubble-detector, Apache-2.0.
+Model file detector-v4-s_int8.onnx, 11,120,765 bytes.
+SHA-256 5FE9E4F576E49D4E7E8B0E029D6D3CDC252ABD4694113E1CAE120E62C931EA79.
+ONNX Runtime Android 1.31.1: Microsoft, MIT License.
+Upstream license terms and notices apply.

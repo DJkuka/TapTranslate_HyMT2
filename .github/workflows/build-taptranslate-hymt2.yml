@@ -76,6 +76,16 @@ jobs:
           echo "Base APK SHA-256:"
           sha256sum input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
 
+      - name: Fetch pinned RT-DETR-v2 INT8 model
+        shell: bash
+        run: |
+          set -euo pipefail
+          model="app/src/main/assets/models/bubble_detection/detector-v4-s_int8.onnx"
+          mkdir -p "$(dirname "$model")"
+          curl --fail --location --retry 4 --retry-all-errors "https://huggingface.co/ogkalu/comic-text-and-bubble-detector/resolve/main/detector-v4-s_int8.onnx?download=true" -o "$model"
+          echo "5fe9e4f576e49d4e7e8b0e029d6d3cdc252abd4694113e1cae120e62c931ea79  $model" | sha256sum -c -
+          test "$(stat -c%s "$model")" -eq 11120765
+
       - name: Run OCR geometry and outer-ring colour unit tests
         run: gradle --no-daemon -PllamaRoot="$LLAMA_ROOT" -PvulkanAarNativeDir="$VULKAN_AAR_NATIVE_DIR" :app:testDebugUnitTest
 
@@ -108,10 +118,12 @@ jobs:
           set -euo pipefail
           java -jar tools/apktool.jar d -f -o build/ocr-final-check build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
           root=build/ocr-final-check/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr
-          for cls in OcrRegionKind OcrFrame DetectedRegion RecognizedText OcrTextRegion OcrRegionDetector RegionTextRecognizer OcrPipelineResult HybridOcrPipeline BackgroundSample OuterRingColorEstimator BitmapOuterRingSampler YoloDetection YoloDualOutputDecoder YoloInference YoloInferenceOutput YoloLetterboxTransform YoloDualRegionDetector; do
+          for cls in OcrRegionKind OcrFrame DetectedRegion RecognizedText OcrTextRegion OcrRegionDetector RegionTextRecognizer OcrPipelineResult HybridOcrPipeline BackgroundSample OuterRingColorEstimator BitmapOuterRingSampler RtDetrInference RtDetrInferenceOutput RtDetrOutputDecoder RtDetrModelProvider OnnxRuntimeRtDetrInference RtDetrComicRegionDetector; do
             test -s "$root/$cls.smali" || { echo "Missing merged OCR class: $cls"; exit 1; }
           done
-          echo "All nine engine-neutral OCR pipeline classes are present in the unsigned APK."
+          test -s build/ocr-final-check/smali_classes5/ai/onnxruntime/OrtEnvironment.smali
+          test -s build/ocr-final-check/smali_classes5/ai/onnxruntime/OrtSession.smali
+          echo "RT-DETR OCR classes and ONNX Runtime Java classes are present in the unsigned APK."
 
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
