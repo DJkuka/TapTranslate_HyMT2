@@ -30,16 +30,16 @@ jobs:
             -o input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
           echo "dfe0463c9d9c0bf39451586e4e7aa405f5721504c61f20cef9fd122618418d83  input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk" | sha256sum -c -
 
-      - name: Decode APK with repository-pinned Apktool
+      - name: Decode APK
         run: java -jar tools/apktool.jar d -f -o build/decoded input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
 
-      - name: Trace OCR, screenshot capture, geometry and overlay code
-        run: python3 scripts/audit_ocr_chain.py build/decoded build/ocr_audit
+      - name: Trace exact OCR and screenshot call graph
+        run: python3 scripts/audit_ocr_detail.py build/decoded build/ocr_detail
 
-      - name: Publish audit report and relevant smali sources
+      - name: Publish detailed smali call graph
         uses: actions/upload-artifact@v4
         with:
-          name: TapTranslate-OCR-hybrid-audit
-          path: build/ocr_audit/
+          name: TapTranslate-OCR-hybrid-detail
+          path: build/ocr_detail/
           if-no-files-found: error
           retention-days: 14
