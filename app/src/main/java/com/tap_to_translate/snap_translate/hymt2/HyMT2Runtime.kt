@@ -244,6 +244,10 @@ object HyMT2Runtime {
                                 if (translatedBlock.isBlank()) {
                                     error("Hy-MT2 вернул пустой перевод для OCR-блока ${index + 1}/${sourceBlocks.size}")
                                 }
+                                looksLikeUntranslatedOutput(sourceBlock, translatedBlock, targetCode)?.let { reason ->
+                                    Log.e(TAG, "Rejected non-translation for OCR block ${index + 1}/${sourceBlocks.size}: $reason")
+                                    error("Hy-MT2 вернула непереведённый или зацикленный текст для OCR-блока ${index + 1}. Запускаю резервный перевод.")
+                                }
                                 translatedBlocks += translatedBlock
                                 generatedTokens += completion.tokensGenerated
                                 generatedTimeMs += completion.generateTimeMs
@@ -285,6 +289,52 @@ object HyMT2Runtime {
             showFallbackNotice(appContext, "Не удалось запустить Hy-MT2. Используется Google Offline Translate.")
             fallbackToGoogleOffline(host, sourceText)
         }
+    }
+
+    /**
+     * Guard against a degenerate generation being presented as a successful translation.
+     * Keep this conservative: short proper names, sound effects and isolated labels are allowed.
+     */
+    private fun looksLikeUntranslatedOutput(source: String, output: String, targetCode: String): String? {
+        fun normalize(value: String): String = value.lowercase(Locale.ROOT)
+            .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+            .trim()
+            .replace(Regex("\\s+"), " ")
+
+        val normalizedSource = normalize(source)
+        val normalizedOutput = normalize(output)
+        val sourceWords = normalizedSource.split(' ').filter { it.isNotBlank() }
+        if (sourceWords.size >= 4 &&
+            (normalizedOutput == normalizedSource || normalizedOutput.contains(normalizedSource))) {
+            return "output contains the original source text"
+        }
+
+        val sentences = Regex("(?<=[.!?…])\\s+").split(output)
+            .map { normalize(it) }
+            .filter { it.length >= 24 }
+        if (sentences.groupingBy { it }.eachCount().values.any { it >= 3 }) {
+            return "the same sentence was generated at least three times"
+        }
+
+        val target = targetCode.trim().lowercase(Locale.ROOT)
+            .substringBefore('-').substringBefore('_')
+        val cyrillicTargets = setOf("ru", "uk", "be", "bg", "mk", "sr")
+        if (target in cyrillicTargets) {
+            val sourceLetters = source.filter { it.isLetter() }
+            val outputLetters = output.filter { it.isLetter() }
+            if (sourceLetters.length >= 12 && outputLetters.length >= 40) {
+                val sourceLatin = sourceLetters.count { it in 'A'..'Z' || it in 'a'..'z' }
+                val outputCyrillic = outputLetters.count { it in '\\u0400'..'\\u052F' }
+                val outputLatin = outputLetters.count { it in 'A'..'Z' || it in 'a'..'z' }
+                val sourceLatinRatio = sourceLatin.toDouble() / sourceLetters.length
+                val outputCyrillicRatio = outputCyrillic.toDouble() / outputLetters.length
+                val outputLatinRatio = outputLatin.toDouble() / outputLetters.length
+                if (sourceLatinRatio >= 0.55 && outputLatinRatio >= 0.70 && outputCyrillicRatio < 0.20) {
+                    return "English/Latin output detected for a Cyrillic target"
+                }
+            }
+        }
+        return null
     }
 
     private fun buildTranslationPrompt(
