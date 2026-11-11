@@ -324,7 +324,7 @@ object HyMT2Runtime {
             val outputLetters = output.filter { it.isLetter() }
             if (sourceLetters.length >= 12 && outputLetters.length >= 40) {
                 val sourceLatin = sourceLetters.count { it in 'A'..'Z' || it in 'a'..'z' }
-                val outputCyrillic = outputLetters.count { it in '\\u0400'..'\\u052F' }
+                val outputCyrillic = outputLetters.count { it.code in 0x0400..0x052F }
                 val outputLatin = outputLetters.count { it in 'A'..'Z' || it in 'a'..'z' }
                 val sourceLatinRatio = sourceLatin.toDouble() / sourceLetters.length
                 val outputCyrillicRatio = outputCyrillic.toDouble() / outputLetters.length
