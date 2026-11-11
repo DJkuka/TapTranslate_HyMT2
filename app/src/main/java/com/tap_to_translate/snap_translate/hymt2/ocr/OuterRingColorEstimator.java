@@ -56,12 +56,10 @@ public final class OuterRingColorEstimator {
 
         int stride = Math.max(1, (int) Math.ceil(Math.sqrt((double) ringArea / MAX_SAMPLES)));
         int[] histogram = new int[HISTOGRAM_SIZE];
-        int[] redSums = new int[HISTOGRAM_SIZE];
-        int[] greenSums = new int[HISTOGRAM_SIZE];
-        int[] blueSums = new int[HISTOGRAM_SIZE];
-        int[] redValues = new int[MAX_SAMPLES];
-        int[] greenValues = new int[MAX_SAMPLES];
-        int[] blueValues = new int[MAX_SAMPLES];
+        int[] sampleRed = new int[MAX_SAMPLES];
+        int[] sampleGreen = new int[MAX_SAMPLES];
+        int[] sampleBlue = new int[MAX_SAMPLES];
+        int[] sampleBins = new int[MAX_SAMPLES];
         int count = 0;
 
         // Top and bottom strips span the full outer width.
@@ -104,26 +102,17 @@ public final class OuterRingColorEstimator {
         int[] clusterGreen = new int[count];
         int[] clusterBlue = new int[count];
 
-        for (int bin = 0; bin < histogram.length; bin++) {
-            if (histogram[bin] == 0) continue;
+        for (int i = 0; i < count; i++) {
+            int bin = sampleBins[i];
             int r = bin / (CHANNEL_BINS * CHANNEL_BINS);
             int g = (bin / CHANNEL_BINS) % CHANNEL_BINS;
             int b = bin % CHANNEL_BINS;
             if (Math.abs(r - dominantR) <= 1 && Math.abs(g - dominantG) <= 1
                     && Math.abs(b - dominantB) <= 1) {
-                int n = histogram[bin];
-                int base = clusterCount;
-                // Values were retained in source order, so rebuild this bin's actual
-                // channel samples from the per-bin sums using its rounded mean.
-                int meanR = redSums[bin] / n;
-                int meanG = greenSums[bin] / n;
-                int meanB = blueSums[bin] / n;
-                for (int k = 0; k < n && clusterCount < count; k++) {
-                    clusterRed[clusterCount] = meanR;
-                    clusterGreen[clusterCount] = meanG;
-                    clusterBlue[clusterCount] = meanB;
-                    clusterCount++;
-                }
+                clusterRed[clusterCount] = sampleRed[i];
+                clusterGreen[clusterCount] = sampleGreen[i];
+                clusterBlue[clusterCount] = sampleBlue[i];
+                clusterCount++;
             }
         }
 
@@ -141,8 +130,8 @@ public final class OuterRingColorEstimator {
 
     private static int addPixel(
             PixelReader reader, int x, int y,
-            int[] histogram, int[] redSums, int[] greenSums, int[] blueSums,
-            int[] redValues, int[] greenValues, int[] blueValues, int count) {
+            int[] histogram, int[] sampleRed, int[] sampleGreen, int[] sampleBlue,
+            int[] sampleBins, int count) {
         if (count >= MAX_SAMPLES) return count;
         int color = reader.getPixel(x, y);
         int alpha = (color >>> 24) & 0xff;
@@ -152,12 +141,10 @@ public final class OuterRingColorEstimator {
         int b = color & 0xff;
         int bin = ((r >>> 3) * CHANNEL_BINS + (g >>> 3)) * CHANNEL_BINS + (b >>> 3);
         histogram[bin]++;
-        redSums[bin] += r;
-        greenSums[bin] += g;
-        blueSums[bin] += b;
-        redValues[count] = r;
-        greenValues[count] = g;
-        blueValues[count] = b;
+        sampleRed[count] = r;
+        sampleGreen[count] = g;
+        sampleBlue[count] = b;
+        sampleBins[count] = bin;
         return count + 1;
     }
 
