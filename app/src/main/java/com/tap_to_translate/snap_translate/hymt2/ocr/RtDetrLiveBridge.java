@@ -171,34 +171,28 @@ public final class RtDetrLiveBridge {
             int originalCount = blocks.size();
             if (originalCount == 0) return;
 
-            ArrayList<Object> matched = new ArrayList<>(originalCount);
+            // RT-DETR boxes are not accurate enough to be a destructive OCR gate.
+            // Keep every ML Kit block so a slightly clipped/missed detector box cannot
+            // silently remove words or a whole line. Use the detector only for bubble
+            // association/grouping; log coverage for later tuning.
+            int detectorMatched = 0;
+            int detectorUnmatched = 0;
             int unreadable = 0;
             for (Object block : blocks) {
                 Rect textBounds = readBlockBounds(block);
                 if (textBounds == null) {
                     unreadable++;
-                    matched.add(block);
-                    continue;
+                } else if (overlapsDetectedText(textBounds, regions)) {
+                    detectorMatched++;
+                } else {
+                    detectorUnmatched++;
                 }
-                if (overlapsDetectedText(textBounds, regions)) {
-                    matched.add(block);
-                }
             }
-
-            // Never blank a page because a detector threshold or model version was wrong.
-            if (matched.isEmpty()) {
-                Log.w(TAG, "No ML Kit blocks matched RT-DETR; original OCR retained");
-                return;
-            }
-
-            int removed = originalCount - matched.size();
-            if (removed > 0) {
-                blocks.clear();
-                blocks.addAll(matched);
-            }
-            Log.i(TAG, "hybrid OCR filter: detector_regions=" + regions.size()
-                    + " mlkit_blocks=" + originalCount + " kept=" + matched.size()
-                    + " filtered=" + removed + " unreadable_bounds=" + unreadable);
+            Log.i(TAG, "hybrid OCR classify: detector_regions=" + regions.size()
+                    + " mlkit_blocks=" + originalCount + " retained=" + originalCount
+                    + " detector_matched=" + detectorMatched
+                    + " detector_unmatched=" + detectorUnmatched
+                    + " filtering=disabled unreadable_bounds=" + unreadable);
         } catch (Throwable error) {
             Log.w(TAG, "Hybrid OCR filtering failed; original OCR retained", error);
         }
@@ -287,23 +281,10 @@ public final class RtDetrLiveBridge {
             Rect second = readBlockBounds(blocks.get(secondIndex));
             if (first == null || second == null) return true;
 
-            // Prefer the detector's class-1 text-in-bubble regions. Two balloons
-            // joined by a narrow tail/bridge may share one class-0 outer container,
-            // while their text regions can still be detected independently.
-            int firstSpeechRegion = findSpeechBubbleTextRegion(first, regions);
-            int secondSpeechRegion = findSpeechBubbleTextRegion(second, regions);
-            if (firstSpeechRegion >= 0 && secondSpeechRegion >= 0) {
-                if (firstSpeechRegion != secondSpeechRegion) {
-                    Log.i(TAG, "prevented cross-bubble OCR grouping: blocks="
-                            + firstIndex + "," + secondIndex
-                            + " text_regions=" + firstSpeechRegion + "," + secondSpeechRegion);
-                    return false;
-                }
-                return true;
-            }
-
-            // If class-1 regions are unavailable for either block, retain the
-            // original class-0 container fallback.
+            // Class 1 is text inside a bubble, not the bubble identity. A single
+            // balloon may contain multiple text detections/ML Kit chunks. Associate
+            // blocks only with class-0 bubble containers so chunks inside one balloon
+            // remain eligible for the host's normal paragraph grouping.
             int firstContainer = findBubbleContainer(first, regions);
             int secondContainer = findBubbleContainer(second, regions);
             if (firstContainer >= 0 && secondContainer >= 0
@@ -320,78 +301,16 @@ public final class RtDetrLiveBridge {
         }
     }
 
-    /**
-     * Assigns an ML Kit block to the most relevant class-1 text-in-bubble region.
-     * This is more reliable than the outer bubble rectangle when two balloons
-     * touch or are connected by a narrow speech tail.
-     */
-    private static int findSpeechBubbleTextRegion(
-            Rect text, List<DetectedRegion> regions) {
-        long textArea = (long) text.width() * text.height();
-        if (textArea <= 0L) return -1;
-
-        int centerX = text.centerX();
-        int centerY = text.centerY();
-        int best = -1;
-        double bestOverlap = 0d;
-        long bestRegionArea = Long.MAX_VALUE;
-
-        for (int i = 0; i < regions.size(); i++) {
-            DetectedRegion region = regions.get(i);
-            if (region.getKind() != OcrRegionKind.SPEECH_BUBBLE) continue;
-
-            Rect detected = region.getBounds();
-            Rect intersection = new Rect(text);
-            long intersectionArea = intersection.intersect(detected)
-                    ? (long) intersection.width() * intersection.height() : 0L;
-            long detectedArea = (long) detected.width() * detected.height();
-            if (intersectionArea <= 0L || detectedArea <= 0L) continue;
-
-            double overlapOfSmaller = (double) intersectionArea
-                    / (double) Math.min(textArea, detectedArea);
-            boolean centerInside = detected.contains(centerX, centerY);
-            if (!centerInside && overlapOfSmaller < 0.18d) continue;
-
-            // Prefer the strongest containment; use the smaller region as a
-            // deterministic tie-breaker for nearby/overlapping detections.
-            double score = centerInside ? Math.max(overlapOfSmaller, 0.50d)
-                    : overlapOfSmaller;
-            if (score > bestOverlap
-                    || (Math.abs(score - bestOverlap) < 0.0001d
-                    && detectedArea < bestRegionArea)) {
-                best = i;
-                bestOverlap = score;
-                bestRegionArea = detectedArea;
-            }
-        }
-        return best;
-    }
-
     private static int findBubbleContainer(Rect text, List<DetectedRegion> regions) {
-        int best = -1;
-        long bestArea = Long.MAX_VALUE;
-        int centerX = text.centerX();
-        int centerY = text.centerY();
-        long textArea = (long) text.width() * text.height();
-        if (textArea <= 0L) return -1;
-
-        for (int i = 0; i < regions.size(); i++) {
-            DetectedRegion region = regions.get(i);
+        ArrayList<BubbleRegionMatcher.Bounds> bubbles = new ArrayList<>();
+        for (DetectedRegion region : regions) {
             if (region.getKind() != OcrRegionKind.BUBBLE_CONTAINER) continue;
-            Rect bubble = region.getBounds();
-            Rect intersection = new Rect(text);
-            boolean centerInside = bubble.contains(centerX, centerY);
-            long overlap = intersection.intersect(bubble)
-                    ? (long) intersection.width() * intersection.height() : 0L;
-            if (!centerInside && (double) overlap / textArea < 0.60d) continue;
-
-            long area = (long) bubble.width() * bubble.height();
-            if (area < bestArea) {
-                bestArea = area;
-                best = i;
-            }
+            Rect bounds = region.getBounds();
+            bubbles.add(new BubbleRegionMatcher.Bounds(
+                    bounds.left, bounds.top, bounds.right, bounds.bottom));
         }
-        return best;
+        return BubbleRegionMatcher.findBestContainer(
+                text.left, text.top, text.right, text.bottom, bubbles);
     }
 
     private static void removeIfCurrent(Object owner, PendingFrame expected) {
