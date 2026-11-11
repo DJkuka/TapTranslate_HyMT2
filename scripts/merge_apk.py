@@ -200,7 +200,7 @@ def patch_live_hybrid_ocr(base: Path) -> None:
 
     # The host posts overlay delivery through synthetic Runnable u3/u (switch case 6).
     # Sort the same List immediately before the callback object overwrites v0.
-    priority_hook = "    invoke-static {v0, v1}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->prioritizeBubbleOverlays(Ljava/lang/Object;Ljava/util/List;)V\\n"
+    priority_hook = "    invoke-static {v0, v1}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->prioritizeBubbleOverlays(Ljava/lang/Object;Ljava/util/List;)V\n"
     runnable_path = base / "smali" / "u3" / "u.smali"
     if not runnable_path.exists():
         raise RuntimeError("Could not find synthetic OCR delivery runnable u3/u.smali")
