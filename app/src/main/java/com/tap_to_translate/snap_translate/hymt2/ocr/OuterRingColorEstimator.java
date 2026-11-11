@@ -65,25 +65,21 @@ public final class OuterRingColorEstimator {
         // Top and bottom strips span the full outer width.
         for (int y = outerTop; y < Math.min(innerTop, outerBottom); y += stride) {
             for (int x = outerLeft; x < outerRight; x += stride) {
-                count = addPixel(pixelReader, x, y, histogram, redSums, greenSums,
-                        blueSums, redValues, greenValues, blueValues, count);
+                count = addPixel(pixelReader, x, y, histogram, sampleRed, sampleGreen, sampleBlue, sampleBins, count);
             }
         }
         for (int y = Math.max(innerBottom, outerTop); y < outerBottom; y += stride) {
             for (int x = outerLeft; x < outerRight; x += stride) {
-                count = addPixel(pixelReader, x, y, histogram, redSums, greenSums,
-                        blueSums, redValues, greenValues, blueValues, count);
+                count = addPixel(pixelReader, x, y, histogram, sampleRed, sampleGreen, sampleBlue, sampleBins, count);
             }
         }
         // Side strips exclude the top/bottom bands, so corners are not counted twice.
         for (int y = Math.max(outerTop, innerTop); y < Math.min(innerBottom, outerBottom); y += stride) {
             for (int x = outerLeft; x < Math.min(innerLeft, outerRight); x += stride) {
-                count = addPixel(pixelReader, x, y, histogram, redSums, greenSums,
-                        blueSums, redValues, greenValues, blueValues, count);
+                count = addPixel(pixelReader, x, y, histogram, sampleRed, sampleGreen, sampleBlue, sampleBins, count);
             }
             for (int x = Math.max(innerRight, outerLeft); x < outerRight; x += stride) {
-                count = addPixel(pixelReader, x, y, histogram, redSums, greenSums,
-                        blueSums, redValues, greenValues, blueValues, count);
+                count = addPixel(pixelReader, x, y, histogram, sampleRed, sampleGreen, sampleBlue, sampleBins, count);
             }
         }
 
