@@ -118,7 +118,7 @@ def verify_final_host_payload(base_apk: Path, final_apk: Path) -> None:
                 if prefix == "lib/" and name.rsplit("/", 1)[-1] in {
                     "libllama_jni.so", "libllama.so", "libggml.so",
                     "libggml-base.so", "libggml-cpu.so", "libggml-vulkan.so",
-                    "libhymt2_jni.so", "libc++_shared.so", "libopencv_java4.so", "libopencv_java4.so",
+                    "libhymt2_jni.so", "libc++_shared.so", "libopencv_java4.so",
                 }:
                     continue
                 if name not in built_names or original.read(name) != built.read(name):
@@ -777,7 +777,7 @@ def copy_helper_payload(helper: Path, base: Path) -> None:
     replaceable = {
         "libllama_jni.so", "libllama.so", "libggml.so",
         "libggml-base.so", "libggml-cpu.so", "libggml-vulkan.so",
-        "libhymt2_jni.so", "libc++_shared.so",
+        "libhymt2_jni.so", "libc++_shared.so", "libopencv_java4.so",
     }
     for source in so_files:
         destination = out_lib / source.name
@@ -790,6 +790,7 @@ def copy_helper_payload(helper: Path, base: Path) -> None:
         "libllama_jni.so", "libllama.so", "libggml.so",
         "libggml-base.so", "libggml-cpu.so", "libggml-vulkan.so",
         "libhymt2_jni.so", "libonnxruntime.so", "libonnxruntime4j_jni.so",
+        "libopencv_java4.so",
     }
     missing_runtime = sorted(name for name in required_runtime if not (out_lib / name).is_file())
     if missing_runtime:
