@@ -166,29 +166,29 @@ def patch_live_hybrid_ocr(base: Path) -> None:
     path = base / "smali_classes3/vh/j.smali"
     text = path.read_text(encoding="utf-8")
 
-    frame_hook = "    invoke-static {p0, p1}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->onFrame(Ljava/lang/Object;Landroid/graphics/Bitmap;)V\\n"
+    frame_hook = "    invoke-static {p0, p1}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->onFrame(Ljava/lang/Object;Landroid/graphics/Bitmap;)V\n"
     frame_method = ".method public final j(Landroid/graphics/Bitmap;)V"
     if frame_hook.strip() not in text:
         start = text.find(frame_method)
         if start < 0:
             raise RuntimeError("Could not find live OCR bitmap entry vh/j->j(Bitmap)")
-        body = text.find("    .locals 3\\n", start)
+        body = text.find("    .locals 3\n", start)
         if body < 0:
             raise RuntimeError("Could not find vh/j->j local register declaration")
-        insert = body + len("    .locals 3\\n")
-        text = text[:insert] + "\\n" + frame_hook + text[insert:]
+        insert = body + len("    .locals 3\n")
+        text = text[:insert] + "\n" + frame_hook + text[insert:]
 
-    result_hook = "    invoke-static {p0, p1, p2, p3}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->filter(Ljava/lang/Object;Landroid/content/Context;Ljava/lang/Object;Landroid/graphics/Bitmap;)V\\n"
+    result_hook = "    invoke-static {p0, p1, p2, p3}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->filter(Ljava/lang/Object;Landroid/content/Context;Ljava/lang/Object;Landroid/graphics/Bitmap;)V\n"
     result_method = ".method public final d(Landroid/content/Context;Lnf/d;Landroid/graphics/Bitmap;Z)V"
     if result_hook.strip() not in text:
         start = text.find(result_method)
         if start < 0:
             raise RuntimeError("Could not find live OCR result entry vh/j->d(Context,nf/d,Bitmap,boolean)")
-        body = text.find("    .locals 21\\n", start)
+        body = text.find("    .locals 21\n", start)
         if body < 0:
             raise RuntimeError("Could not find vh/j->d local register declaration")
-        insert = body + len("    .locals 21\\n")
-        text = text[:insert] + "\\n" + result_hook + text[insert:]
+        insert = body + len("    .locals 21\n")
+        text = text[:insert] + "\n" + result_hook + text[insert:]
 
     if frame_hook.strip() not in text or result_hook.strip() not in text:
         raise RuntimeError("RT-DETR hooks were not written into the live OCR call chain")
