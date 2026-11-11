@@ -69,7 +69,9 @@ A model-independent decoder now handles the dual-label segmentation head shape u
 - applies class-aware non-maximum suppression;
 - preserves the 32 mask coefficients for a later contour/mask stage.
 
-The decoder does not load a model or run inference yet. It is tested with synthetic tensors, including class separation and overlapping predictions.
+The decoder does not load a model or run inference itself. A pluggable `YoloInference` contract and `YoloDualRegionDetector` bridge now handle the Android-side crop, RGB letterbox preparation, synchronous inference call, box decoding and inverse mapping into the captured frame. The backend can be implemented with LiteRT/TFLite or another runtime without changing the OCR pipeline. Exact X/Y resize scales are retained, including rounding, and visible crop offsets are restored before screen mapping.
+
+The decoder and letterbox transform are tested with synthetic tensors and wide/tall input geometry, including class separation, same-class NMS, invalid predictions and inverse mapping. The inference backend is still intentionally unimplemented: no model weights or new inference dependency have been added yet.
 
 ## Current status
 
