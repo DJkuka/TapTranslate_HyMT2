@@ -152,7 +152,8 @@ jobs:
             done
             for rel in \
               "com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali" \
-              "ca/c2.smali" "u3/u.smali" "bo/t5.smali"; do
+              "ca/c2.smali" "u3/u.smali" "bo/t5.smali" \
+              "la/s.smali" "la/v.smali"; do
               if [ -f "$root/$rel" ]; then
                 mkdir -p "$trace/smali/$(basename "$root")/$(dirname "$rel")"
                 cp "$root/$rel" "$trace/smali/$(basename "$root")/$rel"
