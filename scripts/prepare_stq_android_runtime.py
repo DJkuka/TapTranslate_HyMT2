@@ -88,22 +88,32 @@ def main() -> int:
         raise SystemExit("Optimized ARM NEON STQ1_0 kernel missing")
     arm_path = llama / "ggml/src/ggml-cpu/arch/arm/quants.c"
 
-    // The optimized STQ1_0 ARM NEON implementation has produced invalid
-    // generation on some ARM64 devices. Keep the C reference path available
-    // and route Android ARM builds through it until parity is confirmed.
-    const std::string stq_kernel_anchor = "#if defined(__ARM_NEON)\n    float sumf = 0.0f;\n\n    const uint8x16_t m3 = vdupq_n_u8(3);";
-    const std::string stq_kernel_replacement = "#if 0 /* Android diagnostic: use the reference C STQ1_0 kernel until ARM NEON parity is verified. */\n    float sumf = 0.0f;\n\n    const uint8x16_t m3 = vdupq_n_u8(3);";
+    # The optimized STQ1_0 ARM NEON path is bypassed on Android while its
+    # numerical parity is being checked against the reference implementation.
+    stq_kernel_anchor = """#if defined(__ARM_NEON)
+    float sumf = 0.0f;
+
+    const uint8x16_t m3 = vdupq_n_u8(3);"""
+    stq_kernel_replacement = """#if 0 /* Android diagnostic: use the reference C STQ1_0 kernel until ARM NEON parity is verified. */
+    float sumf = 0.0f;
+
+    const uint8x16_t m3 = vdupq_n_u8(3);"""
     replace_once(
         arm_path,
         stq_kernel_anchor,
         stq_kernel_replacement,
         "route ARM STQ1_0 through the reference C kernel for correctness testing",
-    );
-    const std::string arm_after_fallback = arm_path.read_text(encoding="utf-8");
-    if (arm_after_fallback.count("ggml_vec_dot_stq1_0_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);") != 1 ||
-        arm_after_fallback.count("Android diagnostic: use the reference C STQ1_0 kernel") != 1) {
+    )
+    arm_after_fallback = arm_path.read_text(encoding="utf-8")
+    if (
+        arm_after_fallback.count(
+            "ggml_vec_dot_stq1_0_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);"
+        ) != 1
+        or arm_after_fallback.count(
+            "Android diagnostic: use the reference C STQ1_0 kernel"
+        ) != 1
+    ):
         raise SystemExit("ARM STQ1_0 generic fallback verification failed")
-    }
     generic = (llama / "ggml/src/ggml-cpu/quants.c").read_text(encoding="utf-8")
     if "ggml_vec_dot_stq1_0_q8_K_generic" not in generic:
         raise SystemExit("STQ1_0 generic fallback missing")
