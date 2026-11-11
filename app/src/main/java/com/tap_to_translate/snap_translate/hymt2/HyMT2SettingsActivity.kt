@@ -292,8 +292,30 @@ class HyMT2SettingsActivity : Activity() {
     }
 
     private fun launchPicker() {
-        if (importing || HyMT2Runtime.isLoaded()) {
-            if (!autoPicker) Toast.makeText(this, "Сначала выгрузи модель из памяти.", Toast.LENGTH_LONG).show()
+        if (importing) return
+        if (HyMT2Runtime.isLoaded()) {
+            if (autoPicker) {
+                Log.w(TAG, "Auto-picker requested while a model is loaded; unloading before picker")
+            } else {
+                status.text = "Выгружаю текущую модель перед выбором другой…"
+            }
+            chooseButton.isEnabled = false
+            loadButton.isEnabled = false
+            unloadButton.isEnabled = false
+            HyMT2Runtime.unload { message ->
+                Log.i(TAG, "Model unload before picker: $message")
+                if (!HyMT2Runtime.isLoaded()) {
+                    if (!autoPicker) status.text = "Текущая модель выгружена. Выбери новый GGUF."
+                    launchPicker()
+                } else {
+                    if (!autoPicker) {
+                        status.text = "Не удалось выгрузить модель: $message"
+                        refreshState()
+                    } else {
+                        finish()
+                    }
+                }
+            }
             return
         }
         try {
