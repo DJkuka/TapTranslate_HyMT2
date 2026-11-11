@@ -13,6 +13,7 @@ import com.paddle.ocr.util.OpenCVUtils
 import java.util.Locale
 import kotlinx.coroutines.runBlocking
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -30,24 +31,45 @@ object PaddleOcrLiveBridge {
         }
     }
 
-    @JvmStatic fun submit(context: Context?, source: Bitmap?, detectedRegions: List<DetectedRegion>?) {
-        if (context == null || source == null || source.isRecycled || !busy.compareAndSet(false, true)) return
-        val bitmap = try { source.copy(Bitmap.Config.ARGB_8888, false) } catch (t: Throwable) {
-            busy.set(false); Log.w(TAG, "frame copy failed", t); return
+    /**
+     * Runs on the host OCR callback worker (not the UI thread). The caller may wait
+     * for a bounded time; a timeout leaves the original ML Kit result untouched.
+     */
+    @JvmStatic fun recognizeBlocking(
+        context: Context?,
+        source: Bitmap?,
+        detectedRegions: List<DetectedRegion>?,
+        timeoutMs: Long
+    ): List<PaddleOcrTextGroup>? {
+        if (context == null || source == null || source.isRecycled) return null
+        if (!busy.compareAndSet(false, true)) {
+            Log.w(TAG, "Paddle busy; ML Kit fallback retained")
+            return null
         }
-        if (bitmap == null) { busy.set(false); return }
+        val bitmap = try { source.copy(Bitmap.Config.ARGB_8888, false) } catch (t: Throwable) {
+            busy.set(false); Log.w(TAG, "frame copy failed", t); return null
+        } ?: run { busy.set(false); return null }
         val app = context.applicationContext ?: context
         val regions = detectedRegions?.toList() ?: emptyList()
+        val future = java.util.concurrent.CompletableFuture<List<PaddleOcrTextGroup>>()
         executor.execute {
             try {
                 val ocr = getEngine(app)
-                log(runBlocking { ocr.recognize(bitmap) }, bitmap.width, bitmap.height, regions)
+                val result = runBlocking { ocr.recognize(bitmap) }
+                future.complete(logAndAssemble(result, bitmap.width, bitmap.height, regions))
             } catch (t: Throwable) {
                 Log.e(TAG, "Paddle inference failed; ML Kit output remains unchanged", t)
+                future.completeExceptionally(t)
             } finally {
                 if (!bitmap.isRecycled) bitmap.recycle()
                 busy.set(false)
             }
+        }
+        return try {
+            future.get(timeoutMs.coerceAtLeast(1L), TimeUnit.MILLISECONDS)
+        } catch (t: Throwable) {
+            Log.w(TAG, "Paddle result unavailable; ML Kit fallback retained", t)
+            null
         }
     }
 
@@ -74,7 +96,7 @@ object PaddleOcrLiveBridge {
         }
     }
 
-    private fun log(result: OCRRunResult, width: Int, height: Int, regions: List<DetectedRegion>) {
+    private fun logAndAssemble(result: OCRRunResult, width: Int, height: Int, regions: List<DetectedRegion>): List<PaddleOcrTextGroup> {
         Log.i(TAG, "frame=${width}x${height} lines=${result.lineCount} det_ms=${result.detectionTimeMs} rec_ms=${result.recognitionTimeMs} total_ms=${result.totalTimeMs}")
         data class Line(val index: Int, val confidence: Float, val bounds: Rect, val text: String, val bubbleId: String?)
         val bubbleRegions = regions.filter { it.kind == OcrRegionKind.BUBBLE_CONTAINER }
@@ -119,5 +141,6 @@ object PaddleOcrLiveBridge {
         utteranceGroups.forEachIndexed { i, group ->
             Log.i(TAG, "host_group[${i}] bubble=${group.bubbleId ?: "FREE"} lines=${group.lineCount} conf=${group.confidence} bounds=${group.bounds.flattenToString()} text=${group.text}")
         }
+        return utteranceGroups
     }
 }
