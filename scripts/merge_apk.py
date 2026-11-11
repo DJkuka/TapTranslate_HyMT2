@@ -178,7 +178,7 @@ def patch_live_hybrid_ocr(base: Path) -> None:
         insert = body + len("    .locals 3\n")
         text = text[:insert] + "\n" + frame_hook + text[insert:]
 
-    result_hook = "    invoke-static {p0, p1, p2, p3}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->filter(Ljava/lang/Object;Landroid/content/Context;Ljava/lang/Object;Landroid/graphics/Bitmap;)V\n"
+    result_hook = "    invoke-static/range {p0 .. p3}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->filter(Ljava/lang/Object;Landroid/content/Context;Ljava/lang/Object;Landroid/graphics/Bitmap;)V\n"
     result_method = ".method public final d(Landroid/content/Context;Lnf/d;Landroid/graphics/Bitmap;Z)V"
     if result_hook.strip() not in text:
         start = text.find(result_method)
