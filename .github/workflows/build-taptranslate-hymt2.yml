@@ -102,8 +102,8 @@ jobs:
             "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/b8f84f0b80c529de40b4fbb3544b84fa7233a513/inference.onnx?download=true" -o "$rec"
           echo "d73e0058b7a8086bbd57f3d10b8bcd4ff95363f67e06e2762b5e814fe9c9410e  $det" | sha256sum -c -
           echo "5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634  $rec" | sha256sum -c -
-          test "$(stat -c%s "$det")" -eq 10358784
-          test "$(stat -c%s "$rec")" -eq 22247936
+          test -s "$det"
+          test -s "$rec"
           cp app/src/main/assets/models/ppocrv6/rec/inference.yml app/src/main/assets/models/rec/inference.yml
           test -s app/src/main/assets/models/rec/inference.yml
           echo "PP-OCRv6 models and matching 18,708-character dictionary are ready."
