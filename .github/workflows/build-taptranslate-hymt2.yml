@@ -172,11 +172,15 @@ jobs:
           set -euo pipefail
           java -jar tools/apktool.jar d -f -o build/ocr-final-check build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
           root=build/ocr-final-check/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr
-          for cls in OcrRegionKind OcrFrame DetectedRegion RecognizedText OcrTextRegion OcrRegionDetector RegionTextRecognizer OcrPipelineResult HybridOcrPipeline BackgroundSample OuterRingColorEstimator BitmapOuterRingSampler RtDetrInference RtDetrInferenceOutput RtDetrOutputDecoder RtDetrModelProvider OnnxRuntimeRtDetrInference RtDetrComicRegionDetector; do
+          for cls in OcrRegionKind OcrFrame DetectedRegion RecognizedText OcrTextRegion OcrRegionDetector RegionTextRecognizer OcrPipelineResult HybridOcrPipeline BackgroundSample OuterRingColorEstimator BitmapOuterRingSampler RtDetrInference RtDetrInferenceOutput RtDetrOutputDecoder RtDetrModelProvider OnnxRuntimeRtDetrInference RtDetrComicRegionDetector RtDetrLiveBridge; do
             test -s "$root/$cls.smali" || { echo "Missing merged OCR class: $cls"; exit 1; }
           done
           test -s build/ocr-final-check/smali_classes5/ai/onnxruntime/OrtEnvironment.smali
           test -s build/ocr-final-check/smali_classes5/ai/onnxruntime/OrtSession.smali
+          live="build/ocr-final-check/smali_classes3/vh/j.smali"
+          grep -Fq 'RtDetrLiveBridge;->onFrame' "$live" || { echo "RT-DETR is not called from the live screenshot OCR entry"; exit 1; }
+          grep -Fq 'RtDetrLiveBridge;->filter' "$live" || { echo "RT-DETR results are not applied to the live ML Kit result"; exit 1; }
+          echo "Verified live RT-DETR calls in vh/j: screenshot entry and ML Kit result filtering."
           echo "RT-DETR detector, ONNX Runtime classes and OCR pipeline are present in the unsigned APK."
 
       - name: Upload unsigned APK

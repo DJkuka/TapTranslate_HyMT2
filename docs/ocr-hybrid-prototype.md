@@ -33,15 +33,14 @@ The existing OCR is intended as the initial bubble fallback. Free text will init
 
 ## Current boundary
 
-The RT-DETR inference adapter, output decoder, model provider, and APK packaging checks are being integrated. This does not yet wire the detector into the live `ScreenTranslateService`, does not yet replace the host OCR route, and does not yet change the visible overlay. A successful helper build is only a build/packaging milestone; real inference latency, memory, detection quality, and coordinate alignment must still be tested on the Lenovo tablet.
+The RT-DETR bridge is wired into the real host OCR coordinator `vh.j`: `j(Bitmap)` starts detector inference on a copied screenshot while the original ML Kit path runs, and `d(Context,nf.d,Bitmap,boolean)` filters ML Kit blocks against detected `text_bubble` and `text_free` regions before the host's normal grouping/translation stage. On model failure, timeout, or zero matches, the original OCR result is retained. The APK build now verifies both call sites in the final decoded host DEX. The renderer is not yet changed: text-free blocks still use the host's original overlay style until the next renderer step. Real latency, memory and detector accuracy still need device testing.
 
 ## Next steps
 
-1. Verify helper compilation and unit tests.
-2. Verify final APK includes ONNX Runtime classes, both JNI libraries and the exact model asset.
-3. Add a debug-only detector invocation on a captured bitmap, with class/confidence/coordinates/timing diagnostics.
-4. Validate boxes against real comic pages and tune thresholds.
-5. Connect text_bubble to the current OCR fallback and text_free to ML Kit Latin.
-6. Preserve geometry through Hy-MT2 and add the no-border outer-ring fill renderer.
-7. Measure CPU latency and peak memory on the Snapdragon 680 before testing NNAPI.
+1. Confirm build and the two live call-site checks.
+2. On the Lenovo tablet, inspect Logcat tag `TapTranslateRTDETR` to confirm model initialization, detections and filtered block counts.
+3. Tune overlap/thresholds against actual comic pages; add an opt-out fallback if needed.
+4. Carry the detected class through the host block model so free text can use its own renderer.
+5. Add the borderless rectangle fill using the reliable outer-ring colour sample.
+6. Replace the recognizer independently when a better OCR engine is selected.
 

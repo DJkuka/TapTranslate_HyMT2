@@ -23,7 +23,6 @@ ENGINE_NAME = "Hy-MT2 Offline"
 PRESERVE_OCR_SMALI = (
     "smali_classes2/x9/e.smali",
     "smali_classes3/qh/p.smali",
-    "smali_classes3/vh/j.smali",
     "smali_classes3/si/a.smali",
 )
 PRESERVE_METHOD = ("smali_classes3/yh/f.smali", r".method public final e(Ljava/lang/String;)V")
@@ -160,6 +159,41 @@ def patch_engine_list(base: Path) -> None:
             raise RuntimeError("Could not find filled-new-array provider list in yh/h.smali")
         text = text.replace(old, "    filled-new-array/range {v1 .. v9}, [Ljava/lang/String;\n", 1)
         path.write_text(text, encoding="utf-8")
+
+
+def patch_live_hybrid_ocr(base: Path) -> None:
+    """Wire RT-DETR into the actual screenshot -> ML Kit -> translation path."""
+    path = base / "smali_classes3/vh/j.smali"
+    text = path.read_text(encoding="utf-8")
+
+    frame_hook = "    invoke-static {p0, p1}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->onFrame(Ljava/lang/Object;Landroid/graphics/Bitmap;)V\\n"
+    frame_method = ".method public final j(Landroid/graphics/Bitmap;)V"
+    if frame_hook.strip() not in text:
+        start = text.find(frame_method)
+        if start < 0:
+            raise RuntimeError("Could not find live OCR bitmap entry vh/j->j(Bitmap)")
+        body = text.find("    .locals 3\\n", start)
+        if body < 0:
+            raise RuntimeError("Could not find vh/j->j local register declaration")
+        insert = body + len("    .locals 3\\n")
+        text = text[:insert] + "\\n" + frame_hook + text[insert:]
+
+    result_hook = "    invoke-static {p0, p1, p2, p3}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->filter(Ljava/lang/Object;Landroid/content/Context;Ljava/lang/Object;Landroid/graphics/Bitmap;)V\\n"
+    result_method = ".method public final d(Landroid/content/Context;Lnf/d;Landroid/graphics/Bitmap;Z)V"
+    if result_hook.strip() not in text:
+        start = text.find(result_method)
+        if start < 0:
+            raise RuntimeError("Could not find live OCR result entry vh/j->d(Context,nf/d,Bitmap,boolean)")
+        body = text.find("    .locals 21\\n", start)
+        if body < 0:
+            raise RuntimeError("Could not find vh/j->d local register declaration")
+        insert = body + len("    .locals 21\\n")
+        text = text[:insert] + "\\n" + result_hook + text[insert:]
+
+    if frame_hook.strip() not in text or result_hook.strip() not in text:
+        raise RuntimeError("RT-DETR hooks were not written into the live OCR call chain")
+    path.write_text(text, encoding="utf-8")
+    print("Wired RT-DETR into vh/j->j(Bitmap) capture and vh/j->d(...) ML Kit result path")
 
 
 def patch_dispatcher(base: Path) -> None:
@@ -728,6 +762,7 @@ def main() -> int:
     patch_atomic_backport_shims(base)
     patch_engine_list(base)
     patch_dispatcher(base)
+    patch_live_hybrid_ocr(base)
     patch_picker_callbacks(base)
     patch_settings_click(base)
     patch_resources(base)
