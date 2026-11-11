@@ -3,7 +3,7 @@ name: Build Tap Translate 1.125 FontFit AutoFill + Hy-MT2 Vulkan
 on:
   workflow_dispatch:
   push:
-    branches: [ main, vulkan-v12-integration, ocr-hybrid-prototype ]
+    branches: [ main, vulkan-v12-integration, ocr-hybrid-prototype, ocr-paddle-prototype ]
 
 permissions:
   contents: read
@@ -88,6 +88,26 @@ jobs:
           echo "5fe9e4f576e49d4e7e8b0e029d6d3cdc252abd4694113e1cae120e62c931ea79  $model" | sha256sum -c -
           test "$(stat -c%s "$model")" -eq 11120765
 
+      - name: Fetch pinned PP-OCRv6 small ONNX models and verify hashes
+        if: github.ref == 'refs/heads/ocr-paddle-prototype'
+        shell: bash
+        run: |
+          set -euo pipefail
+          det="app/src/main/assets/models/det/inference.onnx"
+          rec="app/src/main/assets/models/rec/inference.onnx"
+          mkdir -p "$(dirname "$det")" "$(dirname "$rec")"
+          curl --fail --location --retry 4 --retry-all-errors \
+            "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_det_onnx/resolve/5994b4f/inference.onnx?download=true" -o "$det"
+          curl --fail --location --retry 4 --retry-all-errors \
+            "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/b8f84f0b80c529de40b4fbb3544b84fa7233a513/inference.onnx?download=true" -o "$rec"
+          echo "d73e0058b7a8086bbd57f3d10b8bcd4ff95363f67e06e2762b5e814fe9c9410e  $det" | sha256sum -c -
+          echo "5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634  $rec" | sha256sum -c -
+          test "$(stat -c%s "$det")" -eq 10358784
+          test "$(stat -c%s "$rec")" -eq 22247936
+          cp app/src/main/assets/models/ppocrv6/rec/inference.yml app/src/main/assets/models/rec/inference.yml
+          test -s app/src/main/assets/models/rec/inference.yml
+          echo "PP-OCRv6 models and matching 18,708-character dictionary are ready."
+
       - name: Run OCR geometry and outer-ring colour unit tests
         run: gradle --no-daemon -PllamaRoot="$LLAMA_ROOT" -PvulkanAarNativeDir="$VULKAN_AAR_NATIVE_DIR" :app:testDebugUnitTest
 
@@ -166,7 +186,7 @@ jobs:
           ls -lh build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
 
       - name: Verify hybrid OCR contracts were merged into classes5.dex
-        if: github.ref == 'refs/heads/ocr-hybrid-prototype'
+        if: github.ref == 'refs/heads/ocr-hybrid-prototype' || github.ref == 'refs/heads/ocr-paddle-prototype'
         shell: bash
         run: |
           set -euo pipefail
