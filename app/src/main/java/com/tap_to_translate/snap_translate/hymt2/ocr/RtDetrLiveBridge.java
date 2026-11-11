@@ -219,8 +219,16 @@ public final class RtDetrLiveBridge {
      * child word boxes are reused for the host's geometry/colour pipeline. Free text
      * remains untouched in this stage, so signage/SFX cannot be silently discarded.
      */
+    /**
+     * Build native host OCR blocks from Paddle geometry. Bubble text must not depend
+     * on ML Kit having detected the same words: PP-OCRv6 supplies both parent and
+     * per-line child rectangles. Existing ML Kit blocks are retained only when they
+     * belong to free/unknown text outside RT-DETR speech-bubble containers.
+     */
     private static int applyPaddleBubbleGroups(
-            List<Object> blocks, List<PaddleOcrTextGroup> groups) {
+            List<Object> blocks,
+            List<PaddleOcrTextGroup> groups,
+            List<DetectedRegion> regions) {
         try {
             ArrayList<PaddleOcrTextGroup> bubbles = new ArrayList<>();
             for (PaddleOcrTextGroup group : groups) {
@@ -229,92 +237,113 @@ public final class RtDetrLiveBridge {
                     bubbles.add(group);
                 }
             }
-            if (bubbles.isEmpty() || blocks.isEmpty()) return 0;
+            if (bubbles.isEmpty()) return 0;
 
-            ArrayList<ArrayList<Object>> assigned = new ArrayList<>();
-            for (int i = 0; i < bubbles.size(); i++) assigned.add(new ArrayList<Object>());
-            ArrayList<Object> unmatched = new ArrayList<>();
-            for (Object block : blocks) {
-                Rect bounds = readBlockBounds(block);
-                if (bounds == null) { unmatched.add(block); continue; }
-                int best = -1;
-                double bestScore = 0.18d;
-                for (int i = 0; i < bubbles.size(); i++) {
-                    Rect bubble = bubbles.get(i).getBounds();
-                    Rect intersection = new Rect(bounds);
-                    if (!intersection.intersect(bubble)) continue;
-                    long inter = (long) intersection.width() * intersection.height();
-                    long smaller = Math.min((long) bounds.width() * bounds.height(),
-                            (long) bubble.width() * bubble.height());
-                    double score = smaller <= 0 ? 0d : (double) inter / smaller;
-                    if (bubble.contains(bounds.centerX(), bounds.centerY())) score = Math.max(score, 0.5d);
-                    if (score > bestScore) { bestScore = score; best = i; }
-                }
-                if (best >= 0) assigned.get(best).add(block);
-                else unmatched.add(block);
-            }
+            Class<?> childClass = Class.forName("nf.b");
+            Constructor<?> childConstructor = childClass.getDeclaredConstructor(
+                    String.class, Rect.class, List.class, String.class);
+            childConstructor.setAccessible(true);
 
             Class<?> parentClass = Class.forName("nf.c");
-            Constructor<?> constructor = parentClass.getDeclaredConstructor(
-                    String.class, Rect.class, List.class, String.class, java.util.AbstractList.class);
-            constructor.setAccessible(true);
+            Constructor<?> parentConstructor = parentClass.getDeclaredConstructor(
+                    String.class, Rect.class, List.class, String.class,
+                    java.util.AbstractList.class);
+            parentConstructor.setAccessible(true);
+
             ArrayList<Object> replacement = new ArrayList<>();
-            int replaced = 0;
-            for (int i = 0; i < bubbles.size(); i++) {
-                ArrayList<Object> sourceBlocks = assigned.get(i);
-                if (sourceBlocks.isEmpty()) continue;
-                PaddleOcrTextGroup group = bubbles.get(i);
+            int generated = 0;
+            for (PaddleOcrTextGroup group : bubbles) {
+                ArrayList<PaddleOcrTextLine> lines =
+                        new ArrayList<>(group.getLines());
+                if (lines.isEmpty()) {
+                    lines.add(new PaddleOcrTextLine(
+                            group.getText(), group.getBounds(), group.getConfidence()));
+                }
+
                 ArrayList<Object> children = new ArrayList<>();
-                String language = "en";
-                for (Object sourceBlock : sourceBlocks) {
-                    try {
-                        Object lang = sourceBlock.getClass().getField("d").get(sourceBlock);
-                        if (lang instanceof String && !((String) lang).isEmpty()) language = (String) lang;
-                    } catch (Throwable ignored) {}
-                    Object childList = sourceBlock.getClass().getMethod("f").invoke(sourceBlock);
-                    if (childList instanceof List<?>) {
-                        for (Object child : (List<?>) childList) {
-                            if (child != null && !containsIdentity(children, child)) children.add(child);
+                for (PaddleOcrTextLine line : lines) {
+                    if (line == null || line.getText() == null
+                            || line.getText().trim().isEmpty()) continue;
+                    Rect lineBounds = line.getBounds();
+                    if (lineBounds == null || lineBounds.width() <= 0
+                            || lineBounds.height() <= 0) continue;
+                    Object child = childConstructor.newInstance(
+                            line.getText(), lineBounds, rectanglePolygon(lineBounds), "en");
+                    children.add(child);
+                }
+                if (children.isEmpty()) {
+                    Log.w(TAG, "Paddle group skipped: no valid child line geometry; id="
+                            + group.getBubbleId() + " text=" + group.getText());
+                    continue;
+                }
+
+                Rect bounds = group.getBounds();
+                Object parent = parentConstructor.newInstance(
+                        group.getText(), bounds, rectanglePolygon(bounds), "en", children);
+                replacement.add(parent);
+                generated++;
+                Log.i(TAG, "Paddle native bubble block created: id=" + group.getBubbleId()
+                        + " lines=" + children.size()
+                        + " bounds=" + bounds.flattenToString()
+                        + " text=" + group.getText());
+            }
+            if (generated == 0) return 0;
+
+            // Preserve the host's independent ML Kit text blocks outside speech bubbles.
+            // Bubble blocks are fully replaced by Paddle blocks, never gated by ML Kit.
+            ArrayList<Object> retainedFreeText = new ArrayList<>();
+            int removedMlKitBubbleBlocks = 0;
+            for (Object block : blocks) {
+                Rect bounds = readBlockBounds(block);
+                if (bounds == null) {
+                    retainedFreeText.add(block);
+                    continue;
+                }
+                boolean belongsToBubble =
+                        findBubbleContainer(bounds, regions) >= 0
+                        || bestTextRegionScore(bounds, regions, OcrRegionKind.SPEECH_BUBBLE) > 0d;
+                if (!belongsToBubble) {
+                    for (PaddleOcrTextGroup group : bubbles) {
+                        Rect paddleBounds = group.getBounds();
+                        Rect intersection = new Rect(bounds);
+                        if (intersection.intersect(paddleBounds)) {
+                            long inter = (long) intersection.width() * intersection.height();
+                            long smaller = Math.min(
+                                    (long) bounds.width() * bounds.height(),
+                                    (long) paddleBounds.width() * paddleBounds.height());
+                            if (smaller > 0L && (double) inter / smaller >= 0.18d) {
+                                belongsToBubble = true;
+                                break;
+                            }
                         }
                     }
                 }
-                if (children.isEmpty()) {
-                    unmatched.addAll(sourceBlocks);
-                    continue;
-                }
-                Rect b = group.getBounds();
-                ArrayList<Point> polygon = new ArrayList<>();
-                polygon.add(new Point(b.left, b.top));
-                polygon.add(new Point(b.right, b.top));
-                polygon.add(new Point(b.right, b.bottom));
-                polygon.add(new Point(b.left, b.bottom));
-                Object merged = constructor.newInstance(
-                        group.getText(), b, polygon, language, children);
-                replacement.add(merged);
-                replaced++;
+                if (belongsToBubble) removedMlKitBubbleBlocks++;
+                else retainedFreeText.add(block);
             }
-            replacement.addAll(unmatched);
-            if (replaced == 0) return 0;
-            replacement.sort((a, b) -> {
-                Rect ra = readBlockBounds(a);
-                Rect rb = readBlockBounds(b);
-                if (ra == null) return rb == null ? 0 : 1;
-                if (rb == null) return -1;
-                int top = Integer.compare(ra.top, rb.top);
-                return top != 0 ? top : Integer.compare(ra.left, rb.left);
-            });
+
+            replacement.addAll(retainedFreeText);
             blocks.clear();
             blocks.addAll(replacement);
-            return replaced;
+            Log.i(TAG, "Paddle host handoff: paddle_bubbles=" + bubbles.size()
+                    + " native_blocks_created=" + generated
+                    + " mlkit_bubble_blocks_removed=" + removedMlKitBubbleBlocks
+                    + " mlkit_free_or_unknown_preserved=" + retainedFreeText.size()
+                    + " mlkit_required_for_bubbles=false");
+            return generated;
         } catch (Throwable error) {
-            Log.w(TAG, "Paddle host block conversion failed; ML Kit result retained", error);
+            Log.w(TAG, "Paddle native block conversion failed; original ML Kit result retained", error);
             return 0;
         }
     }
 
-    private static boolean containsIdentity(List<Object> list, Object value) {
-        for (Object item : list) if (item == value) return true;
-        return false;
+    private static ArrayList<Point> rectanglePolygon(Rect bounds) {
+        ArrayList<Point> polygon = new ArrayList<>();
+        polygon.add(new Point(bounds.left, bounds.top));
+        polygon.add(new Point(bounds.right, bounds.top));
+        polygon.add(new Point(bounds.right, bounds.bottom));
+        polygon.add(new Point(bounds.left, bounds.bottom));
+        return polygon;
     }
 
     private static Context resolveContext(Object owner) {
