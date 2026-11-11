@@ -113,6 +113,49 @@ jobs:
             --output build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk \
             --zipalign "$ANDROID_HOME/build-tools/35.0.0/zipalign"
 
+      - name: Export live OCR call-chain smali for integration audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          decoded="build/merge/base_decoded"
+          trace="build/ocr-live-call-chain-trace"
+          mkdir -p "$trace/smali"
+          test -d "$decoded"
+          for root in "$decoded"/smali*; do
+            [ -d "$root" ] || continue
+            for package in vh xh loh rh nf; do
+              if [ -d "$root/$package" ]; then
+                mkdir -p "$trace/smali/$(basename "$root")"
+                cp -R "$root/$package" "$trace/smali/$(basename "$root")/"
+              fi
+            done
+            for rel in \
+              "com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali" \
+              "ca/c2.smali" "u3/u.smali" "bo/t5.smali"; do
+              if [ -f "$root/$rel" ]; then
+                mkdir -p "$trace/smali/$(basename "$root")/$(dirname "$rel")"
+                cp "$root/$rel" "$trace/smali/$(basename "$root")/$rel"
+              fi
+            done
+          done
+          {
+            echo "=== OCR entrypoints and callbacks ==="
+            grep -RInE 'Lvh/j;->|Lvh/k;->|Loh/m;->|ScreenTranslateService;->c\(' "$decoded"/smali* 2>/dev/null | head -n 1200 || true
+          } > "$trace/call-sites.txt"
+          {
+            find "$trace/smali" -type f -name '*.smali' -print0 | sort -z | xargs -0 grep -nE '^\.class|^\.method' || true
+          } > "$trace/method-index.txt"
+          echo "Trace files:"
+          find "$trace" -type f -printf '%p %s bytes\n' | sort
+
+      - name: Upload live OCR call-chain trace
+        uses: actions/upload-artifact@v4
+        with:
+          name: TapTranslate-OCR-live-call-chain
+          path: build/ocr-live-call-chain-trace/
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Validate final unsigned APK
         run: |
           unzip -t build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk | tail -n 2
