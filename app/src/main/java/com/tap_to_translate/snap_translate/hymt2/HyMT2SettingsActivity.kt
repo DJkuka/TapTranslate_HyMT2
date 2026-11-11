@@ -408,7 +408,7 @@ class HyMT2SettingsActivity : Activity() {
                 runOnUiThread {
                     importing = false
                     if (!autoPicker && ::chooseButton.isInitialized) {
-                        chooseButton.isEnabled = !HyMT2Runtime.isLoaded()
+                        chooseButton.isEnabled = true
                         refreshState()
                     }
                 }
@@ -519,7 +519,7 @@ class HyMT2SettingsActivity : Activity() {
             }
             else -> "Модель ещё не выбрана. Поддерживаются Hy-MT2 Q4_K_M и Tencent Hy-MT2 1.25-bit STQ1_0."
         }
-        chooseButton.isEnabled = !importing && !HyMT2Runtime.isLoaded()
+        chooseButton.isEnabled = !importing
         loadButton.isEnabled = !importing && HyMT2Runtime.hasModel(this) && !HyMT2Runtime.isLoaded()
         unloadButton.isEnabled = HyMT2Runtime.isLoaded()
         updateStats()
