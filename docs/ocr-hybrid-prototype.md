@@ -60,14 +60,27 @@ The estimator has synthetic JVM tests for flat backgrounds, local-vs-distant col
 
 The host already has a sophisticated colour estimator in `ca/c2.e(Bitmap, Rect)`, but a closer smali trace shows that its colour histogram is built primarily from pixels inside the supplied rectangle; neighbouring outside pixels are used to inspect edge contrast. It is therefore not the outer-ring sampler requested here and must not be reused as if it were one. We will implement a separate outer-ring sampler for free text, while leaving the host estimator unchanged for existing bubble rendering.
 
+## YOLO output decoder
+
+A model-independent decoder now handles the dual-label segmentation head shape used by the reference model: `[1, 38, 44436]` in channel-first order (4 box values, 2 class scores, 32 mask coefficients). It:
+- maps class 0 to speech bubbles and class 1 to free text;
+- rejects non-finite, invalid and low-confidence boxes;
+- clips boxes to model input bounds;
+- applies class-aware non-maximum suppression;
+- preserves the 32 mask coefficients for a later contour/mask stage.
+
+The decoder does not load a model or run inference yet. It is tested with synthetic tensors, including class separation and overlapping predictions.
+
 ## Current status
 
-This commit contains the neutral data model and pipeline coordinator only. It is not yet wired into `ScreenTranslateService` and does not yet change runtime OCR behavior. The build workflow checks that the nine classes compile into the helper APK and survive the merge into `classes5.dex`.
+This branch now contains the neutral data model, region coordinator, outer-ring colour estimator and dual-label YOLO output decoder. It is not yet wired into `ScreenTranslateService` and does not yet change runtime OCR behavior. The build workflow runs JVM tests and checks that the classes compile into the helper APK and survive the merge into `classes5.dex`.
+
+The reference dual-label model is about 21.4 MB and expects a 1472 × 1472 FLOAT32 RGB input. Its source repository is AGPL-3.0; model redistribution/licensing must be checked before bundling it into the app. We are not copying its inference implementation.
 
 ## Next implementation steps
 
-1. Run the JVM tests for the outer-ring sampler and verify all new classes in the merged unsigned APK.
-2. Implement a detector adapter and test the chosen dual-label YOLO model on tablet-class hardware.
+1. Run the JVM tests for the outer-ring sampler and YOLO output decoder, then verify all new classes in the merged unsigned APK.
+2. Implement the model runtime and detector adapter only after the model's redistribution terms are confirmed; measure latency and memory on tablet-class hardware.
 3. Implement the first recognizer adapters. Keep the current OCR as a fallback, and use a Latin-only recognizer for free text.
 4. Add a full-screen capture bridge, preserving bitmap-local and screen coordinate transforms.
 5. Convert normalized regions to the existing host translation model while preserving one text region per translated overlay item.
