@@ -3,6 +3,7 @@ package com.tap_to_translate.snap_translate.hymt2.ocr
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.os.Build
 import android.util.Log
 import com.paddle.ocr.EngineConfig
 import com.paddle.ocr.PaddleOCR
