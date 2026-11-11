@@ -99,7 +99,12 @@ def main() -> int:
     float sumf = 0.0f;
 
     const uint8x16_t m3 = vdupq_n_u8(3);"""
-    stq_kernel_replacement = """#if 0 /* Android diagnostic: use the reference C STQ1_0 kernel until ARM NEON parity is verified. */
+    stq_kernel_replacement = """    const block_stq1_0 * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+#if 0 /* Android diagnostic: use the reference C STQ1_0 kernel until ARM NEON parity is verified. */
     float sumf = 0.0f;
 
     const uint8x16_t m3 = vdupq_n_u8(3);"""
