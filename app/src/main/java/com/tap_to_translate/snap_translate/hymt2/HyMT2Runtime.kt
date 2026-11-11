@@ -198,11 +198,21 @@ object HyMT2Runtime {
                                     options = options,
                                 )
                                 val promptTokens = HyMT2PenaltyNative.countPromptTokens(model, prompt)
+                                val sourceTokenEstimate = HyMT2PenaltyNative.countPromptTokens(model, sourceBlock).coerceAtLeast(1)
                                 val availableOutputTokens = (options.contextSize - promptTokens - 32).coerceAtLeast(0)
                                 if (availableOutputTokens < 8) {
                                     error("OCR-блок ${index + 1}/${sourceBlocks.size} не помещается в контекст ${options.contextSize}. Выбери больший контекст.")
                                 }
-                                val effectiveMaxTokens = min(options.maxTokens, availableOutputTokens)
+                                // maxTokens is a ceiling, not a fresh full budget for every OCR
+                                // fragment. Keep short labels/dialogue from expanding into pages
+                                // of generated text when the model fails to emit EOS promptly.
+                                // A generous 4x source-token allowance covers EN->RU expansion.
+                                val proportionalLimit = (sourceTokenEstimate.toLong() * 4L + 32L)
+                                    .coerceAtMost(Int.MAX_VALUE.toLong())
+                                    .toInt()
+                                    .coerceIn(64, options.maxTokens)
+                                val effectiveMaxTokens = min(proportionalLimit, availableOutputTokens)
+                                Log.d(TAG, "OCR block ${index + 1}/${sourceBlocks.size}: sourceTokens=$sourceTokenEstimate, promptTokens=$promptTokens, outputBudget=$effectiveMaxTokens")
                                 val completion = HyMT2PenaltyNative.complete(
                                     model = model,
                                     prompt = prompt,
