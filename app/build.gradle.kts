@@ -52,4 +52,5 @@ android {
 dependencies {
     implementation(files("libs/llama-android-vulkan.aar"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    testImplementation("junit:junit:4.13.2")
 }
