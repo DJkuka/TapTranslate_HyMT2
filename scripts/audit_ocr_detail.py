@@ -22,8 +22,10 @@ for p in all_smali:
 # and view/model classes used by this obfuscated app.
 roots = {
     "Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;",
-    "Lvh/j;", "Lvh/l;", "Lxh/c;", "Lrh/c;", "Lrh/d;", "Lrh/e;",
-    "Lrh/f;", "Lrh/m;", "Loh/m;", "Lx9/e;", "Lqh/p;",
+    "Lvh/j;", "Lvh/l;", "Lvh/h;", "Lvh/g;", "Lvh/m;", "Lvh/e;",
+    "Lxh/c;", "Lrh/c;", "Lrh/d;", "Lrh/e;", "Lrh/f;", "Lrh/m;",
+    "Loh/m;", "Lx9/e;", "Lqh/p;", "Lca/c2;", "Lca/g2;", "Lca/b2;",
+    "Lcom/google/android/gms/internal/consent_sdk/u;", "Lbo/t5;",
 }
 families = ("Lvh/", "Lxh/", "Lrh/", "Loh/", "Lx9/")
 selected = {d for d in roots if d in descriptor_to_path}
