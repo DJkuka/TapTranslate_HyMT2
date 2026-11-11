@@ -36,18 +36,27 @@ The existing app has a separate crop-selection path. It currently crops a bitmap
 - Free text: initially route to a Latin-script recognizer adapter.
 - Later: replace either adapter with a specialized comic OCR engine without changing the detector or normalized result model.
 
-The pipeline applies confidence filtering, clips all boxes to the visible bitmap, associates OCR boxes with their detected parent region using geometric overlap, and suppresses duplicate same-text boxes with high IoU.
+The pipeline applies confidence filtering, clips all boxes to the visible bitmap, associates OCR boxes with their detected parent region by measuring the fraction of the text box covered by the parent region (rather than IoU against a much larger bubble), and suppresses duplicate same-text boxes with high IoU.
 
 ## Free-text overlay
 
-The free-text overlay is a separate renderer behavior, not a recognizer responsibility:
+The free-text overlay is a separate renderer behavior, not a recognizer responsibility.
 
-1. retain the original screenshot bitmap until the background colour is sampled;
-2. build an expanded, padded replacement rectangle from the text line bounds;
-3. sample a narrow outer ring, excluding the text rectangle;
-4. estimate the dominant/robust colour and assess local variation;
-5. draw a plain filled rectangle with no stroke or border;
+The first independently testable component now exists:
+- `OuterRingColorEstimator` samples four non-overlapping strips outside the replacement rectangle;
+- it ignores transparent pixels, limits sampling work, quantizes RGB into a histogram, joins adjacent colour bins and takes channel medians from the dominant cluster;
+- `BackgroundSample` reports the estimated colour, sample count, confidence and a reliability flag;
+- `BitmapOuterRingSampler` adapts the estimator to Android Bitmap.
+
+The caller must not use the fallback grey when `isReliable()` is false. The planned renderer sequence is:
+1. retain the original screenshot bitmap until sampling finishes;
+2. build a padded replacement rectangle from each free-text line;
+3. sample outside that rectangle with a small gap, so text antialiasing and edge pixels do not contaminate the estimate;
+4. use the sampled fill only when confidence is sufficient; otherwise preserve the original area or use a later, explicitly chosen fallback;
+5. draw a square-corner filled rectangle with no stroke;
 6. fit the translated text into that rectangle.
+
+The estimator has synthetic JVM tests for flat backgrounds, local-vs-distant colour, mixed backgrounds, screen-edge clipping and the no-ring case. It is not yet connected to the live renderer.
 
 The host already has a sophisticated colour estimator in `ca/c2.e(Bitmap, Rect)`, but a closer smali trace shows that its colour histogram is built primarily from pixels inside the supplied rectangle; neighbouring outside pixels are used to inspect edge contrast. It is therefore not the outer-ring sampler requested here and must not be reused as if it were one. We will implement a separate outer-ring sampler for free text, while leaving the host estimator unchanged for existing bubble rendering.
 
@@ -57,7 +66,7 @@ This commit contains the neutral data model and pipeline coordinator only. It is
 
 ## Next implementation steps
 
-1. Build and verify the contract classes in the merged unsigned APK.
+1. Run the JVM tests for the outer-ring sampler and verify all new classes in the merged unsigned APK.
 2. Implement a detector adapter and test the chosen dual-label YOLO model on tablet-class hardware.
 3. Implement the first recognizer adapters. Keep the current OCR as a fallback, and use a Latin-only recognizer for free text.
 4. Add a full-screen capture bridge, preserving bitmap-local and screen coordinate transforms.
