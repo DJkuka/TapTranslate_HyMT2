@@ -201,7 +201,7 @@ def patch_live_hybrid_ocr(base: Path) -> None:
     # Sort completed overlay groups immediately before delivery to the UI callback.
     # Free text is retained; bubble groups are moved last because rh/f.onDraw paints
     # overlay entries in list order.
-    priority_hook = "    invoke-static {p0, p1}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->prioritizeBubbleOverlays(Ljava/lang/Object;Ljava/util/List;)V\\n"
+    priority_hook = "    invoke-static {p0, p1}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->prioritizeBubbleOverlays(Ljava/lang/Object;Ljava/util/List;)V\n"
     delivery_method = ".method public final l(Ljava/util/List;Landroid/graphics/Bitmap;Z)V"
     if priority_hook.strip() not in text:
         start = text.find(delivery_method)
@@ -212,7 +212,7 @@ def patch_live_hybrid_ocr(base: Path) -> None:
         callback = "    invoke-interface {v0, v1}, Lvh/k;->c(Ljava/util/List;)V"
         if callback not in method:
             raise RuntimeError("Could not find OCR overlay callback in vh/j->l")
-        method = method.replace(callback, priority_hook + "\\n" + callback, 1)
+        method = method.replace(callback, priority_hook + "\n" + callback, 1)
         text = text[:start] + method + text[method_end:]
 
     result_hook = "    invoke-static/range {p0 .. p3}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->filter(Ljava/lang/Object;Landroid/content/Context;Ljava/lang/Object;Landroid/graphics/Bitmap;)V\n"
