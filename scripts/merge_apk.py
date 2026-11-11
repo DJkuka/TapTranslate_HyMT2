@@ -182,7 +182,7 @@ def patch_live_hybrid_ocr(base: Path) -> None:
         lines = method.splitlines(keepends=True)
         offset = 0
         insert = None
-        for line in lines[1:]:
+        for line in lines:
             if line.strip().startswith((".locals ", ".registers ")):
                 insert = start + offset + len(line)
                 break
