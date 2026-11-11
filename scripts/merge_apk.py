@@ -198,22 +198,28 @@ def patch_live_hybrid_ocr(base: Path) -> None:
         )
         text = text[:insert] + "\n" + safe_frame_hook + text[insert:]
 
-    # Sort completed overlay groups immediately before delivery to the UI callback.
-    # Free text is retained; bubble groups are moved last because rh/f.onDraw paints
-    # overlay entries in list order.
-    priority_hook = "    invoke-static {p0, p1}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->prioritizeBubbleOverlays(Ljava/lang/Object;Ljava/util/List;)V\n"
-    delivery_method = ".method public final l(Ljava/util/List;Landroid/graphics/Bitmap;Z)V"
-    if priority_hook.strip() not in text:
-        start = text.find(delivery_method)
-        if start < 0:
-            raise RuntimeError("Could not find overlay delivery method vh/j->l(List,Bitmap,boolean)")
-        method_end = text.find(".end method", start)
-        method = text[start:method_end]
-        callback = "    invoke-interface {v0, v1}, Lvh/k;->c(Ljava/util/List;)V"
-        if callback not in method:
-            raise RuntimeError("Could not find OCR overlay callback in vh/j->l")
-        method = method.replace(callback, priority_hook + "\n" + callback, 1)
-        text = text[:start] + method + text[method_end:]
+    # The host posts overlay delivery through synthetic Runnable u3/u (switch case 6).
+    # Sort the same List immediately before vh/k.c(List), retaining all entries.
+    priority_hook = "    invoke-static {v0, v1}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->prioritizeBubbleOverlays(Ljava/lang/Object;Ljava/util/List;)V\\n"
+    runnable_path = base / "smali" / "u3" / "u.smali"
+    if not runnable_path.exists():
+        raise RuntimeError("Could not find synthetic OCR delivery runnable u3/u.smali")
+    runnable_text = runnable_path.read_text(encoding="utf-8")
+    case_marker = "    :pswitch_6\\n"
+    case_start = runnable_text.find(case_marker)
+    if case_start < 0:
+        raise RuntimeError("Could not find OCR delivery switch case in u3/u.smali")
+    case_end = runnable_text.find("    :pswitch_7", case_start)
+    if case_end < 0:
+        raise RuntimeError("Could not bound OCR delivery switch case")
+    case = runnable_text[case_start:case_end]
+    callback = "    invoke-interface {v0, v1}, Lvh/k;->c(Ljava/util/List;)V"
+    if callback not in case:
+        raise RuntimeError("Could not find OCR callback in u3/u case 6")
+    if priority_hook.strip() not in case:
+        case = case.replace(callback, priority_hook + callback, 1)
+        runnable_text = runnable_text[:case_start] + case + runnable_text[case_end:]
+        runnable_path.write_text(runnable_text, encoding="utf-8")
 
     result_hook = "    invoke-static/range {p0 .. p3}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->filter(Ljava/lang/Object;Landroid/content/Context;Ljava/lang/Object;Landroid/graphics/Bitmap;)V\n"
     result_method = ".method public final d(Landroid/content/Context;Lnf/d;Landroid/graphics/Bitmap;Z)V"
