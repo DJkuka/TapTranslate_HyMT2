@@ -53,7 +53,7 @@ public final class HybridOcrPipeline {
             if (clipped == null) continue;
             accepted.add(new DetectedRegion(
                     region.getId(), region.getKind(), clipped,
-                    region.getConfidence(), region.getContour()));
+                    region.getConfidence(), region.getContour(), region.getMaskCoefficients()));
         }
         Collections.sort(accepted, new Comparator<DetectedRegion>() {
             @Override public int compare(DetectedRegion left, DetectedRegion right) {
