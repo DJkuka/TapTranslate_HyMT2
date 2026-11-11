@@ -206,10 +206,10 @@ jobs:
           # verify each guard through its actual branch target rather than the
           # temporary source label used by merge_apk.py.
           guard_targets = re.findall(
-              r"invoke-static\\s+\\{v0, v2, v8, v13\\}, "
+              r"invoke-static\s+\{v0, v2, v8, v13\}, "
               r"Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->allowGrouping"
-              r"\\(Ljava/lang/Object;Ljava/lang/Object;II\\)Z\\s+"
-              r"move-result v20\\s+if-eqz v20, (:\\w+)",
+              r"\(Ljava/lang/Object;Ljava/lang/Object;II\)Z\s+"
+              r"move-result v20\s+if-eqz v20, (:\w+)",
               result,
           )
           if len(guard_targets) != 2 or len(set(guard_targets)) != 2:
