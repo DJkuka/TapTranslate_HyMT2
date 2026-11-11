@@ -122,6 +122,7 @@ jobs:
           unzip -l "$helper" | grep -F "assets/models/bubble_detection/detector-v4-s_int8.onnx"
           unzip -l "$helper" | grep -F "lib/arm64-v8a/libonnxruntime.so"
           unzip -l "$helper" | grep -F "lib/arm64-v8a/libonnxruntime4j_jni.so"
+          unzip -l "$helper" | grep -F "lib/arm64-v8a/libopencv_java4.so"
 
       - name: Merge Hy-MT2 runtime into the original Tap Translate APK
         run: |
@@ -272,23 +273,6 @@ jobs:
               raise SystemExit("Paddle diagnostic hook is missing from RT-DETR live bridge")
           print("Paddle OCR classes, OpenCV, both verified model assets and live diagnostic hook are present.")
           PY
-
-      - name: Publish standalone unsigned APK to an experimental prerelease
-        if: github.ref == 'refs/heads/ocr-paddle-prototype'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          apk="build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk"
-          release_apk="build/out/TapTranslate_1.125_PP-OCRv6_Vulkan_unsigned.apk"
-          cp "$apk" "$release_apk"
-          tag="paddle-ocr-prototype-$GITHUB_RUN_ID"
-          gh release create "$tag" "$release_apk" \
-            --title "Tap Translate PP-OCRv6 prototype ($GITHUB_RUN_ID)" \
-            --notes "Experimental unsigned APK with PP-OCRv6 diagnostic OCR running alongside ML Kit. Built from branch ocr-paddle-prototype. Not the stable release." \
-            --prerelease
-          gh release view "$tag" --json url,assets
 
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
