@@ -195,6 +195,8 @@ jobs:
           expected = "RtDetrLiveBridge;->onFrame(Ljava/lang/Object;Landroid/graphics/Bitmap;)V"
           if expected not in submit:
               raise SystemExit("RT-DETR must capture the exact Bitmap submitted to ML Kit in vh/j->a")
+          if "invoke-static {v0, v1}" not in submit or "move-object/from16 v1, p2" not in submit:
+              raise SystemExit("ML Kit frame hook must safely copy high parameter registers into low registers")
           if expected in capture:
               raise SystemExit("Obsolete early screenshot hook remains in vh/j->j")
           if "RtDetrLiveBridge;->filter" not in result:

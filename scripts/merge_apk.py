@@ -179,11 +179,24 @@ def patch_live_hybrid_ocr(base: Path) -> None:
         if method_end < 0:
             raise RuntimeError("Could not isolate vh/j->a ML Kit submission method")
         method = text[start:method_end]
-        registers = re.search(r"(?m)^    \\.(?:locals|registers) \\d+[ \\t]*$", method)
-        if registers is None:
+        lines = method.splitlines(keepends=True)
+        offset = 0
+        insert = None
+        for line in lines[1:]:
+            if line.strip().startswith((".locals ", ".registers ")):
+                insert = start + offset + len(line)
+                break
+            offset += len(line)
+        if insert is None:
             raise RuntimeError("Could not find vh/j->a register declaration")
-        insert = start + registers.end()
-        text = text[:insert] + "\\n" + frame_hook + text[insert:]
+        # p0 and p2 live above v15 in this method; copy them to low scratch registers
+        # before invoke-static, then the original prologue overwrites v0/v1 as usual.
+        safe_frame_hook = (
+            "    move-object/from16 v0, p0\\n"
+            "    move-object/from16 v1, p2\\n"
+            "    invoke-static {v0, v1}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->onFrame(Ljava/lang/Object;Landroid/graphics/Bitmap;)V\\n"
+        )
+        text = text[:insert] + "\\n" + safe_frame_hook + text[insert:]
 
     result_hook = "    invoke-static/range {p0 .. p3}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->filter(Ljava/lang/Object;Landroid/content/Context;Ljava/lang/Object;Landroid/graphics/Bitmap;)V\n"
     result_method = ".method public final d(Landroid/content/Context;Lnf/d;Landroid/graphics/Bitmap;Z)V"
@@ -230,7 +243,7 @@ def patch_live_hybrid_ocr(base: Path) -> None:
             method = method.replace(edge_block, guarded, 1)
         text = text[:method_start] + method + text[method_end:]
 
-    if frame_hook.strip() not in text or result_hook.strip() not in text:
+    if "invoke-static {v0, v1}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->onFrame" not in text or result_hook.strip() not in text:
         raise RuntimeError("RT-DETR hooks were not written into the live OCR call chain")
     if "RtDetrLiveBridge;->allowGrouping" not in text:
         raise RuntimeError("RT-DETR bubble grouping guard was not inserted")
