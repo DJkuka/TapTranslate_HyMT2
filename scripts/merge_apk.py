@@ -118,7 +118,7 @@ def verify_final_host_payload(base_apk: Path, final_apk: Path) -> None:
                 if prefix == "lib/" and name.rsplit("/", 1)[-1] in {
                     "libllama_jni.so", "libllama.so", "libggml.so",
                     "libggml-base.so", "libggml-cpu.so", "libggml-vulkan.so",
-                    "libhymt2_jni.so", "libc++_shared.so",
+                    "libhymt2_jni.so", "libc++_shared.so", "libopencv_java4.so",
                 }:
                     continue
                 if name not in built_names or original.read(name) != built.read(name):
@@ -756,6 +756,8 @@ def copy_helper_payload(helper: Path, base: Path) -> None:
         "kotlin",
         "org/jetbrains/annotations",
         "ai/onnxruntime",
+        "com/paddle/ocr",
+        "org/opencv",
     )
     count = copy_package(helper_dirs, base, prefixes)
     if count == 0:
