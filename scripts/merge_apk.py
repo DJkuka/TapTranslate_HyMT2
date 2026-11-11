@@ -229,18 +229,36 @@ def patch_live_hybrid_ocr(base: Path) -> None:
                 "Expected exactly two OCR grouping-edge sites in vh/j->d; found "
                 + str(method.count(edge_block))
             )
-        for edge_index in range(2):
+        # Locate both ORIGINAL edge sites before modifying the method. Replacing
+        # the same text twice is unsafe because the inserted guard itself contains
+        # edge_block, which would nest both guards at the first site and leave the
+        # second path unguarded.
+        edge_positions = []
+        search_from = 0
+        while True:
+            edge_pos = method.find(edge_block, search_from)
+            if edge_pos < 0:
+                break
+            edge_positions.append(edge_pos)
+            search_from = edge_pos + len(edge_block)
+        if len(edge_positions) != 2:
+            raise RuntimeError("Could not uniquely locate both original OCR grouping edges")
+
+        # Insert from right to left so original offsets remain valid.
+        for edge_index, edge_pos in reversed(list(enumerate(edge_positions))):
             label = ":hymt2_skip_bubble_edge_" + str(edge_index)
-            guarded = """    invoke-static {v0, v2, v8, v13}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->allowGrouping(Ljava/lang/Object;Ljava/lang/Object;II)Z
+            guard = """    invoke-static {v0, v2, v8, v13}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->allowGrouping(Ljava/lang/Object;Ljava/lang/Object;II)Z
 
     move-result v20
 
     if-eqz v20, """ + label + """
 
-""" + edge_block + """
+"""
+            guarded_tail = """
 
     """ + label
-            method = method.replace(edge_block, guarded, 1)
+            method = (method[:edge_pos] + guard + edge_block
+                      + guarded_tail + method[edge_pos + len(edge_block):])
         text = text[:method_start] + method + text[method_end:]
 
     if "invoke-static {v0, v1}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->onFrame" not in text or result_hook.strip() not in text:
