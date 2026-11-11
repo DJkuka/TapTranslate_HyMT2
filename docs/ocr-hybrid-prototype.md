@@ -49,7 +49,7 @@ The free-text overlay is a separate renderer behavior, not a recognizer responsi
 5. draw a plain filled rectangle with no stroke or border;
 6. fit the translated text into that rectangle.
 
-The host already has a sophisticated background-colour estimator in `ca/c2.e(Bitmap, Rect)`. It samples pixels outside the target rectangle, estimates dominant colour and local variation. This is a useful starting point, but it is currently used by the bubble-style path. The free-text route must call it deliberately and must retain the original frame for sampling.
+The host already has a sophisticated colour estimator in `ca/c2.e(Bitmap, Rect)`, but a closer smali trace shows that its colour histogram is built primarily from pixels inside the supplied rectangle; neighbouring outside pixels are used to inspect edge contrast. It is therefore not the outer-ring sampler requested here and must not be reused as if it were one. We will implement a separate outer-ring sampler for free text, while leaving the host estimator unchanged for existing bubble rendering.
 
 ## Current status
 
