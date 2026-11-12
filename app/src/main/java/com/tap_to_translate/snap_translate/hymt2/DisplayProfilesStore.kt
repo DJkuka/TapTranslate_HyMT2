@@ -337,10 +337,10 @@ object DisplayProfilesStore {
 
     private fun notifyHostSettingsChanged() {
         try {
-            val busClass = Class.forName("bn.d")
-            val bus = busClass.getMethod("b").invoke(null)
-            val event = Class.forName("oh.k").getDeclaredConstructor().newInstance()
-            busClass.getMethod("e", Any::class.java).invoke(bus, event)
+            val notifier = Class.forName(
+                "com.tap_to_translate.snap_translate.hymt2.DisplayProfilesHostNotifier"
+            )
+            notifier.getMethod("notify").invoke(null)
         } catch (t: Throwable) {
             Log.w(TAG, "Host settings event could not be posted; overlay refresh may be delayed", t)
         }
