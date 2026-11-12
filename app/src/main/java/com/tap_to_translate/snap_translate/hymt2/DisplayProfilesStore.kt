@@ -323,6 +323,11 @@ object DisplayProfilesStore {
             writeHawk(key, value)
         }
 
+        // The host manga dialog performs a one-time migration of these flags.
+        // Mark it complete after the profile's explicit values have been written,
+        // otherwise its first later opening could overwrite the selected preset.
+        writeHawk("HAWK_MANGA_DEFAULTS_V1", true)
+
         val ocr = snapshot.optJSONObject("ocr") ?: JSONObject()
         context.getSharedPreferences(OCR_PREFS, Context.MODE_PRIVATE).edit()
             .putBoolean(KEY_FREE_ALPHA_ENABLED, ocr.optBoolean(KEY_FREE_ALPHA_ENABLED, false))
