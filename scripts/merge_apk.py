@@ -131,6 +131,9 @@ ROW_ID = "0x7f0a04f1"
 OCR_ROW_ID_NAME = "ocr_settings_row"
 OCR_ROW_ID = "0x7f0a04f2"
 OCR_SETTINGS_ACTIVITY = "com.tap_to_translate.snap_translate.hymt2.OcrSettingsActivity"
+PROFILE_ACTIVITY = "com.tap_to_translate.snap_translate.hymt2.DisplayProfilesActivity"
+PROFILE_ROW_ID_NAME = "display_profiles_row"
+PROFILE_ROW_ID = "0x7f0a04f4"
 PADDLE_OCR_NAME = "PP-OCRv6 (Comics)"
 MLKIT_OCR_NAME = "ML Kit (Device Text Recognition)"
 
@@ -1109,6 +1112,154 @@ def patch_screenshot_button(base: Path) -> None:
     print("Added translation screenshot toolbar button and helper callback")
 
 
+def patch_display_profiles(base: Path) -> None:
+    """Expose the profile manager in the main Settings tab."""
+    layout = base / "res/layout/fragment_settings.xml"
+    xml_text = layout.read_text(encoding="utf-8")
+    if PROFILE_ROW_ID_NAME not in xml_text:
+        anchor = '<LinearLayout android:gravity="start|center" android:orientation="horizontal" android:id="@id/fragment_setting_ll_voice_settings"'
+        if xml_text.count(anchor) != 1:
+            raise RuntimeError("Could not locate voice-settings row for display profiles")
+        row = f'''<LinearLayout android:gravity="start|center" android:orientation="horizontal" android:id="@id/{PROFILE_ROW_ID_NAME}" android:paddingLeft="15.0dip" android:paddingTop="15.0dip" android:paddingRight="15.0dip" android:paddingBottom="15.0dip" android:focusable="true" android:clickable="true" android:layout_width="fill_parent" android:layout_height="wrap_content" android:foreground="@drawable/fg_efftect">
+                <ImageView android:padding="5.0dip" android:layout_width="30.0dip" android:layout_height="30.0dip" android:layout_marginRight="10.0dip" android:src="@drawable/ic_download_svg" />
+                <TextView android:textSize="18.0dip" android:textColor="@color/cl_text_word" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Профили оформления текста" />
+            </LinearLayout>
+            <View android:background="@color/cl_underLine" android:layout_width="fill_parent" android:layout_height="1.0dip" android:layout_marginLeft="25.0dip" android:layout_marginRight="25.0dip" />
+            '''
+        layout.write_text(xml_text.replace(anchor, row + anchor, 1), encoding="utf-8")
+
+    ids = base / "res/values/ids.xml"
+    ids_text = ids.read_text(encoding="utf-8")
+    if PROFILE_ROW_ID_NAME not in ids_text:
+        anchor = f'    <item type="id" name="container_widget_iv_screenshot" />\n'
+        if anchor not in ids_text:
+            raise RuntimeError("Could not locate last allocated resource id for profile manager")
+        ids.write_text(ids_text.replace(anchor, anchor + f'    <item type="id" name="{PROFILE_ROW_ID_NAME}" />\n', 1), encoding="utf-8")
+
+    public = base / "res/values/public.xml"
+    public_text = public.read_text(encoding="utf-8")
+    if PROFILE_ROW_ID_NAME not in public_text:
+        if re.search(r'id="0x7f0a04f4"', public_text):
+            raise RuntimeError("Resource ID 0x7f0a04f4 is already occupied")
+        anchor = '    <public type="id" name="container_widget_iv_screenshot" id="0x7f0a04f3" />\n'
+        if public_text.count(anchor) != 1:
+            raise RuntimeError("Could not locate screenshot button resource ID")
+        public.write_text(
+            public_text.replace(
+                anchor,
+                anchor + f'    <public type="id" name="{PROFILE_ROW_ID_NAME}" id="{PROFILE_ROW_ID}" />\n',
+                1,
+            ),
+            encoding="utf-8",
+        )
+
+    if PROFILE_ROW_ID_NAME not in layout.read_text(encoding="utf-8"):
+        raise RuntimeError("Display profile settings row was not inserted")
+    if PROFILE_ROW_ID_NAME not in ids.read_text(encoding="utf-8"):
+        raise RuntimeError("Display profile resource ID is missing from ids.xml")
+    if PROFILE_ROW_ID_NAME not in public.read_text(encoding="utf-8"):
+        raise RuntimeError("Display profile resource ID is missing from public.xml")
+
+
+def patch_display_profiles_click(base: Path) -> None:
+    """Wire the main settings row to DisplayProfilesActivity."""
+    fragment = base / "smali_classes3/mh/p.smali"
+    text = fragment.read_text(encoding="utf-8")
+    method_start = text.find(".method public final onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V")
+    method_end = text.find(".end method", method_start)
+    if method_start < 0 or method_end < 0:
+        raise RuntimeError("Could not isolate main settings onViewCreated for profile manager")
+    method = text[method_start:method_end]
+    if "DisplayProfilesSettingsClickListener" not in method:
+        anchor = "    return-void\n"
+        insert_at = method.rfind(anchor)
+        if insert_at < 0:
+            raise RuntimeError("Could not find end of profile settings callback method")
+        code = f'''    invoke-virtual {{p0}}, Landroidx/fragment/app/Fragment;->requireView()Landroid/view/View;
+
+    move-result-object v1
+
+    const v2, {PROFILE_ROW_ID}
+
+    invoke-virtual {{v1, v2}}, Landroid/view/View;->findViewById(I)Landroid/view/View;
+
+    move-result-object v1
+
+    new-instance v2, Lcom/tap_to_translate/snap_translate/hymt2/DisplayProfilesSettingsClickListener;
+
+    invoke-direct {{v2, p0}}, Lcom/tap_to_translate/snap_translate/hymt2/DisplayProfilesSettingsClickListener;-><init>(Lmh/p;)V
+
+    invoke-virtual {{v1, v2}}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+
+'''
+        method = method[:insert_at] + code + method[insert_at:]
+        text = text[:method_start] + method + text[method_end:]
+        fragment.write_text(text, encoding="utf-8")
+
+    listener = base / "smali_classes5/com/tap_to_translate/snap_translate/hymt2/DisplayProfilesSettingsClickListener.smali"
+    listener.parent.mkdir(parents=True, exist_ok=True)
+    listener.write_text('''.class public final Lcom/tap_to_translate/snap_translate/hymt2/DisplayProfilesSettingsClickListener;
+.super Ljava/lang/Object;
+
+# interfaces
+.implements Landroid/view/View$OnClickListener;
+
+.field private final a:Lmh/p;
+
+.method public constructor <init>(Lmh/p;)V
+    .locals 0
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+    iput-object p1, p0, Lcom/tap_to_translate/snap_translate/hymt2/DisplayProfilesSettingsClickListener;->a:Lmh/p;
+    return-void
+.end method
+
+.method public final onClick(Landroid/view/View;)V
+    .locals 3
+    iget-object v0, p0, Lcom/tap_to_translate/snap_translate/hymt2/DisplayProfilesSettingsClickListener;->a:Lmh/p;
+    invoke-virtual {v0}, Landroidx/fragment/app/Fragment;->requireContext()Landroid/content/Context;
+    move-result-object v0
+    new-instance v1, Landroid/content/Intent;
+    const-class v2, Lcom/tap_to_translate/snap_translate/hymt2/DisplayProfilesActivity;
+    invoke-direct {v1, v0, v2}, Landroid/content/Intent;-><init>(Landroid/content/Context;Ljava/lang/Class;)V
+    invoke-virtual {v0, v1}, Landroid/content/Context;->startActivity(Landroid/content/Intent;)V
+    return-void
+.end method
+''', encoding="utf-8")
+
+    fragment_text = fragment.read_text(encoding="utf-8")
+    start = fragment_text.find(".method public final onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V")
+    end = fragment_text.find(".end method", start)
+    if "DisplayProfilesSettingsClickListener" not in fragment_text[start:end]:
+        raise RuntimeError("Display profile settings row has no click listener")
+
+
+def patch_profile_apply_hook(base: Path) -> None:
+    """Apply a scheduled preset immediately before the next translated-page result is set."""
+    service = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali"
+    text = service.read_text(encoding="utf-8")
+    method_start = text.find(".method public final c(Ljava/util/List;)V")
+    method_end = text.find(".end method", method_start)
+    if method_start < 0 or method_end < 0:
+        raise RuntimeError("Could not find ScreenTranslateService result-list method")
+    method = text[method_start:method_end]
+    hook = "    invoke-static {p0}, Lcom/tap_to_translate/snap_translate/hymt2/DisplayProfilesStore;->applyPendingProfile(Landroid/content/Context;)V\n\n"
+    if "DisplayProfilesStore;->applyPendingProfile" not in method:
+        anchor = '''    :cond_1
+    invoke-virtual {p0}, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->h()Lrh/c;'''
+        if method.count(anchor) != 1:
+            raise RuntimeError("Could not locate next-page handoff for deferred profile application")
+        method = method.replace(
+            anchor,
+            '''    :cond_1
+''' + hook + '''    invoke-virtual {p0}, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->h()Lrh/c;''',
+            1,
+        )
+        text = text[:method_start] + method + text[method_end:]
+        service.write_text(text, encoding="utf-8")
+    if "DisplayProfilesStore;->applyPendingProfile" not in service.read_text(encoding="utf-8"):
+        raise RuntimeError("Deferred profile application hook was not installed")
+
+
 def patch_manifest(base: Path) -> None:
     path = base / "AndroidManifest.xml"
     text = path.read_text(encoding="utf-8")
@@ -1118,6 +1269,8 @@ def patch_manifest(base: Path) -> None:
         activities.append(f'''        <activity android:name="{ACTIVITY}" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="Hy-MT2 Offline" />\n''')
     if OCR_SETTINGS_ACTIVITY not in text:
         activities.append(f'''        <activity android:name="{OCR_SETTINGS_ACTIVITY}" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="OCR settings" />\n''')
+    if PROFILE_ACTIVITY not in text:
+        activities.append(f'''        <activity android:name="{PROFILE_ACTIVITY}" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="Display profiles" />\n''')
     if not activities:
         return
     if marker not in text:
@@ -1298,6 +1451,9 @@ def main() -> int:
     patch_resources(base)
     patch_ocr_resources(base)
     patch_screenshot_button(base)
+    patch_display_profiles(base)
+    patch_display_profiles_click(base)
+    patch_profile_apply_hook(base)
     patch_manifest(base)
     assert_preserved_ocr(base, preserved_ocr)
 
