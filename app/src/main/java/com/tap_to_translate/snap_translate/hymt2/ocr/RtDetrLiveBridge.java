@@ -445,8 +445,19 @@ public final class RtDetrLiveBridge {
     public static boolean allowGrouping(
             Object owner, Object blockListValue, int firstIndex, int secondIndex) {
         try {
-            if (!(blockListValue instanceof List<?>)) return true;
-            List<?> blocks = (List<?>) blockListValue;
+            List<?> blocks;
+            if (blockListValue instanceof List<?>) {
+                blocks = (List<?>) blockListValue;
+            } else if (blockListValue != null) {
+                // The live host passes nf/d, not its inner ArrayList directly.
+                // nf/d.a contains the actual nf/c OCR blocks.
+                Field listField = blockListValue.getClass().getField("a");
+                Object listValue = listField.get(blockListValue);
+                if (!(listValue instanceof List<?>)) return true;
+                blocks = (List<?>) listValue;
+            } else {
+                return true;
+            }
             if (firstIndex < 0 || secondIndex < 0
                     || firstIndex >= blocks.size() || secondIndex >= blocks.size()) return true;
 
@@ -466,9 +477,9 @@ public final class RtDetrLiveBridge {
             // remain eligible for the host's normal paragraph grouping.
             int firstContainer = findBubbleContainer(first, regions);
             int secondContainer = findBubbleContainer(second, regions);
-            if (firstContainer >= 0 && secondContainer >= 0
-                    && firstContainer != secondContainer) {
-                Log.i(TAG, "prevented cross-bubble OCR grouping: blocks="
+            if (firstContainer != secondContainer
+                    && (firstContainer >= 0 || secondContainer >= 0)) {
+                Log.i(TAG, "prevented cross-region OCR grouping: blocks="
                         + firstIndex + "," + secondIndex
                         + " containers=" + firstContainer + "," + secondContainer);
                 return false;
