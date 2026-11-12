@@ -34,6 +34,12 @@ public final class RtDetrLiveBridge {
             Collections.synchronizedMap(new WeakHashMap<Object, PendingFrame>());
     private static final Map<Object, List<DetectedRegion>> ACTIVE_REGIONS =
             Collections.synchronizedMap(new WeakHashMap<Object, List<DetectedRegion>>());
+    private static final Map<Object, Boolean> OVERLAY_IS_BUBBLE =
+            Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
+    private static final String OCR_PREFS = "taptranslate_ocr_settings";
+    private static final String FREE_ALPHA_ENABLED = "ocr_free_text_alpha_enabled";
+    private static final String FREE_ALPHA_PERCENT = "ocr_free_text_alpha_percent";
+    private static final String PADDLE_ENGINE_NAME = "PP-OCRv6 (Comics)";
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor(
             new ThreadFactory() {
                 @Override public Thread newThread(Runnable task) {
@@ -56,6 +62,17 @@ public final class RtDetrLiveBridge {
         final Context context = resolveContext(owner);
         if (context == null) {
             Log.w(TAG, "RT-DETR skipped: host OCR context unavailable");
+            return;
+        }
+
+        final boolean paddleEnabled = isPaddleSelected();
+        final boolean classifyForFreeTextOpacity = isSeparateFreeTextAlphaEnabled(context);
+        if (!paddleEnabled && !classifyForFreeTextOpacity) {
+            synchronized (LOCK) {
+                PendingFrame previous = PENDING.remove(owner);
+                if (previous != null && !previous.task.isDone()) previous.task.cancel(true);
+                ACTIVE_REGIONS.remove(owner);
+            }
             return;
         }
 
@@ -125,6 +142,15 @@ public final class RtDetrLiveBridge {
             return;
         }
 
+        final Context resolvedContext = resolveContext(owner);
+        final boolean paddleEnabled = isPaddleSelected();
+        if (!paddleEnabled && !isSeparateFreeTextAlphaEnabled(resolvedContext)) {
+            synchronized (LOCK) {
+                ACTIVE_REGIONS.remove(owner);
+            }
+            return;
+        }
+
         final PendingFrame pending;
         synchronized (LOCK) {
             pending = PENDING.get(owner);
@@ -157,6 +183,11 @@ public final class RtDetrLiveBridge {
 
         if (regions == null || regions.isEmpty()) {
             Log.w(TAG, "RT-DETR returned no text regions; original OCR retained");
+            return;
+        }
+
+        if (!paddleEnabled) {
+            Log.i(TAG, "ML Kit selected; RT-DETR is used only for free-text/bubble classification; Paddle is bypassed");
             return;
         }
 
@@ -496,7 +527,7 @@ public final class RtDetrLiveBridge {
      * so bubble groups must be moved to the tail of the list.
      */
     public static void prioritizeBubbleOverlays(Object owner, List<?> overlayGroups) {
-        if (owner == null || overlayGroups == null || overlayGroups.size() < 2) return;
+        if (owner == null || overlayGroups == null || overlayGroups.isEmpty()) return;
         final List<DetectedRegion> regions;
         synchronized (LOCK) {
             regions = ACTIVE_REGIONS.get(owner);
@@ -511,6 +542,7 @@ public final class RtDetrLiveBridge {
                 Rect bounds = readOverlayBounds(group);
                 if (bounds == null) {
                     unreadable++;
+                    OVERLAY_IS_BUBBLE.put(group, Boolean.FALSE);
                     underlays.add(group);
                     continue;
                 }
@@ -526,6 +558,7 @@ public final class RtDetrLiveBridge {
                         ? bubbleTextScore >= freeTextScore
                         : freeTextScore == 0d && findBubbleContainer(bounds, regions) >= 0;
 
+                OVERLAY_IS_BUBBLE.put(group, Boolean.valueOf(isBubbleText));
                 if (isBubbleText) bubbleOverlays.add(group);
                 else underlays.add(group);
             }
@@ -541,6 +574,51 @@ public final class RtDetrLiveBridge {
                     + " unreadable_bounds=" + unreadable);
         } catch (Throwable error) {
             Log.w(TAG, "Overlay draw priority failed; original order retained", error);
+        }
+    }
+
+
+    /**
+     * Applies a separate background fill alpha only to a detector-classified free-text overlay.
+     * Unknown and bubble overlays preserve the exact host alpha.
+     */
+    public static int resolveBackgroundAlpha(Context context, Object overlay, int originalAlpha) {
+        if (context == null || overlay == null) return originalAlpha;
+        try {
+            android.content.SharedPreferences prefs =
+                    context.getSharedPreferences(OCR_PREFS, Context.MODE_PRIVATE);
+            if (!prefs.getBoolean(FREE_ALPHA_ENABLED, false)) return originalAlpha;
+            Boolean isBubble = OVERLAY_IS_BUBBLE.get(overlay);
+            if (isBubble == null || isBubble.booleanValue()) return originalAlpha;
+            int percent = prefs.getInt(FREE_ALPHA_PERCENT, -1);
+            if (percent < 0) return originalAlpha;
+            percent = Math.max(0, Math.min(100, percent));
+            return Math.max(0, Math.min(255, Math.round(percent * 255f / 100f)));
+        } catch (Throwable error) {
+            Log.w(TAG, "Separate free-text alpha lookup failed; original alpha retained", error);
+            return originalAlpha;
+        }
+    }
+
+    private static boolean isSeparateFreeTextAlphaEnabled(Context context) {
+        if (context == null) return false;
+        try {
+            return context.getSharedPreferences(OCR_PREFS, Context.MODE_PRIVATE)
+                    .getBoolean(FREE_ALPHA_ENABLED, false);
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not read free-text alpha preference", error);
+            return false;
+        }
+    }
+
+    private static boolean isPaddleSelected() {
+        try {
+            Class<?> selector = Class.forName("vh.l");
+            Object selected = selector.getMethod("c").invoke(null);
+            return PADDLE_ENGINE_NAME.equals(selected);
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not read OCR selector; preserving current PP-OCRv6 route", error);
+            return true;
         }
     }
 
