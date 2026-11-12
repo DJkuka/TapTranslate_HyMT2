@@ -83,6 +83,26 @@ jobs:
           done
           grep -R -n -i -E "$pattern" build/decoded/smali* > diagnostics/relevant-smali-index.txt || true
 
+          # Capture exact live host classes needed for display profiles and translated-area screenshots.
+          mkdir -p diagnostics/host-flow
+          for root in build/decoded/smali*; do
+            [ -d "$root" ] || continue
+            for rel in \
+              "rh/c.smali" "rh/a.smali" "rh/h.smali" "rh/f.smali" \
+              "xh/c.smali" "xh/a.smali" "xh/b.smali" \
+              "ca/d2.smali" "ca/g2.smali" "qh/n.smali" \
+              "kh/v.smali" "mh/l.smali" \
+              "com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali" \
+              "com/tap_to_translate/snap_translate/domain/main/activitys/TransparentActivity.smali"; do
+              if [ -f "$root/$rel" ]; then
+                mkdir -p "diagnostics/host-flow/$(basename "$root")/$(dirname "$rel")"
+                cp "$root/$rel" "diagnostics/host-flow/$(basename "$root")/$rel"
+              fi
+            done
+          done
+          grep -R -n -E 'Lrh/c;->|Lxh/c;->|Lca/d2;->|Lqh/n;->|Lkh/v;->|HAWK_(MANGA|VERTICAL|UPCASE|CENTER|FONT|STYLE|BACKGROUND|TEXT)' \
+            build/decoded/smali* > diagnostics/host-flow-call-sites.txt || true
+
           # Include app strings and resource references used by the display controls.
           mkdir -p diagnostics/values-all
           find build/decoded/res/values* -maxdepth 1 -type f \
