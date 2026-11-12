@@ -2,6 +2,9 @@ name: Inspect Tap Translate host callbacks and settings screens
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - ocr-paddle-prototype
 
 permissions:
   contents: read
