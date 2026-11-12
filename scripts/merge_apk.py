@@ -1060,7 +1060,7 @@ def patch_screenshot_button(base: Path) -> None:
 
     const v1, 0x7f0a04f3
 
-    invoke-virtual {v2, v1}, Landroid/view/View;->findViewById(I)Landroid/view/View;
+    invoke-virtual {v0, v1}, Landroid/view/View;->findViewById(I)Landroid/view/View;
 
     move-result-object v1
 
@@ -1068,7 +1068,7 @@ def patch_screenshot_button(base: Path) -> None:
 
     new-instance v2, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;
 
-    invoke-direct {v2, v2}, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;-><init>(Landroid/view/View;)V
+    invoke-direct {v2, v0}, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;-><init>(Lrh/c;)V
 
     invoke-virtual {v1, v2}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
 
@@ -1087,18 +1087,18 @@ def patch_screenshot_button(base: Path) -> None:
 # interfaces
 .implements Landroid/view/View$OnClickListener;
 
-.field private final a:Landroid/view/View;
+.field private final a:Lrh/c;
 
-.method public constructor <init>(Landroid/view/View;)V
+.method public constructor <init>(Lrh/c;)V
     .locals 0
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
-    iput-object p1, p0, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;->a:Landroid/view/View;
+    iput-object p1, p0, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;->a:Lrh/c;
     return-void
 .end method
 
 .method public final onClick(Landroid/view/View;)V
     .locals 1
-    iget-object v0, p0, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;->a:Landroid/view/View;
+    iget-object v0, p0, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;->a:Lrh/c;
     invoke-static {v0}, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager;->captureFromOverlay(Ljava/lang/Object;)V
     return-void
 .end method
