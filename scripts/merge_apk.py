@@ -1046,25 +1046,26 @@ def patch_screenshot_button(base: Path) -> None:
     if "TranslationScreenshotClickListener" not in method:
         if "    .locals 14\n" not in method:
             raise RuntimeError("Unexpected local-register layout in ScreenTranslateService.h()")
-        method = method.replace("    .locals 14\n", "    .locals 16\n", 1)
+        # Keep the original register count so p0 remains encodable as v14.
+        # v1/v2 are dead after the preceding listener is attached.
         click_anchor = '''    invoke-virtual {v2, v1}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
 
     new-instance v1, Lrh/b;'''
         click_hook = '''    invoke-virtual {v2, v1}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
 
-    const v14, 0x7f0a04f3
+    const v1, 0x7f0a04f3
 
-    invoke-virtual {v0, v14}, Landroid/view/View;->findViewById(I)Landroid/view/View;
+    invoke-virtual {p0, v1}, Landroid/view/View;->findViewById(I)Landroid/view/View;
 
-    move-result-object v14
+    move-result-object v1
 
-    check-cast v14, Landroid/widget/ImageView;
+    check-cast v1, Landroid/widget/ImageView;
 
-    new-instance v15, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;
+    new-instance v2, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;
 
-    invoke-direct {v15, v0}, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;-><init>(Lrh/c;)V
+    invoke-direct {v2, p0}, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;-><init>(Lrh/c;)V
 
-    invoke-virtual {v14, v15}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+    invoke-virtual {v1, v2}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
 
     new-instance v1, Lrh/b;'''
         if method.count(click_anchor) != 1:
