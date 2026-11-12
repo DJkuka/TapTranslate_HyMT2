@@ -104,7 +104,7 @@ object PaddleOcrLiveBridge {
             BubbleRegionMatcher.Bounds(it.left, it.top, it.right, it.bottom)
         }
         val lines = result.results.mapIndexedNotNull { i, item ->
-            val text = item.text.replace('\\n', ' ').replace('\\r', ' ').take(200).trim()
+            val text = item.text.replace('\n', ' ').replace('\r', ' ').take(200).trim()
             if (text.isEmpty()) {
                 Log.w(TAG, "skip empty OCR detection index=$i conf=${item.confidence}")
                 return@mapIndexedNotNull null
@@ -128,7 +128,7 @@ object PaddleOcrLiveBridge {
             Line(i, item.confidence, rect, text, bubbleId)
         }
         val emptyResultCount = result.results.count {
-            it.text.replace('\\n', ' ').replace('\\r', ' ').isBlank()
+            it.text.replace('\n', ' ').replace('\r', ' ').isBlank()
         }
         if (emptyResultCount > 0) {
             Log.w(TAG, "ignored empty OCR detections=${emptyResultCount}; valid_lines=${lines.size}")
