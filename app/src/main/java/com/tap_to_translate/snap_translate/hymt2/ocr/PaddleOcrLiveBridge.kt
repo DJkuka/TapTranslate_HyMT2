@@ -103,17 +103,35 @@ object PaddleOcrLiveBridge {
         val bubbleBounds = bubbleRegions.map { it.bounds }.map {
             BubbleRegionMatcher.Bounds(it.left, it.top, it.right, it.bottom)
         }
-        val lines = result.results.mapIndexed { i, item ->
+        val lines = result.results.mapIndexedNotNull { i, item ->
+            val text = item.text.replace('\\n', ' ').replace('\\r', ' ').take(200).trim()
+            if (text.isEmpty()) {
+                Log.w(TAG, "skip empty OCR detection index=$i conf=${item.confidence}")
+                return@mapIndexedNotNull null
+            }
             val pts = item.box.points
+            if (pts.isEmpty()) {
+                Log.w(TAG, "skip OCR detection with empty polygon index=$i text=$text")
+                return@mapIndexedNotNull null
+            }
             val l = floor(pts.minOf { it.x }.toDouble()).toInt().coerceIn(0, width)
             val t = floor(pts.minOf { it.y }.toDouble()).toInt().coerceIn(0, height)
             val r = ceil(pts.maxOf { it.x }.toDouble()).toInt().coerceIn(0, width)
             val b = ceil(pts.maxOf { it.y }.toDouble()).toInt().coerceIn(0, height)
             val rect = Rect(l, t, r, b)
+            if (rect.width() <= 0 || rect.height() <= 0) {
+                Log.w(TAG, "skip OCR detection with empty bounds index=$i text=$text")
+                return@mapIndexedNotNull null
+            }
             val containerIndex = BubbleRegionMatcher.findBestContainer(l, t, r, b, bubbleBounds)
             val bubbleId = if (containerIndex >= 0) bubbleRegions[containerIndex].id else null
-            val text = item.text.replace('\n', ' ').replace('\r', ' ').take(200)
             Line(i, item.confidence, rect, text, bubbleId)
+        }
+        val emptyResultCount = result.results.count {
+            it.text.replace('\\n', ' ').replace('\\r', ' ').isBlank()
+        }
+        if (emptyResultCount > 0) {
+            Log.w(TAG, "ignored empty OCR detections=${emptyResultCount}; valid_lines=${lines.size}")
         }
         lines.forEach { line ->
             Log.i(TAG, "line[${line.index}] conf=${line.confidence} bubble=${line.bubbleId ?: "FREE_OR_UNMATCHED"} bounds=${line.bounds.flattenToString()} text=${line.text}")
