@@ -128,6 +128,11 @@ def verify_final_host_payload(base_apk: Path, final_apk: Path) -> None:
 ACTIVITY = "com.tap_to_translate.snap_translate.hymt2.HyMT2SettingsActivity"
 ROW_ID_NAME = "hymt2_model_manager_row"
 ROW_ID = "0x7f0a04f1"
+OCR_ROW_ID_NAME = "ocr_settings_row"
+OCR_ROW_ID = "0x7f0a04f2"
+OCR_SETTINGS_ACTIVITY = "com.tap_to_translate.snap_translate.hymt2.OcrSettingsActivity"
+PADDLE_OCR_NAME = "PP-OCRv6 (Comics)"
+MLKIT_OCR_NAME = "ML Kit (Device Text Recognition)"
 
 
 def run(cmd: list[str], cwd: Path | None = None) -> None:
@@ -324,6 +329,243 @@ def patch_live_hybrid_ocr(base: Path) -> None:
         raise RuntimeError("RT-DETR bubble grouping guard was not inserted")
     path.write_text(text, encoding="utf-8")
     print("Wired RT-DETR into capture, ML Kit filtering and cross-bubble grouping guard")
+
+
+
+def patch_ocr_engine_picker(base: Path) -> None:
+    """Expose PP-OCRv6 and a true ML Kit-only choice in the native OCR selector."""
+    path = base / "smali_classes3/vh/l.smali"
+    text = path.read_text(encoding="utf-8")
+    if PADDLE_OCR_NAME not in text:
+        method = ".method static constructor <clinit>()V"
+        start = text.find(method)
+        end = text.find(".end method", start)
+        if start < 0 or end < 0:
+            raise RuntimeError("Could not find vh/l OCR engine list initializer")
+        body = text[start:end]
+        if "    .locals 3\n" not in body:
+            raise RuntimeError("Unexpected register count in vh/l initializer")
+        body = body.replace("    .locals 3\n", "    .locals 4\n", 1)
+        old = """    const-string v1, "Device Text Recognition"
+
+    const-string v2, "Cloud Text Recognition"
+
+    filled-new-array {v1, v2}, [Ljava/lang/String;"""
+        new = f"""    const-string v1, "{PADDLE_OCR_NAME}"
+
+    const-string v2, "{MLKIT_OCR_NAME}"
+
+    const-string v3, "Cloud Text Recognition"
+
+    filled-new-array {{v1, v2, v3}}, [Ljava/lang/String;"""
+        if old not in body:
+            raise RuntimeError("Could not identify original two-item OCR engine list")
+        body = body.replace(old, new, 1)
+        text = text[:start] + body + text[end:]
+
+    method = ".method public static c()Ljava/lang/String;"
+    start = text.find(method)
+    end = text.find(".end method", start)
+    if start < 0 or end < 0:
+        raise RuntimeError("Could not find vh/l OCR selection getter")
+    body = text[start:end]
+    if PADDLE_OCR_NAME not in body:
+        old = """    check-cast v0, Ljava/lang/String;
+
+    return-object v0"""
+        new = f"""    check-cast v0, Ljava/lang/String;
+
+    const-string v1, "Device Text Recognition"
+
+    invoke-virtual {{v0, v1}}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+
+    move-result v1
+
+    if-eqz v1, :hymt2_ocr_selection_ready
+
+    const-string v0, "{PADDLE_OCR_NAME}"
+
+    :hymt2_ocr_selection_ready
+    return-object v0"""
+        if old not in body:
+            raise RuntimeError("Could not find OCR selection getter return anchor")
+        body = body.replace(old, new, 1)
+        text = text[:start] + body + text[end:]
+
+    if PADDLE_OCR_NAME not in text or MLKIT_OCR_NAME not in text:
+        raise RuntimeError("PP-OCRv6 / ML Kit entries were not added")
+    if "hymt2_ocr_selection_ready" not in text:
+        raise RuntimeError("Legacy Device Text Recognition was not migrated to PP-OCRv6")
+    path.write_text(text, encoding="utf-8")
+    print("Added PP-OCRv6 and true ML Kit options; old Device default maps to PP-OCRv6")
+
+
+def patch_free_text_alpha_renderers(base: Path) -> None:
+    """Resolve a separate fill alpha for each overlay in both original renderers."""
+    for rel, owner in (
+        ("smali_classes3/rh/f.smali", "f"),
+        ("smali_classes3/rh/g.smali", "g"),
+    ):
+        path = base / rel
+        if not path.is_file():
+            raise RuntimeError("Missing host OCR overlay renderer: " + rel)
+        text = path.read_text(encoding="utf-8")
+        start = text.find(".method public final onDraw(Landroid/graphics/Canvas;)V")
+        end = text.find(".end method", start)
+        if start < 0 or end < 0:
+            raise RuntimeError("Could not isolate onDraw in " + rel)
+        method = text[start:end]
+        if "resolveBackgroundAlpha" not in method:
+            if "    .locals 20\n" not in method:
+                raise RuntimeError("Unexpected renderer local-register count in " + rel)
+            method = method.replace("    .locals 20\n", "    .locals 23\n", 1)
+            anchor = f"""    iget-object v1, v0, Lrh/{owner};->e:Landroid/graphics/Paint;
+
+    iget v2, v0, Lrh/{owner};->d:I
+
+    invoke-virtual {{v1, v2}}, Landroid/graphics/Paint;->setAlpha(I)V"""
+            replacement = f"""    iget-object v1, v0, Lrh/{owner};->e:Landroid/graphics/Paint;
+
+    iget v2, v0, Lrh/{owner};->d:I
+
+    invoke-virtual {{v0}}, Landroid/view/View;->getContext()Landroid/content/Context;
+
+    move-result-object v20
+
+    move-object/from16 v21, v11
+
+    move/from16 v22, v2
+
+    invoke-static/range {{v20 .. v22}}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->resolveBackgroundAlpha(Landroid/content/Context;Ljava/lang/Object;I)I
+
+    move-result v2
+
+    invoke-virtual {{v1, v2}}, Landroid/graphics/Paint;->setAlpha(I)V"""
+            if method.count(anchor) != 1:
+                raise RuntimeError("Could not uniquely find fill alpha operation in " + rel)
+            method = method.replace(anchor, replacement, 1)
+            text = text[:start] + method + text[end:]
+            path.write_text(text, encoding="utf-8")
+    print("Added separate free-text fill alpha to both host renderers")
+
+
+def patch_ocr_settings_click(base: Path) -> None:
+    """Attach the OCR settings Activity to its main-settings row."""
+    fragment = base / "smali_classes3/mh/p.smali"
+    text = fragment.read_text(encoding="utf-8")
+    method_start = text.find(".method public final onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V")
+    method_end = text.find(".end method", method_start)
+    if method_start < 0 or method_end < 0:
+        raise RuntimeError("Could not isolate primary settings onViewCreated")
+    method = text[method_start:method_end]
+    if "OcrSettingsClickListener" not in method:
+        anchor = "    return-void\n"
+        insert_at = method.rfind(anchor)
+        if insert_at < 0:
+            raise RuntimeError("Could not find end of main settings onViewCreated")
+        code = f'''    invoke-virtual {{p0}}, Landroidx/fragment/app/Fragment;->requireView()Landroid/view/View;
+
+    move-result-object v1
+
+    const v2, {OCR_ROW_ID}
+
+    invoke-virtual {{v1, v2}}, Landroid/view/View;->findViewById(I)Landroid/view/View;
+
+    move-result-object v1
+
+    new-instance v2, Lcom/tap_to_translate/snap_translate/hymt2/OcrSettingsClickListener;
+
+    invoke-direct {{v2, p0}}, Lcom/tap_to_translate/snap_translate/hymt2/OcrSettingsClickListener;-><init>(Lmh/p;)V
+
+    invoke-virtual {{v1, v2}}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+
+'''
+        method = method[:insert_at] + code + method[insert_at:]
+        text = text[:method_start] + method + text[method_end:]
+        fragment.write_text(text, encoding="utf-8")
+
+    listener = base / "smali_classes5/com/tap_to_translate/snap_translate/hymt2/OcrSettingsClickListener.smali"
+    listener.parent.mkdir(parents=True, exist_ok=True)
+    listener.write_text('''.class public final Lcom/tap_to_translate/snap_translate/hymt2/OcrSettingsClickListener;
+.super Ljava/lang/Object;
+
+# interfaces
+.implements Landroid/view/View$OnClickListener;
+
+.field private final a:Lmh/p;
+
+.method public constructor <init>(Lmh/p;)V
+    .locals 0
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+    iput-object p1, p0, Lcom/tap_to_translate/snap_translate/hymt2/OcrSettingsClickListener;->a:Lmh/p;
+    return-void
+.end method
+
+.method public final onClick(Landroid/view/View;)V
+    .locals 3
+    iget-object v0, p0, Lcom/tap_to_translate/snap_translate/hymt2/OcrSettingsClickListener;->a:Lmh/p;
+    invoke-virtual {v0}, Landroidx/fragment/app/Fragment;->requireContext()Landroid/content/Context;
+    move-result-object v0
+    new-instance v1, Landroid/content/Intent;
+    const-class v2, Lcom/tap_to_translate/snap_translate/hymt2/OcrSettingsActivity;
+    invoke-direct {v1, v0, v2}, Landroid/content/Intent;-><init>(Landroid/content/Context;Ljava/lang/Class;)V
+    invoke-virtual {v0, v1}, Landroid/content/Context;->startActivity(Landroid/content/Intent;)V
+    return-void
+.end method
+''', encoding="utf-8")
+
+    text = fragment.read_text(encoding="utf-8")
+    method_start = text.find(".method public final onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V")
+    method_end = text.find(".end method", method_start)
+    if "OcrSettingsClickListener" not in text[method_start:method_end]:
+        raise RuntimeError("OCR settings click listener was not installed")
+
+
+def patch_ocr_resources(base: Path) -> None:
+    """Add the OCR settings row and register its resource ID."""
+    layout = base / "res/layout/fragment_settings.xml"
+    text = layout.read_text(encoding="utf-8")
+    if OCR_ROW_ID_NAME not in text:
+        anchor = '<LinearLayout android:gravity="start|center" android:orientation="horizontal" android:id="@id/fragment_setting_ll_voice_settings"'
+        if text.count(anchor) != 1:
+            raise RuntimeError("Could not locate voice-settings row in fragment_settings.xml")
+        row = f'''<LinearLayout android:gravity="start|center" android:orientation="horizontal" android:id="@id/{OCR_ROW_ID_NAME}" android:paddingLeft="15.0dip" android:paddingTop="15.0dip" android:paddingRight="15.0dip" android:paddingBottom="15.0dip" android:focusable="true" android:clickable="true" android:layout_width="fill_parent" android:layout_height="wrap_content" android:foreground="@drawable/fg_efftect">
+                <ImageView android:padding="5.0dip" android:layout_width="30.0dip" android:layout_height="30.0dip" android:layout_marginRight="10.0dip" android:src="@drawable/ic_download_svg" />
+                <TextView android:textSize="18.0dip" android:textColor="@color/cl_text_word" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="OCR · настройки распознавания" />
+            </LinearLayout>
+            <View android:background="@color/cl_underLine" android:layout_width="fill_parent" android:layout_height="1.0dip" android:layout_marginLeft="25.0dip" android:layout_marginRight="25.0dip" />
+            '''
+        text = text.replace(anchor, row + anchor, 1)
+        layout.write_text(text, encoding="utf-8")
+
+    ids = base / "res/values/ids.xml"
+    id_text = ids.read_text(encoding="utf-8")
+    if OCR_ROW_ID_NAME not in id_text:
+        lines = id_text.splitlines(keepends=True)
+        indexes = [i for i, line in enumerate(lines) if f'name="{ROW_ID_NAME}"' in line]
+        if len(indexes) != 1:
+            raise RuntimeError("Could not locate Hy-MT2 row ID in ids.xml")
+        lines.insert(indexes[0] + 1, f'    <item type="id" name="{OCR_ROW_ID_NAME}" />\n')
+        ids.write_text("".join(lines), encoding="utf-8")
+
+    public = base / "res/values/public.xml"
+    pub_text = public.read_text(encoding="utf-8")
+    if OCR_ROW_ID_NAME not in pub_text:
+        occupied = re.findall(r'<public type="id" name="([^"]+)" id="0x7f0a04f2"\s*/>', pub_text)
+        if occupied:
+            raise RuntimeError("OCR row resource ID 0x7f0a04f2 is already used by " + occupied[0])
+        lines = pub_text.splitlines(keepends=True)
+        indexes = [i for i, line in enumerate(lines) if f'name="{ROW_ID_NAME}"' in line]
+        if len(indexes) != 1:
+            raise RuntimeError("Could not locate Hy-MT2 row public ID")
+        lines.insert(indexes[0] + 1, f'    <public type="id" name="{OCR_ROW_ID_NAME}" id="{OCR_ROW_ID}" />\n')
+        public.write_text("".join(lines), encoding="utf-8")
+
+    if OCR_ROW_ID_NAME not in layout.read_text(encoding="utf-8"):
+        raise RuntimeError("OCR settings row was not added to main settings layout")
+    if OCR_ROW_ID_NAME not in ids.read_text(encoding="utf-8") or OCR_ROW_ID_NAME not in public.read_text(encoding="utf-8"):
+        raise RuntimeError("OCR row resource ID registration is incomplete")
+
 
 
 def patch_dispatcher(base: Path) -> None:
@@ -723,13 +965,17 @@ def patch_resources(base: Path) -> None:
 def patch_manifest(base: Path) -> None:
     path = base / "AndroidManifest.xml"
     text = path.read_text(encoding="utf-8")
-    if ACTIVITY in text:
-        return
     marker = "    </application>"
-    activity = f'''        <activity android:name="{ACTIVITY}" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="Hy-MT2 Offline" />\n'''
+    activities = []
+    if ACTIVITY not in text:
+        activities.append(f'''        <activity android:name="{ACTIVITY}" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="Hy-MT2 Offline" />\n''')
+    if OCR_SETTINGS_ACTIVITY not in text:
+        activities.append(f'''        <activity android:name="{OCR_SETTINGS_ACTIVITY}" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="OCR settings" />\n''')
+    if not activities:
+        return
     if marker not in text:
         raise RuntimeError("Could not find application closing tag in manifest")
-    path.write_text(text.replace(marker, activity + marker, 1), encoding="utf-8")
+    path.write_text(text.replace(marker, "".join(activities) + marker, 1), encoding="utf-8")
 
 
 def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, ...]) -> int:
@@ -894,12 +1140,16 @@ def main() -> int:
     copy_helper_payload(helper, base)
     patch_atomic_backport_shims(base)
     patch_engine_list(base)
+    patch_ocr_engine_picker(base)
     patch_dispatcher(base)
     patch_live_hybrid_ocr(base)
+    patch_free_text_alpha_renderers(base)
     patch_paddle_child_constructor(base)
     patch_picker_callbacks(base)
     patch_settings_click(base)
+    patch_ocr_settings_click(base)
     patch_resources(base)
+    patch_ocr_resources(base)
     patch_manifest(base)
     assert_preserved_ocr(base, preserved_ocr)
 
