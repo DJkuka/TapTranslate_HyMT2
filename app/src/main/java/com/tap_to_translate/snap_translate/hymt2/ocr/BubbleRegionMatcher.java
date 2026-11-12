@@ -46,6 +46,14 @@ public final class BubbleRegionMatcher {
         return best;
     }
 
+    /**
+     * Host paragraph grouping may join OCR chunks only when both belong to the
+     * same speech bubble, or both are outside all detected bubble containers.
+     */
+    public static boolean canGroupSameRegion(int firstContainer, int secondContainer) {
+        return firstContainer == secondContainer;
+    }
+
     public static final class Bounds {
         public final int left, top, right, bottom;
         public Bounds(int left, int top, int right, int bottom) {
