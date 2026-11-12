@@ -103,6 +103,29 @@ jobs:
           grep -R -n -E 'Lrh/c;->|Lxh/c;->|Lca/d2;->|Lqh/n;->|Lkh/v;->|HAWK_(MANGA|VERTICAL|UPCASE|CENTER|FONT|STYLE|BACKGROUND|TEXT)' \
             build/decoded/smali* > diagnostics/host-flow-call-sites.txt || true
 
+          # Include exact host custom-widget implementations used by profile controls.
+          find build/decoded/smali* -type f -name '*.smali' \\
+            | grep -E '/WidgetChoose(Font|StyleNew|Value|Switch)\\.smali          mkdir -p diagnostics/values-all
+          find build/decoded/res/values* -maxdepth 1 -type f \
+            \( -name 'strings.xml' -o -name 'public.xml' -o -name 'ids.xml' \) \
+            | while IFS= read -r f; do cp --parents "$f" diagnostics/values-all/; done
+          grep -R -n -i -E 'manga|vertical text|center text|font|background stroke|font size|text size' \
+            build/decoded/res/values* > diagnostics/resource-string-index.txt || true
+
+          zip -qr diagnostics.zip diagnostics
+
+      - name: Upload source inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: TapTranslate-host-source-inspection
+          path: diagnostics.zip
+          if-no-files-found: error
+          retention-days: 7
+ \\
+            | while IFS= read -r f; do cp --parents "$f" diagnostics/relevant-smali/; done || true
+          grep -R -n -E 'WidgetChoose(Font|StyleNew|Value|Switch)|HAWK_(BG_TRANS|FONT_FULL|FONT_SIZE|BG_STROKE)' \\
+            build/decoded/smali* > diagnostics/profile-control-index.txt || true
+
           # Include app strings and resource references used by the display controls.
           mkdir -p diagnostics/values-all
           find build/decoded/res/values* -maxdepth 1 -type f \
