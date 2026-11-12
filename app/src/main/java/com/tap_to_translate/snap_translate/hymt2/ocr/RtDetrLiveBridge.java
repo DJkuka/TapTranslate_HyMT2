@@ -477,8 +477,7 @@ public final class RtDetrLiveBridge {
             // remain eligible for the host's normal paragraph grouping.
             int firstContainer = findBubbleContainer(first, regions);
             int secondContainer = findBubbleContainer(second, regions);
-            if (firstContainer != secondContainer
-                    && (firstContainer >= 0 || secondContainer >= 0)) {
+            if (!BubbleRegionMatcher.canGroupSameRegion(firstContainer, secondContainer)) {
                 Log.i(TAG, "prevented cross-region OCR grouping: blocks="
                         + firstIndex + "," + secondIndex
                         + " containers=" + firstContainer + "," + secondContainer);
