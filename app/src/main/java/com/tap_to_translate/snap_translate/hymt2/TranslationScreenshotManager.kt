@@ -86,15 +86,39 @@ object TranslationScreenshotManager {
     }
 
     private fun findScreenTranslateService(root: Any): Any? {
-        var current: Any? = readField(root, "e")
-        repeat(5) {
-            val value = current ?: return null
+        val visited = java.util.Collections.newSetFromMap(
+            java.util.IdentityHashMap<Any, Boolean>()
+        )
+
+        fun visit(value: Any?, depth: Int): Any? {
+            if (value == null || depth > 5 || !visited.add(value)) return null
             if (value.javaClass.name ==
                 "com.tap_to_translate.snap_translate.domain.main.service.ScreenTranslateService"
             ) return value
-            current = readField(value, "c")
+
+            for (field in value.javaClass.declaredFields) {
+                if (java.lang.reflect.Modifier.isStatic(field.modifiers)) continue
+                val fieldType = field.type
+                if (fieldType.isPrimitive ||
+                    fieldType == String::class.java ||
+                    android.view.View::class.java.isAssignableFrom(fieldType) ||
+                    Context::class.java.isAssignableFrom(fieldType) ||
+                    Bitmap::class.java.isAssignableFrom(fieldType)
+                ) continue
+
+                try {
+                    field.isAccessible = true
+                    val nested = field.get(value)
+                    val found = visit(nested, depth + 1)
+                    if (found != null) return found
+                } catch (_: Throwable) {
+                    // Continue scanning other captured callback fields.
+                }
+            }
+            return null
         }
-        return null
+
+        return visit(root, 0)
     }
 
     private fun readField(instance: Any?, name: String): Any? {
