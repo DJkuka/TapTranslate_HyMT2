@@ -73,6 +73,24 @@ jobs:
           # Include method/callback and activity declarations for compact grep-based reading.
           grep -R -n -E 'field .* (a|b|d):|\.method .*\(|SettingsServiceActivity|setContentView|inflate\(' \
             diagnostics/smali > diagnostics/declarations.txt || true
+          # Capture host Smali classes declaring/reading display and manga preferences.
+          mkdir -p diagnostics/relevant-smali
+          pattern='HAWK_MANGA|manga_font|manga_background|manga_vertical|manga_upcase|vertical_text_new|center_text|background_stroke|font_size|font_type|home_wcv_font_size|home_ll_style|home_ll_choose_font|bubble.*alpha|text.*alpha|opacity|fontFamily|Typeface|textSize|setTextSize|setGravity'
+          find build/decoded/smali* -type f -name '*.smali' -print0 | while IFS= read -r -d '' f; do
+            if grep -qEi "$pattern" "$f"; then
+              cp --parents "$f" diagnostics/relevant-smali/
+            fi
+          done
+          grep -R -n -i -E "$pattern" build/decoded/smali* > diagnostics/relevant-smali-index.txt || true
+
+          # Include app strings and resource references used by the display controls.
+          mkdir -p diagnostics/values-all
+          find build/decoded/res/values* -maxdepth 1 -type f \
+            \( -name 'strings.xml' -o -name 'public.xml' -o -name 'ids.xml' \) \
+            | while IFS= read -r f; do cp --parents "$f" diagnostics/values-all/; done
+          grep -R -n -i -E 'manga|vertical text|center text|font|background stroke|font size|text size' \
+            build/decoded/res/values* > diagnostics/resource-string-index.txt || true
+
           zip -qr diagnostics.zip diagnostics
 
       - name: Upload source inspection
