@@ -135,27 +135,35 @@ object TranslationScreenshotManager {
     }
 
     private fun composeFrame(source: Bitmap, textLayer: View): Bitmap {
-        val width = readHostDimension("a", source.width).coerceIn(1, source.width)
-        val height = readHostDimension("b", source.height).coerceIn(1, source.height)
+        // ImageReader may reuse the host bitmap while the next frame is arriving.
+        // Work from an immutable snapshot to avoid a partially updated screenshot.
+        val sourceCopy = source.copy(Bitmap.Config.ARGB_8888, false)
+            ?: throw IOException("Не удалось скопировать исходный кадр")
+        try {
+            val width = readHostDimension("a", sourceCopy.width).coerceIn(1, sourceCopy.width)
+            val height = readHostDimension("b", sourceCopy.height).coerceIn(1, sourceCopy.height)
 
-        val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(output)
-        val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
-        canvas.drawBitmap(
-            source,
-            android.graphics.Rect(0, 0, width, height),
-            android.graphics.Rect(0, 0, width, height),
-            bitmapPaint
-        )
+            val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(output)
+            val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+            canvas.drawBitmap(
+                sourceCopy,
+                android.graphics.Rect(0, 0, width, height),
+                android.graphics.Rect(0, 0, width, height),
+                bitmapPaint
+            )
 
-        val position = IntArray(2)
-        textLayer.getLocationOnScreen(position)
-        canvas.save()
-        canvas.translate(position[0].toFloat(), position[1].toFloat())
-        textLayer.draw(canvas)
-        canvas.restore()
+            val position = IntArray(2)
+            textLayer.getLocationOnScreen(position)
+            canvas.save()
+            canvas.translate(position[0].toFloat(), position[1].toFloat())
+            textLayer.draw(canvas)
+            canvas.restore()
 
-        return output
+            return output
+        } finally {
+            if (!sourceCopy.isRecycled) sourceCopy.recycle()
+        }
     }
 
     private fun readHostDimension(fieldName: String, fallback: Int): Int {
