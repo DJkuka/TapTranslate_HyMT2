@@ -1242,7 +1242,7 @@ def patch_profile_host_notifier(base: Path) -> None:
     notifier.write_text('''.class public final Lcom/tap_to_translate/snap_translate/hymt2/DisplayProfilesHostNotifier;
 .super Ljava/lang/Object;
 
-.method public static notify()V
+.method public static postDisplayRefresh()V
     .locals 2
 
     invoke-static {}, Lbn/d;->b()Lbn/d;
