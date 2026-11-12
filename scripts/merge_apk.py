@@ -1235,6 +1235,32 @@ def patch_display_profiles_click(base: Path) -> None:
         raise RuntimeError("Display profile settings row has no click listener")
 
 
+def patch_profile_host_notifier(base: Path) -> None:
+    """Provide the same display-refresh event used by the host's style/font controls."""
+    notifier = base / "smali_classes5/com/tap_to_translate/snap_translate/hymt2/DisplayProfilesHostNotifier.smali"
+    notifier.parent.mkdir(parents=True, exist_ok=True)
+    notifier.write_text('''.class public final Lcom/tap_to_translate/snap_translate/hymt2/DisplayProfilesHostNotifier;
+.super Ljava/lang/Object;
+
+.method public static notify()V
+    .locals 2
+
+    invoke-static {}, Lbn/d;->b()Lbn/d;
+
+    move-result-object v0
+
+    new-instance v1, Loh/k;
+
+    invoke-direct {v1}, Ljava/lang/Object;-><init>()V
+
+    invoke-virtual {v0, v1}, Lbn/d;->e(Ljava/lang/Object;)V
+
+    return-void
+.end method
+''', encoding="utf-8")
+    print("Added host display settings refresh event notifier")
+
+
 def patch_profile_apply_hook(base: Path) -> None:
     """Retain a late fallback; the primary apply runs before RT-DETR at vh/j.a()."""
     service = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali"
@@ -1455,6 +1481,7 @@ def main() -> int:
     patch_screenshot_button(base)
     patch_display_profiles(base)
     patch_display_profiles_click(base)
+    patch_profile_host_notifier(base)
     patch_profile_apply_hook(base)
     patch_manifest(base)
     assert_preserved_ocr(base, preserved_ocr)
