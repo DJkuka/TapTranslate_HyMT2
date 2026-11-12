@@ -27,6 +27,24 @@ public class BubbleRegionMatcherTest {
                 20, 50, 90, 75, Arrays.asList(bubble)));
     }
 
+    @Test public void preventsGroupingDifferentSpeechBubbles() {
+        assertFalse(BubbleRegionMatcher.canGroupSameRegion(0, 1));
+        assertFalse(BubbleRegionMatcher.canGroupSameRegion(1, 0));
+    }
+
+    @Test public void preventsGroupingBubbleTextWithFreeText() {
+        assertFalse(BubbleRegionMatcher.canGroupSameRegion(0, -1));
+        assertFalse(BubbleRegionMatcher.canGroupSameRegion(-1, 0));
+    }
+
+    @Test public void allowsGroupingLinesInsideSameBubble() {
+        assertTrue(BubbleRegionMatcher.canGroupSameRegion(2, 2));
+    }
+
+    @Test public void allowsGroupingFreeTextOnlyWithOtherFreeText() {
+        assertTrue(BubbleRegionMatcher.canGroupSameRegion(-1, -1));
+    }
+
     @Test public void leavesUnmatchedTextUnassignedInsteadOfGuessing() {
         assertEquals(-1, BubbleRegionMatcher.findBestContainer(
                 220, 220, 260, 250,
