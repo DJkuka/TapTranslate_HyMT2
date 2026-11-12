@@ -79,11 +79,17 @@ object PaddleOcrLiveBridge {
             engine?.let { return it }
             check(OpenCVUtils.init(context)) { "OpenCV initialization failed" }
             Log.i(TAG, "OpenCV initialization confirmed; abi=${Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"}")
+            val maxSideLimit = context
+                .getSharedPreferences("taptranslate_ocr_settings", Context.MODE_PRIVATE)
+                .getInt("ocr_det_max_side_limit", 4000)
+                .coerceIn(1280, 4000)
+            Log.i(TAG, "PP-OCRv6 detector max side limit=" + maxSideLimit)
             val created = runBlocking {
                 PaddleOCR.create(
                     context = context,
                     config = PaddleOCRConfig(detThresh = 0.20f, detBoxThresh = 0.45f,
-                        detUnclipRatio = 1.4f, recScoreThresh = 0f, recBatchSize = 1),
+                        detUnclipRatio = 1.4f, recScoreThresh = 0f, recBatchSize = 1,
+                        detMaxSideLimit = maxSideLimit),
                     engineConfig = EngineConfig(numThreads = 2),
                     detModelAssetPath = "models/det/inference.onnx",
                     recModelAssetPath = "models/rec/inference.onnx",
@@ -91,7 +97,7 @@ object PaddleOcrLiveBridge {
                 )
             }
             engine = created
-            Log.i(TAG, "PP-OCRv6 initialized; cold_load_ms=${created.coldLoadTimeMs}")
+            Log.i(TAG, "PP-OCRv6 initialized; detMaxSideLimit=" + maxSideLimit + " cold_load_ms=" + created.coldLoadTimeMs)
             return created
         }
     }
