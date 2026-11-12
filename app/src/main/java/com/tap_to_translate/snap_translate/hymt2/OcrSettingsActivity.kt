@@ -189,12 +189,13 @@ class OcrSettingsActivity : Activity() {
                         if (screenshotFormatSpinner.selectedItemPosition == 1) "jpeg" else "png"
                     )
                     .apply()
+                val screenshotFormatLabel =
+                    if (screenshotFormatSpinner.selectedItemPosition == 1) "JPEG" else "PNG"
                 status.text = "Сохранено. detMaxSideLimit=" + selectedLimit +
                     " px применится после полного перезапуска приложения. Формат скриншотов: " +
-                    if (screenshotFormatSpinner.selectedItemPosition == 1) "JPEG" else "PNG" +
-                    "."
+                    screenshotFormatLabel + "."
                 Toast.makeText(this@OcrSettingsActivity,
-                    "Настройки OCR сохранены", Toast.LENGTH_SHORT).show()
+                    "Настройки сохранены", Toast.LENGTH_SHORT).show()
             }
         }
         root.addView(save, matchWrap(dp(10)))
