@@ -163,12 +163,17 @@ object DisplayProfilesStore {
         writeProfiles(context, replacement)
 
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        if (prefs.getString(KEY_PENDING_ID, null) == profileId) {
-            prefs.edit().remove(KEY_PENDING_ID).apply()
+        val pendingId = prefs.getString(KEY_PENDING_ID, null)
+        val activeWasDeleted = prefs.getString(KEY_ACTIVE_ID, null) == profileId
+        val editor = prefs.edit()
+        if (pendingId == profileId) editor.remove(KEY_PENDING_ID)
+        // Do not label Comics active until its settings have actually been applied.
+        // If the deleted profile was active, queue a safe built-in fallback for
+        // the next page, unless another valid profile is already queued.
+        if (activeWasDeleted && (pendingId == null || pendingId == profileId)) {
+            editor.putString(KEY_PENDING_ID, "comics")
         }
-        if (prefs.getString(KEY_ACTIVE_ID, null) == profileId) {
-            prefs.edit().putString(KEY_ACTIVE_ID, "comics").apply()
-        }
+        editor.apply()
     }
 
     @Synchronized
@@ -188,6 +193,16 @@ object DisplayProfilesStore {
             customProfiles.put(JSONObject(defaults.getJSONObject(i).toString()))
         }
         writeProfiles(context, customProfiles)
+
+        // When a built-in profile is currently active, reset its stored values
+        // and queue those defaults for the next page. Preserve a user's other
+        // explicit pending selection.
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val pending = prefs.getString(KEY_PENDING_ID, null)
+        val active = prefs.getString(KEY_ACTIVE_ID, null)
+        if (pending == null && (active == "comics" || active == "books")) {
+            prefs.edit().putString(KEY_PENDING_ID, active).apply()
+        }
     }
 
     /**
