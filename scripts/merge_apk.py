@@ -962,6 +962,152 @@ def patch_resources(base: Path) -> None:
     if "HyMT2SettingsClickListener" not in fragment_smali:
         raise RuntimeError("Primary settings row has no click listener")
 
+def patch_screenshot_button(base: Path) -> None:
+    """Add a screenshot button to the result toolbar and wire it to the helper saver."""
+    layout = base / "res/layout/container_widget.xml"
+    xml_text = layout.read_text(encoding="utf-8")
+    button_id = "container_widget_iv_screenshot"
+    if button_id not in xml_text:
+        pattern = re.compile(r'(<ImageView\b(?=[^>]*android:id="@id/container_widget_iv_ocr")[^>]*/>)')
+        button = (
+            '            <ImageView android:id="@id/container_widget_iv_screenshot" '
+            'android:contentDescription="Скриншот перевода" '
+            'android:background="@drawable/bg_circle_black" android:padding="6.0dip" '
+            'android:layout_width="32.0dip" android:layout_height="32.0dip" '
+            'android:layout_marginRight="10.0dip" android:src="@drawable/ic_screenshot_camera" '
+            'android:alpha="0.5" />'
+        )
+        xml_text, count = pattern.subn(lambda match: match.group(1) + "\n" + button, xml_text, count=1)
+        if count != 1:
+            raise RuntimeError("Could not find OCR icon in container_widget.xml")
+        layout.write_text(xml_text, encoding="utf-8")
+
+    ids = base / "res/values/ids.xml"
+    ids_text = ids.read_text(encoding="utf-8")
+    if button_id not in ids_text:
+        anchor = '    <item type="id" name="container_widget_iv_ocr" />\n'
+        if ids_text.count(anchor) != 1:
+            raise RuntimeError("Could not register screenshot button in ids.xml")
+        ids.write_text(ids_text.replace(anchor, anchor + f'    <item type="id" name="{button_id}" />\n', 1), encoding="utf-8")
+
+    public = base / "res/values/public.xml"
+    public_text = public.read_text(encoding="utf-8")
+    if button_id not in public_text:
+        if re.search(r'id="0x7f0a04f3"', public_text):
+            raise RuntimeError("Resource ID 0x7f0a04f3 is already in use")
+        anchor = '    <public type="id" name="ocr_settings_row" id="0x7f0a04f2" />\n'
+        if public_text.count(anchor) != 1:
+            raise RuntimeError("Could not register screenshot resource ID after OCR settings row")
+        public.write_text(
+            public_text.replace(
+                anchor,
+                anchor + f'    <public type="id" name="{button_id}" id="0x7f0a04f3" />\n',
+                1,
+            ),
+            encoding="utf-8",
+        )
+
+    # A small vector camera remains sharp at the 32 dp toolbar size.
+    icon = base / "res/drawable/ic_screenshot_camera.xml"
+    icon.parent.mkdir(parents=True, exist_ok=True)
+    icon.write_text('''<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M9,4 L7.2,6 H4.5 C3.4,6 2.5,6.9 2.5,8 V18 C2.5,19.1 3.4,20 4.5,20 H19.5 C20.6,20 21.5,19.1 21.5,18 V8 C21.5,6.9 20.6,6 19.5,6 H16.8 L15,4 Z" />
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.8"
+        android:pathData="M12,9 A3.5,3.5 0,1 0,12 16 A3.5,3.5 0,1 0,12 9 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M18,8.5 A0.9,0.9 0,1 0,18 10.3 A0.9,0.9 0,1 0,18 8.5 Z" />
+</vector>
+''', encoding="utf-8")
+
+    service = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali"
+    service_text = service.read_text(encoding="utf-8")
+    method_start = service_text.find(".method public final h()Lrh/c;")
+    if method_start < 0:
+        raise RuntimeError("ScreenTranslateService.h() result-overlay constructor was not found")
+    method_end = service_text.find(".end method", method_start)
+    if method_end < 0:
+        raise RuntimeError("Could not isolate ScreenTranslateService.h()")
+    method = service_text[method_start:method_end]
+    if "TranslationScreenshotClickListener" not in method:
+        if "    .locals 14\n" not in method:
+            raise RuntimeError("Unexpected local-register layout in ScreenTranslateService.h()")
+        method = method.replace("    .locals 14\n", "    .locals 16\n", 1)
+        click_anchor = '''    invoke-virtual {v2, v1}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+
+    new-instance v1, Lrh/b;'''
+        click_hook = '''    invoke-virtual {v2, v1}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+
+    const v14, 0x7f0a04f3
+
+    invoke-virtual {v0, v14}, Landroid/view/View;->findViewById(I)Landroid/view/View;
+
+    move-result-object v14
+
+    check-cast v14, Landroid/widget/ImageView;
+
+    new-instance v15, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;
+
+    invoke-direct {v15, v0}, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;-><init>(Lrh/c;)V
+
+    invoke-virtual {v14, v15}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+
+    new-instance v1, Lrh/b;'''
+        if method.count(click_anchor) != 1:
+            raise RuntimeError("Could not locate the OCR toolbar listener insertion point")
+        method = method.replace(click_anchor, click_hook, 1)
+        service_text = service_text[:method_start] + method + service_text[method_end:]
+        service.write_text(service_text, encoding="utf-8")
+
+    listener = base / "smali_classes5/com/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener.smali"
+    listener.parent.mkdir(parents=True, exist_ok=True)
+    listener.write_text('''.class public final Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;
+.super Ljava/lang/Object;
+
+# interfaces
+.implements Landroid/view/View$OnClickListener;
+
+.field private final a:Lrh/c;
+
+.method public constructor <init>(Lrh/c;)V
+    .locals 0
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+    iput-object p1, p0, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;->a:Lrh/c;
+    return-void
+.end method
+
+.method public final onClick(Landroid/view/View;)V
+    .locals 1
+    iget-object v0, p0, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;->a:Lrh/c;
+    invoke-static {v0}, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager;->captureFromOverlay(Ljava/lang/Object;)V
+    return-void
+.end method
+''', encoding="utf-8")
+
+    # Verify the resource, icon, and host callback are all included.
+    if button_id not in layout.read_text(encoding="utf-8"):
+        raise RuntimeError("Screenshot button is absent from container_widget.xml")
+    if "TranslationScreenshotClickListener" not in service.read_text(encoding="utf-8"):
+        raise RuntimeError("Screenshot toolbar button has no click listener")
+    if not icon.is_file() or not listener.is_file():
+        raise RuntimeError("Screenshot icon or click listener was not created")
+    print("Added translation screenshot toolbar button and helper callback")
+
+
 def patch_manifest(base: Path) -> None:
     path = base / "AndroidManifest.xml"
     text = path.read_text(encoding="utf-8")
@@ -1150,6 +1296,7 @@ def main() -> int:
     patch_ocr_settings_click(base)
     patch_resources(base)
     patch_ocr_resources(base)
+    patch_screenshot_button(base)
     patch_manifest(base)
     assert_preserved_ocr(base, preserved_ocr)
 
