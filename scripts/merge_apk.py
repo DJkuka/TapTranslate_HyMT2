@@ -234,6 +234,8 @@ def patch_live_hybrid_ocr(base: Path) -> None:
         # before invoke-static, then the original prologue overwrites v0/v1 as usual.
         safe_frame_hook = (
             "    move-object/from16 v0, p0\n"
+            "    iget-object v2, v0, Lvh/j;->a:Landroid/content/Context;\n"
+            "    invoke-static {v2}, Lcom/tap_to_translate/snap_translate/hymt2/DisplayProfilesStore;->applyPendingProfile(Landroid/content/Context;)V\n"
             "    move-object/from16 v1, p2\n"
             "    invoke-static {v0, v1}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->onFrame(Ljava/lang/Object;Landroid/graphics/Bitmap;)V\n"
         )
@@ -1234,7 +1236,7 @@ def patch_display_profiles_click(base: Path) -> None:
 
 
 def patch_profile_apply_hook(base: Path) -> None:
-    """Apply a scheduled preset immediately before the next translated-page result is set."""
+    """Retain a late fallback; the primary apply runs before RT-DETR at vh/j.a()."""
     service = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali"
     text = service.read_text(encoding="utf-8")
     method_start = text.find(".method public final c(Ljava/util/List;)V")
