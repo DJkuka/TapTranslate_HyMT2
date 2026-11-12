@@ -240,12 +240,9 @@ object TranslationScreenshotManager {
             }
         } ?: throw IOException("Не удалось прочитать список файлов в выбранной папке")
 
-        var candidate = 1L
-        while (used.contains(candidate)) {
-            candidate++
-            if (candidate > Int.MAX_VALUE) throw IOException("Слишком много скриншотов")
-        }
-        return candidate
+        val highestUsed = used.maxOrNull() ?: 0L
+        if (highestUsed >= Int.MAX_VALUE) throw IOException("Слишком много скриншотов")
+        return highestUsed + 1L
     }
 
     private fun toast(context: Context?, message: String) {
