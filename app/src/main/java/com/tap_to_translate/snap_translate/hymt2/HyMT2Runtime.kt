@@ -229,10 +229,10 @@ object HyMT2Runtime {
                             if (sourceBlock.isBlank()) {
                                 translatedBlocks += ""
                             } else {
+                                val cleanSourceBlock = sourceBlock.trim()
                                 val prompt = buildTranslationPrompt(
-                                    sourceText = sourceBlock,
+                                    sourceText = cleanSourceBlock,
                                     targetLanguage = targetLanguage,
-                                    options = options,
                                 )
                                 val promptTokens = HyMT2PenaltyNative.countPromptTokens(model, prompt, systemPrompt)
                                 val availableOutputTokens = (options.contextSize - promptTokens - 32).coerceAtLeast(0)
@@ -260,7 +260,7 @@ object HyMT2Runtime {
                                 translatedBlocks += translatedBlock
                                 generatedTokens += completion.tokensGenerated
                                 generatedTimeMs += completion.generateTimeMs
-                                Log.d(TAG, "OCR block ${index + 1}/${sourceBlocks.size}: promptTokens=$promptTokens, generatedTokens=${completion.tokensGenerated}/$effectiveMaxTokens, promptEvalMs=${completion.promptEvalTimeMs}, generateMs=${completion.generateTimeMs}, tps=${"%.2f".format(Locale.US, completion.tokensPerSecond)}, outputChars=${translatedBlock.length}")
+                                Log.d(TAG, "OCR block ${index + 1}/${sourceBlocks.size}: sourcePreview=${cleanSourceBlock.take(80)}, promptPreview=${prompt.take(180).replace("\\n", "\\\\n")}, systemPromptChars=${systemPrompt.length}, promptTokens=$promptTokens, generatedTokens=${completion.tokensGenerated}/$effectiveMaxTokens, promptEvalMs=${completion.promptEvalTimeMs}, generateMs=${completion.generateTimeMs}, tps=${"%.2f".format(Locale.US, completion.tokensPerSecond)}, outputPreview=${translatedBlock.take(120)}")
                                 if (completion.tokensGenerated >= effectiveMaxTokens) {
                                     Log.w(TAG, "OCR block ${index + 1}/${sourceBlocks.size} reached the output token limit; result may be truncated")
                                 }
@@ -319,12 +319,11 @@ object HyMT2Runtime {
     private fun buildTranslationPrompt(
         sourceText: String,
         targetLanguage: String,
-        options: HyMT2Options,
     ): String {
-        // Keep the base task identical to Tencent's official Hy-MT2 instruction
-        // and to the working standalone Vulkan test. We are temporarily keeping
-        // style/background add-ons out of the inference prompt to isolate core behavior.
-        return """Translate the following text into $targetLanguage. Note that you should only output the translated result without any additional explanation:
+        // Exact user prompt used by the working standalone Vulkan test.
+        // Background, glossary and style are intentionally bypassed during this
+        // controlled comparison so the integrated request cannot drift.
+        return """Translate the following text into $targetLanguage. Output only the translated result without explanations:
 
 $sourceText"""
     }
