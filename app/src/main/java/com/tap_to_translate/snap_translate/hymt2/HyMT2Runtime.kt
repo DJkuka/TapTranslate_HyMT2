@@ -374,7 +374,9 @@ object HyMT2Runtime {
             else -> ""
         }
         val additions = listOf(styleInstruction, customStyle.trim().takeIf {
-            stylePreset != "Свой стиль (описать ниже)" && it.isNotBlank()
+            stylePreset != "Без стиля" &&
+                stylePreset != "Свой стиль (описать ниже)" &&
+                it.isNotBlank()
         } ?: "").filter { it.isNotBlank() }
         return if (additions.isEmpty()) base else {
             base + "\n\nTranslation style: " + additions.joinToString(" ")
