@@ -1213,15 +1213,15 @@ def patch_fixed_font_size_renderers(base: Path) -> None:
     move-object/from16 v14, v6
     move-object/from16 v16, v7
     invoke-static/range {v13 .. v16}, Lca/c2;->f(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;)Landroid/text/StaticLayout;
-    move-result-object v8
-    invoke-virtual {v8}, Landroid/text/Layout;->getHeight()I
-    move-result v9
-    iget v17, v11, Loh/m;->f:I
-    iget v18, v11, Loh/m;->e:I
-    sub-int/2addr v17, v18
-    sget v18, Lca/g2;->h:I
-    add-int/2addr v17, v18
-    if-gt v9, v17, :hymt_fixed_font_done_f
+    move-result-object v17
+    invoke-virtual {v17}, Landroid/text/Layout;->getHeight()I
+    move-result v18
+    iget v19, v11, Loh/m;->f:I
+    iget v8, v11, Loh/m;->e:I
+    sub-int v19, v19, v8
+    sget v8, Lca/g2;->h:I
+    add-int v19, v19, v8
+    if-gt v18, v19, :hymt_fixed_font_done_f
     move v3, v5
 
     :hymt_fixed_font_done_f
@@ -1263,13 +1263,13 @@ def patch_fixed_font_size_renderers(base: Path) -> None:
     move-object/from16 v16, v7
     invoke-direct/range {v12 .. v19}, Landroid/text/StaticLayout;-><init>(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;FFZ)V
     invoke-virtual {v12}, Landroid/text/Layout;->getHeight()I
-    move-result v9
-    iget v17, v11, Loh/m;->f:I
-    iget v18, v11, Loh/m;->e:I
-    sub-int/2addr v17, v18
-    sget v18, Lca/g2;->h:I
-    add-int/2addr v17, v18
-    if-gt v9, v17, :hymt_fixed_font_done_g
+    move-result v17
+    iget v18, v11, Loh/m;->f:I
+    iget v9, v11, Loh/m;->e:I
+    sub-int v18, v18, v9
+    sget v9, Lca/g2;->h:I
+    add-int v18, v18, v9
+    if-gt v17, v18, :hymt_fixed_font_done_g
     move v2, v5
 
     :hymt_fixed_font_done_g
