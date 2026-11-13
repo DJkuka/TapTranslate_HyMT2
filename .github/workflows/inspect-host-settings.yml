@@ -103,6 +103,23 @@ jobs:
           grep -R -n -E 'Lrh/c;->|Lxh/c;->|Lca/d2;->|Lqh/n;->|Lkh/v;->|HAWK_(MANGA|VERTICAL|UPCASE|CENTER|FONT|STYLE|BACKGROUND|TEXT)' \
             build/decoded/smali* > diagnostics/host-flow-call-sites.txt || true
 
+          # Capture the exact Home layout and every host class involved in floating
+          # container touch handling / double-tap mode transitions.
+          if [ -f build/decoded/res/layout/fragment_home.xml ]; then
+            cp build/decoded/res/layout/fragment_home.xml diagnostics/layout/
+          fi
+          mkdir -p diagnostics/touch-flow
+          touch_pattern='rlContainViewAdd|ContainViewAdd|isConsideredDoubleTap|onDoubleTap|onSingleTapConfirmed|onDoubleTapEvent|GestureDetector|setOnDoubleTapListener|FLAG_NOT_TOUCHABLE|FLAG_NOT_TOUCH_MODAL|setTouchable|setTouchModal|isTouchable|ACTION_POINTER_DOWN'
+          find build/decoded/smali* -type f -name '*.smali' -print0 | while IFS= read -r -d '' f; do
+            if grep -qEi "$touch_pattern" "$f"; then
+              cp --parents "$f" diagnostics/touch-flow/
+            fi
+          done
+          grep -R -n -i -E "$touch_pattern" build/decoded/smali* > diagnostics/touch-flow-index.txt || true
+          grep -R -n -E 'fragment_home_ll_(OCR|translation)_engine|fragment_home_tv_(OCR|translation)_engine' \
+            build/decoded/res/layout* build/decoded/res/values/ids.xml build/decoded/res/values/public.xml \
+            > diagnostics/home-ocr-layout-index.txt || true
+
           # Include exact host custom-widget implementations used by profile controls.
           find build/decoded/smali* -type f -name '*.smali' -print0 | while IFS= read -r -d '' f; do
             case "$f" in
