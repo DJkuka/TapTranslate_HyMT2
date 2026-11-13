@@ -382,14 +382,14 @@ Return exactly one translated segment per input. Preserve every marker ([[1]], [
 Put each marker at the beginning of its own line, followed by that segment's translation.
 Do not merge, omit, reorder, renumber, or add segments. Output no explanations.
 
-${entries.joinToString("\\n")}"""
+${entries.joinToString("\n")}"""
     }
 
     private fun parseTranslationBatch(output: String, expectedCount: Int): Map<Int, String>? {
-        val marker = Regex("""^\\s*\\[\\[(\\d+)]]\\s*(.*)$""")
+        val marker = Regex("""^\s*\[\[(\d+)]]\s*(.*)$""")
         val parsed = linkedMapOf<Int, String>()
         var current = -1
-        for (rawLine in output.replace('\\r', '\\n').split('\\n')) {
+        for (rawLine in output.replace('\r', '\n').split('\n')) {
             val line = rawLine.trim()
             if (line.isEmpty()) continue
             val match = marker.matchEntire(line)
