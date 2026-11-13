@@ -208,7 +208,7 @@ object HyMT2Runtime {
                         val sourceLanguage = languageName(sourceCode)
                         val sourceLanguageKey = sourceLanguage ?: "auto"
                         val targetLanguage = languageName(targetCode) ?: "Russian"
-                        val systemPrompt = buildTranslationSystemPrompt(sourceLanguage, targetLanguage)
+                        val systemPrompt = buildTranslationSystemPrompt(sourceLanguage, targetLanguage, options)
                         Log.i(TAG, "Hy-MT2 request: sourceCode=$sourceCode source=${sourceLanguage ?: "auto"} targetCode=$targetCode target=$targetLanguage context=${options.contextSize} maxTokens=${options.maxTokens} temperature=${options.temperature} topP=${options.topP} topK=${options.topK} threads=${options.threads} Vulkan=${options.useVulkan} gpuLayers=${if (options.useVulkan) options.gpuLayers else 0}; generation=Llama.complete")
                         val contextPairs = if (options.useRecentContext && options.recentContextPairs > 0) {
                             recentContextFor(host, sourceLanguageKey, targetLanguage, options.recentContextPairs)
@@ -303,14 +303,40 @@ object HyMT2Runtime {
         }
     }
 
-    private fun buildTranslationSystemPrompt(sourceLanguage: String?, targetLanguage: String): String {
-        // Match the empirically successful standalone Vulkan test for the common
-        // English-to-Russian comic workflow; keep other language pairs generic.
-        if (sourceLanguage.equals("English", ignoreCase = true) && targetLanguage.equals("Russian", ignoreCase = true)) {
-            return "You are a professional English-to-Russian comic translator. Use natural idiomatic Russian. Preserve speaker tone, humor, sarcasm, names and meaning. Do not add explanations."
-        }
+    private fun buildTranslationSystemPrompt(
+        sourceLanguage: String?,
+        targetLanguage: String,
+        options: HyMT2Options,
+    ): String {
+        val isEnglishRussian =
+            sourceLanguage.equals("English", ignoreCase = true) &&
+                targetLanguage.equals("Russian", ignoreCase = true)
         val source = sourceLanguage ?: "the detected source language"
-        return "You are a professional comic translator. Translate the supplied text from $source into $targetLanguage. Use natural, idiomatic language. Preserve meaning, speaker tone, humor, sarcasm and names. Output only the translation without explanations."
+        val baseInstruction = if (isEnglishRussian) {
+            "You are a professional English-to-Russian comic translator. The input may be a single word, a short phrase, or dialogue. Translate only the supplied text into natural, idiomatic Russian. Preserve meaning, speaker tone, humor, irony, sarcasm and names. Never define or describe a word, add examples or alternatives, repeat the source, or prepend labels such as 'Russian:'. Output only the translation."
+        } else {
+            "You are a professional translator. Translate only the supplied text from $source into $targetLanguage. Preserve meaning and tone. Do not define or describe words, add examples or alternatives, repeat the source, or prepend language labels. Output only the translation."
+        }
+
+        val styleInstruction = when (options.stylePreset) {
+            "Естественный перевод комиксов" ->
+                "Use natural, idiomatic Russian comic dialogue. Avoid stiff literal wording while preserving the exact meaning."
+            "Разговорный и живой язык" ->
+                "Use lively, conversational, natural spoken Russian. Prefer concise phrases that sound like real dialogue."
+            "Более дословный перевод" ->
+                "Stay close to the source wording and sentence structure. Do not add, omit, or embellish content, but keep the translation grammatical."
+            "Драматичный стиль, ирония и сарказм" ->
+                "Preserve dramatic intensity, irony, sarcasm and emotional subtext. Do not exaggerate beyond the source."
+            "Свой стиль (описать ниже)" ->
+                "Follow the custom style requirements supplied by the user."
+            else -> ""
+        }
+        val customStyle = options.customStyle.trim()
+        return buildString {
+            append(baseInstruction)
+            if (styleInstruction.isNotEmpty()) append(" Style: ").append(styleInstruction)
+            if (customStyle.isNotEmpty()) append(" Additional user style requirements: ").append(customStyle)
+        }
     }
 
     private fun buildTranslationPrompt(
