@@ -1197,8 +1197,12 @@ def patch_manual_selection_touch_routing(base: Path) -> None:
 
     verify_a = helper.read_text(encoding="utf-8")
     verify_b = gesture.read_text(encoding="utf-8")
-    if verify_a.count("ManualSelectionTouchMode;->setTouchable") != 1 or verify_b.count("ManualSelectionTouchMode;->setTouchable") != 2:
-        raise RuntimeError("Manual-selection touchability hooks were not installed exactly once at each transition")
+    if (
+        verify_a.count("ManualSelectionTouchMode;->setTouchable") != 1
+        or verify_b.count("ManualSelectionTouchMode;->setTouchable") != 1
+        or verify_b.count("ManualSelectionTouchMode;->restoreTouchable") != 1
+    ):
+        raise RuntimeError("Manual-selection touchability disable/restore hooks were not installed exactly once")
     print("Added non-touchable routing during manual selection and restored touch handling after selection")
 
 
