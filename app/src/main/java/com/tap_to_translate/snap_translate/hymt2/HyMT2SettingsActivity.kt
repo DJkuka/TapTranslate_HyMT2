@@ -423,9 +423,24 @@ class HyMT2SettingsActivity : Activity() {
         var cursor: Cursor? = null
         return try {
             cursor = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-            if (cursor != null && cursor.moveToFirst()) cursor.getString(0) else null
+            if (cursor != null && cursor.moveToFirst()) {
+                val column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (column >= 0) cursor.getString(column) else null
+            } else null
+        } catch (t: SecurityException) {
+            // SAF grants may have been revoked, or an older build may have stored a URI
+            // without a persistable read permission. Never crash the settings Activity.
+            Log.w(TAG, "No read permission for selected model URI $uri", t)
+            null
+        } catch (t: RuntimeException) {
+            Log.w(TAG, "Unable to query selected model display name: $uri", t)
+            null
         } finally {
-            cursor?.close()
+            try {
+                cursor?.close()
+            } catch (t: Throwable) {
+                Log.w(TAG, "Unable to close SAF display-name cursor", t)
+            }
         }
     }
 
@@ -456,7 +471,10 @@ class HyMT2SettingsActivity : Activity() {
     }
 
     private fun refreshState() {
-        val uri = HyMT2Runtime.selectedModelUri(this)
+        // Validate the persisted SAF permission first. If it was revoked, hasModel()
+        // clears the stale URI and the screen returns to the "choose model" state.
+        val hasModel = HyMT2Runtime.hasModel(this)
+        val uri = if (hasModel) HyMT2Runtime.selectedModelUri(this) else null
         val legacy = HyMT2Runtime.modelFile(this)
         modelInfo.text = when {
             uri != null -> {
@@ -469,7 +487,7 @@ class HyMT2SettingsActivity : Activity() {
             else -> "Модель ещё не выбрана. Нужен GGUF-файл Hy-MT2-1.8B-Q4_K_M.gguf."
         }
         chooseButton.isEnabled = !importing && !HyMT2Runtime.isLoaded()
-        loadButton.isEnabled = !importing && HyMT2Runtime.hasModel(this) && !HyMT2Runtime.isLoaded()
+        loadButton.isEnabled = !importing && hasModel && !HyMT2Runtime.isLoaded()
         unloadButton.isEnabled = HyMT2Runtime.isLoaded()
         updateStats()
     }

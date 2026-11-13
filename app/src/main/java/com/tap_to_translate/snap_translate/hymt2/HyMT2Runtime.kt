@@ -78,9 +78,28 @@ object HyMT2Runtime {
 
     @JvmStatic
     fun hasModel(context: Context): Boolean {
-        // New builds only accept a persisted SAF URI. Legacy copied models are intentionally
-        // ignored so an old 1.1-GB duplicate is never used silently.
-        return selectedModelUri(context) != null
+        // New builds only accept a URI for which Android still holds a persistable read grant.
+        // A stale string in SharedPreferences must not suppress the document picker.
+        val app = context.applicationContext
+        val uri = selectedModelUri(app) ?: return false
+        if (loadedModel != null && loadedSource == uri.toString()) return true
+
+        val hasPersistedReadGrant = try {
+            app.contentResolver.persistedUriPermissions.any {
+                it.uri == uri && it.isReadPermission
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Unable to inspect persisted SAF permissions for $uri", t)
+            false
+        }
+        if (hasPersistedReadGrant) return true
+
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .remove(KEY_MODEL_URI)
+            .apply()
+        Log.w(TAG, "Stored model URI has no persisted read permission; cleared stale selection so the picker can reopen: $uri")
+        return false
     }
 
     @JvmStatic
