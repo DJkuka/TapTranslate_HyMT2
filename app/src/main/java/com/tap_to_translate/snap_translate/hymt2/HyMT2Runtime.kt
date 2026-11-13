@@ -282,7 +282,12 @@ object HyMT2Runtime {
                                         systemPrompt = systemPrompt,
                                         maxTokens = effectiveMaxTokens,
                                     )
-                                    val parsed = parseTranslationBatch(completion.text, indices.size)
+                                    val parsed = if (completion.tokensGenerated >= effectiveMaxTokens) {
+                                        Log.w(TAG, "OCR batch ${batchIndex + 1}: generation reached the token limit; rejecting partial batch")
+                                        null
+                                    } else {
+                                        parseTranslationBatch(completion.text, indices.size)
+                                    }
                                     if (parsed != null) {
                                         indices.forEachIndexed { markerIndex, sourceIndex ->
                                             translatedBlocks[sourceIndex] = parsed[markerIndex + 1]!!
