@@ -41,8 +41,8 @@ object HyMT2PenaltyNative {
         seed: Int,
     ): String
 
-    fun countPromptTokens(model: LlamaModel, prompt: String): Int {
-        val count = nativeCountPromptTokens(handle(model), prompt, "")
+    fun countPromptTokens(model: LlamaModel, prompt: String, systemPrompt: String = ""): Int {
+        val count = nativeCountPromptTokens(handle(model), prompt, systemPrompt)
         check(count > 0) { "Не удалось определить число токенов входного запроса" }
         return count
     }
@@ -50,6 +50,7 @@ object HyMT2PenaltyNative {
     fun complete(
         model: LlamaModel,
         prompt: String,
+        systemPrompt: String = "",
         maxTokens: Int,
         temperature: Float,
         topP: Float,
@@ -58,7 +59,7 @@ object HyMT2PenaltyNative {
     ): LlamaResult {
         require(maxTokens > 0) { "Для ответа не осталось токенов в выбранном контексте" }
         val json = nativeComplete(
-            handle(model), prompt, "", maxTokens,
+            handle(model), prompt, systemPrompt, maxTokens,
             temperature, topP, topK, repetitionPenalty, -1,
         )
         val result = JSONObject(json)

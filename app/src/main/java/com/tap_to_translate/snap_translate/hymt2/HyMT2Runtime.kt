@@ -161,6 +161,7 @@ object HyMT2Runtime {
                         val sourceLanguage = languageName(sourceCode)
                         val sourceLanguageKey = sourceLanguage ?: "auto"
                         val targetLanguage = languageName(targetCode) ?: "Russian"
+                        val systemPrompt = buildTranslationSystemPrompt(sourceLanguage, targetLanguage)
                         val contextPairs = if (options.useRecentContext && options.recentContextPairs > 0) {
                             recentContextFor(host, sourceLanguageKey, targetLanguage, options.recentContextPairs)
                         } else emptyList()
@@ -185,7 +186,7 @@ object HyMT2Runtime {
                                     targetLanguage = targetLanguage,
                                     options = options,
                                 )
-                                val promptTokens = HyMT2PenaltyNative.countPromptTokens(model, prompt)
+                                val promptTokens = HyMT2PenaltyNative.countPromptTokens(model, prompt, systemPrompt)
                                 val availableOutputTokens = (options.contextSize - promptTokens - 32).coerceAtLeast(0)
                                 if (availableOutputTokens < 8) {
                                     error("OCR-блок ${index + 1}/${sourceBlocks.size} не помещается в контекст ${options.contextSize}. Выбери больший контекст.")
@@ -194,6 +195,7 @@ object HyMT2Runtime {
                                 val completion = HyMT2PenaltyNative.complete(
                                     model = model,
                                     prompt = prompt,
+                                    systemPrompt = systemPrompt,
                                     maxTokens = effectiveMaxTokens,
                                     temperature = options.temperature,
                                     topP = options.topP,
@@ -214,7 +216,10 @@ object HyMT2Runtime {
                                 translatedBlocks += translatedBlock
                                 generatedTokens += completion.tokensGenerated
                                 generatedTimeMs += completion.generateTimeMs
-                                Log.d(TAG, "OCR block ${index + 1}/${sourceBlocks.size}: promptTokens=$promptTokens, outputChars=${translatedBlock.length}")
+                                Log.d(TAG, "OCR block ${index + 1}/${sourceBlocks.size}: promptTokens=$promptTokens, generatedTokens=${completion.tokensGenerated}/$effectiveMaxTokens, promptEvalMs=${completion.promptEvalTimeMs}, generateMs=${completion.generateTimeMs}, tps=${"%.2f".format(Locale.US, completion.tokensPerSecond)}, outputChars=${translatedBlock.length}")
+                                if (completion.tokensGenerated >= effectiveMaxTokens) {
+                                    Log.w(TAG, "OCR block ${index + 1}/${sourceBlocks.size} reached the output token limit; result may be truncated")
+                                }
                             }
                         }
 
@@ -252,6 +257,16 @@ object HyMT2Runtime {
             showFallbackNotice(appContext, "Не удалось запустить Hy-MT2. Используется Google Offline Translate.")
             fallbackToGoogleOffline(host, sourceText)
         }
+    }
+
+    private fun buildTranslationSystemPrompt(sourceLanguage: String?, targetLanguage: String): String {
+        // Match the empirically successful standalone Vulkan test for the common
+        // English-to-Russian comic workflow; keep other language pairs generic.
+        if (sourceLanguage.equals("English", ignoreCase = true) && targetLanguage.equals("Russian", ignoreCase = true)) {
+            return "You are a professional English-to-Russian comic translator. Use natural idiomatic Russian. Preserve speaker tone, humor, sarcasm, names and meaning. Do not add explanations."
+        }
+        val source = sourceLanguage ?: "the detected source language"
+        return "You are a professional comic translator. Translate the supplied text from $source into $targetLanguage. Use natural, idiomatic language. Preserve meaning, speaker tone, humor, sarcasm and names. Output only the translation without explanations."
     }
 
     private fun buildTranslationPrompt(
