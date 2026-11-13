@@ -1206,6 +1206,35 @@ def patch_manual_selection_touch_routing(base: Path) -> None:
     print("Added non-touchable routing during manual selection and restored touch handling after selection")
 
 
+def patch_remove_nurik_attribution(base: Path) -> None:
+    """Remove the third-party NURIK | 4PDA attribution row from the Settings screen."""
+    layout = base / "res/layout/fragment_settings.xml"
+    text = layout.read_text(encoding="utf-8")
+    marker = 'android:id="@id/fragment_setting_ll_policy"'
+    if marker not in text:
+        print("NURIK attribution row already absent")
+        return
+
+    id_pos = text.find(marker)
+    row_start = text.rfind("<LinearLayout", 0, id_pos)
+    row_end = text.find("</LinearLayout>", id_pos)
+    if row_start < 0 or row_end < 0:
+        raise RuntimeError("Could not safely isolate NURIK attribution row")
+    row_end += len("</LinearLayout>")
+
+    # Remove the separator immediately before the final attribution row as well.
+    previous_view = text.rfind("<View", 0, row_start)
+    view_end = text.find("/>", previous_view) + 2 if previous_view >= 0 else -1
+    if previous_view >= 0 and view_end >= 2 and not text[view_end:row_start].strip():
+        row_start = previous_view
+
+    text = text[:row_start] + text[row_end:]
+    if "NURIK | 4PDA" in text or marker in text:
+        raise RuntimeError("NURIK attribution text or row ID remained after removal")
+    layout.write_text(text, encoding="utf-8")
+    print("Removed NURIK | 4PDA attribution row from Settings")
+
+
 def patch_home_ocr_quick_selector(base: Path) -> None:
     """Add a Home shortcut that shares the native HAWK_OCR preference."""
     layout = base / "res/layout/fragment_home.xml"
@@ -1737,6 +1766,7 @@ def main() -> int:
     patch_free_text_alpha_renderers(base)
     patch_fixed_font_size_renderers(base)
     patch_home_ocr_quick_selector(base)
+    patch_remove_nurik_attribution(base)
     patch_manual_selection_touch_routing(base)
     patch_paddle_child_constructor(base)
     patch_picker_callbacks(base)
