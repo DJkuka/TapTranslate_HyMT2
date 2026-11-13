@@ -46,6 +46,7 @@ object HyMT2Settings {
     val historyChoices = listOf(0, 1, 2, 3, 4)
     val profileChoices = listOf("Быстрый", "Сбалансированный", "Качественный", "Настраиваемый")
     val styleChoices = listOf(
+        "Без стиля",
         "Естественный перевод комиксов",
         "Разговорный и живой язык",
         "Более дословный перевод",
