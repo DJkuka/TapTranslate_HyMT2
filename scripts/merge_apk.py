@@ -1193,6 +1193,7 @@ def patch_fixed_font_size_renderers(base: Path) -> None:
     :goto_2"""
     f_code = """    iget v4, v0, Lrh/f;->m:F
 
+    move-object/from16 v19, v9
     sget-object v5, Ljava/lang/Boolean;->FALSE:Ljava/lang/Boolean;
     const-string v6, "HAWK_FIXED_FONT_SIZE"
     invoke-static {v5, v6}, Lqh/n;->a(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;
@@ -1213,18 +1214,19 @@ def patch_fixed_font_size_renderers(base: Path) -> None:
     move-object/from16 v14, v6
     move-object/from16 v16, v7
     invoke-static/range {v13 .. v16}, Lca/c2;->f(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;)Landroid/text/StaticLayout;
-    move-result-object v17
-    invoke-virtual {v17}, Landroid/text/Layout;->getHeight()I
-    move-result v18
-    iget v19, v11, Loh/m;->f:I
-    iget v8, v11, Loh/m;->e:I
-    sub-int v19, v19, v8
-    sget v8, Lca/g2;->h:I
-    add-int v19, v19, v8
-    if-gt v18, v19, :hymt_fixed_font_done_f
+    move-result-object v8
+    invoke-virtual {v8}, Landroid/text/Layout;->getHeight()I
+    move-result v9
+    iget v7, v11, Loh/m;->f:I
+    iget v6, v11, Loh/m;->e:I
+    sub-int/2addr v7, v6
+    sget v6, Lca/g2;->h:I
+    add-int/2addr v7, v6
+    if-gt v9, v7, :hymt_fixed_font_done_f
     move v3, v5
 
     :hymt_fixed_font_done_f
+    move-object/from16 v9, v19
     :goto_2"""
     if "hymt_fixed_font_done_f" not in f_text:
         if f_text.count(f_anchor) != 1:
@@ -1238,6 +1240,7 @@ def patch_fixed_font_size_renderers(base: Path) -> None:
     const/4 v4, 0x1"""
     g_code = """    iget v3, v0, Lrh/g;->m:F
 
+    move-object/from16 v19, v9
     sget-object v5, Ljava/lang/Boolean;->FALSE:Ljava/lang/Boolean;
     const-string v6, "HAWK_FIXED_FONT_SIZE"
     invoke-static {v5, v6}, Lqh/n;->a(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;
@@ -1263,16 +1266,17 @@ def patch_fixed_font_size_renderers(base: Path) -> None:
     move-object/from16 v16, v7
     invoke-direct/range {v12 .. v19}, Landroid/text/StaticLayout;-><init>(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;FFZ)V
     invoke-virtual {v12}, Landroid/text/Layout;->getHeight()I
-    move-result v17
-    iget v18, v11, Loh/m;->f:I
-    iget v19, v11, Loh/m;->e:I
-    sub-int v18, v18, v19
-    sget v19, Lca/g2;->h:I
-    add-int v18, v18, v19
-    if-gt v17, v18, :hymt_fixed_font_done_g
+    move-result v7
+    iget v8, v11, Loh/m;->f:I
+    iget v6, v11, Loh/m;->e:I
+    sub-int/2addr v8, v6
+    sget v6, Lca/g2;->h:I
+    add-int/2addr v8, v6
+    if-gt v7, v8, :hymt_fixed_font_done_g
     move v2, v5
 
     :hymt_fixed_font_done_g
+    move-object/from16 v9, v19
     const/4 v4, 0x1"""
     if "hymt_fixed_font_done_g" not in g_text:
         if g_text.count(g_anchor) != 1:
