@@ -1207,33 +1207,69 @@ def patch_manual_selection_touch_routing(base: Path) -> None:
 
 
 def patch_remove_nurik_attribution(base: Path) -> None:
-    """Remove the third-party NURIK | 4PDA attribution row from the Settings screen."""
+    """Remove the NURIK attribution and guard its now-optional host click target."""
     layout = base / "res/layout/fragment_settings.xml"
     text = layout.read_text(encoding="utf-8")
     marker = 'android:id="@id/fragment_setting_ll_policy"'
-    if marker not in text:
+    if marker in text:
+        id_pos = text.find(marker)
+        row_start = text.rfind("<LinearLayout", 0, id_pos)
+        row_end = text.find("</LinearLayout>", id_pos)
+        if row_start < 0 or row_end < 0:
+            raise RuntimeError("Could not safely isolate NURIK attribution row")
+        row_end += len("</LinearLayout>")
+
+        # Remove the separator immediately before the final attribution row as well.
+        previous_view = text.rfind("<View", 0, row_start)
+        view_end = text.find("/>", previous_view) + 2 if previous_view >= 0 else -1
+        if previous_view >= 0 and view_end >= 2 and not text[view_end:row_start].strip():
+            row_start = previous_view
+
+        text = text[:row_start] + text[row_end:]
+        if "NURIK | 4PDA" in text or marker in text:
+            raise RuntimeError("NURIK attribution text or row ID remained after removal")
+        layout.write_text(text, encoding="utf-8")
+        print("Removed NURIK | 4PDA attribution row from Settings")
+    else:
         print("NURIK attribution row already absent")
-        return
 
-    id_pos = text.find(marker)
-    row_start = text.rfind("<LinearLayout", 0, id_pos)
-    row_end = text.find("</LinearLayout>", id_pos)
-    if row_start < 0 or row_end < 0:
-        raise RuntimeError("Could not safely isolate NURIK attribution row")
-    row_end += len("</LinearLayout>")
+    # mh/p still installs a click listener on the removed policy row. Keep the
+    # original behavior when present, but skip it safely when the row is absent.
+    fragment = base / "smali_classes3/mh/p.smali"
+    smali = fragment.read_text(encoding="utf-8")
+    target = """    const p2, 0x7f0a01c6
 
-    # Remove the separator immediately before the final attribution row as well.
-    previous_view = text.rfind("<View", 0, row_start)
-    view_end = text.find("/>", previous_view) + 2 if previous_view >= 0 else -1
-    if previous_view >= 0 and view_end >= 2 and not text[view_end:row_start].strip():
-        row_start = previous_view
+    invoke-virtual {p1, p2}, Landroid/view/View;->findViewById(I)Landroid/view/View;
 
-    text = text[:row_start] + text[row_end:]
-    if "NURIK | 4PDA" in text or marker in text:
-        raise RuntimeError("NURIK attribution text or row ID remained after removal")
-    layout.write_text(text, encoding="utf-8")
-    print("Removed NURIK | 4PDA attribution row from Settings")
+    move-result-object p2
 
+    new-instance v0, Lmh/m;"""
+    guarded = """    const p2, 0x7f0a01c6
+
+    invoke-virtual {p1, p2}, Landroid/view/View;->findViewById(I)Landroid/view/View;
+
+    move-result-object p2
+
+    if-eqz p2, :hymt_nurik_click_done
+
+    new-instance v0, Lmh/m;"""
+    if ":hymt_nurik_click_done" not in smali:
+        if smali.count(target) != 1:
+            raise RuntimeError("Could not isolate the NURIK policy-row click handler")
+        smali = smali.replace(target, guarded, 1)
+        click_call = """    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+
+    invoke-virtual {p1, v1}, Landroid/view/View;->findViewById(I)Landroid/view/View;"""
+        click_guarded = """    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+
+    :hymt_nurik_click_done
+
+    invoke-virtual {p1, v1}, Landroid/view/View;->findViewById(I)Landroid/view/View;"""
+        if smali.count(click_call) != 1:
+            raise RuntimeError("Could not place the NURIK click-handler null guard")
+        smali = smali.replace(click_call, click_guarded, 1)
+        fragment.write_text(smali, encoding="utf-8")
+    print("Guarded optional NURIK settings click target")
 
 def patch_home_ocr_quick_selector(base: Path) -> None:
     """Add a Home shortcut that shares the native HAWK_OCR preference."""
