@@ -208,7 +208,7 @@ object HyMT2Runtime {
                         val sourceLanguage = languageName(sourceCode)
                         val sourceLanguageKey = sourceLanguage ?: "auto"
                         val targetLanguage = languageName(targetCode) ?: "Russian"
-                        val systemPrompt = buildTranslationSystemPrompt(sourceLanguage, targetLanguage)
+                        val systemPrompt = buildTranslationSystemPrompt(sourceLanguage, targetLanguage, options.stylePreset, options.customStyle)
                         Log.i(TAG, "Hy-MT2 request: sourceCode=$sourceCode source=${sourceLanguage ?: "auto"} targetCode=$targetCode target=$targetLanguage sourceChars=${sourceText.length} sourcePreview=${if (sourceText.length <= 64) sourceText.replace("\\n", "\\\\n") else "<omitted>"} background=${options.backgroundContext.isNotBlank()} glossary=${options.glossary.isNotBlank()} style=${options.stylePreset}; context=${options.contextSize} maxTokens=${options.maxTokens} temperature=${options.temperature} topP=${options.topP} topK=${options.topK} threads=${options.threads} Vulkan=${options.useVulkan} gpuLayers=${if (options.useVulkan) options.gpuLayers else 0}; generation=Llama.complete")
                         val contextPairs = if (options.useRecentContext && options.recentContextPairs > 0) {
                             recentContextFor(host, sourceLanguageKey, targetLanguage, options.recentContextPairs)
@@ -303,16 +303,39 @@ object HyMT2Runtime {
         }
     }
 
-    private fun buildTranslationSystemPrompt(sourceLanguage: String?, targetLanguage: String): String {
-        // Match the short, known-good system instruction from the standalone Vulkan test.
-        // Hy-MT2 is a translation model; avoid verbose role/persona text here.
-        return if (
+    private fun buildTranslationSystemPrompt(
+        sourceLanguage: String?,
+        targetLanguage: String,
+        stylePreset: String,
+        customStyle: String,
+    ): String {
+        val base = if (
             sourceLanguage.equals("English", ignoreCase = true) &&
             targetLanguage.equals("Russian", ignoreCase = true)
         ) {
             "You are a professional English-to-Russian comic translator. Use natural idiomatic Russian. Preserve speaker tone, humor, sarcasm, names and meaning. Do not add explanations."
         } else {
             "You are a professional translator. Translate accurately and naturally. Preserve meaning and tone. Do not add explanations."
+        }
+
+        // "Без стиля" keeps the neutral translation instruction and adds no style bias.
+        val styleInstruction = when (stylePreset) {
+            "Естественный перевод комиксов" ->
+                "Use natural, fluent comic-book language. Keep dialogue concise and idiomatic; preserve the original meaning and character voice."
+            "Разговорный и живой язык" ->
+                "Use lively, conversational language that sounds natural when spoken. Avoid stiff or bookish phrasing."
+            "Более дословный перевод" ->
+                "Stay close to the source wording and sentence structure where natural. Do not paraphrase or embellish."
+            "Драматичный стиль, ирония и сарказм" ->
+                "Preserve dramatic intensity, irony, sarcasm and emotional subtext. Do not exaggerate beyond the source."
+            "Свой стиль (описать ниже)" -> customStyle.trim().take(1000)
+            else -> ""
+        }
+        val additions = listOf(styleInstruction, customStyle.trim().takeIf {
+            stylePreset != "Свой стиль (описать ниже)" && it.isNotBlank()
+        } ?: "").filter { it.isNotBlank() }
+        return if (additions.isEmpty()) base else {
+            base + "\n\nTranslation style: " + additions.joinToString(" ")
         }
     }
 
