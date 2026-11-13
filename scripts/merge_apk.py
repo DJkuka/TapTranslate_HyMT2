@@ -1170,13 +1170,37 @@ def patch_manual_selection_touch_routing(base: Path) -> None:
     iget-object v0, v0, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->k:Lrh/c;
 """
         gmethod = gmethod.replace(anchor, code, 1)
+
+        # Also apply the flag immediately after lazily creating the full-screen
+        # overlay. On first manual selection rh/c may not exist at double-tap time.
+        move_anchor = """    invoke-virtual {p1}, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->h()Lrh/c;
+
+    move-result-object v0
+
+    iget-object p1, p1, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->l:Lcom/google/android/gms/internal/ads/mk0;
+"""
+        if gmethod.count(move_anchor) != 1:
+            raise RuntimeError("Could not locate lazy overlay creation in sh/b.onTouch")
+        move_code = """    invoke-virtual {p1}, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->h()Lrh/c;
+
+    move-result-object v0
+
+    iget-object v9, p1, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->b:Landroid/view/WindowManager;
+
+    const/4 v10, 0x0
+
+    invoke-static {v0, v9, v10}, Lcom/tap_to_translate/snap_translate/hymt2/ManualSelectionTouchMode;->setTouchable(Landroid/view/View;Landroid/view/WindowManager;Z)V
+
+    iget-object p1, p1, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->l:Lcom/google/android/gms/internal/ads/mk0;
+"""
+        gmethod = gmethod.replace(move_anchor, move_code, 1)
         gtext = gtext[:gstart] + gmethod + gtext[gend:]
         gesture.write_text(gtext, encoding="utf-8")
 
     verify_a = helper.read_text(encoding="utf-8")
     verify_b = gesture.read_text(encoding="utf-8")
-    if verify_a.count("ManualSelectionTouchMode;->setTouchable") != 1 or verify_b.count("ManualSelectionTouchMode;->setTouchable") != 1:
-        raise RuntimeError("Manual-selection touchability hooks were not installed exactly once")
+    if verify_a.count("ManualSelectionTouchMode;->setTouchable") != 1 or verify_b.count("ManualSelectionTouchMode;->setTouchable") != 2:
+        raise RuntimeError("Manual-selection touchability hooks were not installed exactly once at each transition")
     print("Added non-touchable routing during manual selection and restored touch handling after selection")
 
 
