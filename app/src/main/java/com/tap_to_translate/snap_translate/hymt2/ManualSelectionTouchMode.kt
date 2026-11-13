@@ -9,6 +9,16 @@ object ManualSelectionTouchMode {
     private const val TAG = "ManualSelectionTouch"
 
     @JvmStatic
+    fun setUntouchable(view: View?, windowManager: WindowManager?) {
+        setTouchable(view, windowManager, false)
+    }
+
+    @JvmStatic
+    fun restoreTouchable(view: View?, windowManager: WindowManager?) {
+        setTouchable(view, windowManager, true)
+    }
+
+    @JvmStatic
     fun setTouchable(view: View?, windowManager: WindowManager?, touchable: Boolean) {
         if (view == null || windowManager == null) return
         try {
