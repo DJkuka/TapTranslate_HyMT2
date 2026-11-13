@@ -1270,10 +1270,22 @@ def patch_home_ocr_quick_selector(base: Path) -> None:
         raise RuntimeError("Could not isolate Home onViewCreated")
     method = text[start:end]
     if "HomeOcrQuickSelector;->bind" not in method:
+        # Preserve the original root View. The host method reuses p1 later for child
+        # views, so passing p1 at the end would pass WidgetChooseStyleNew, not root.
+        locals_match = re.search(r"(?m)^    \.locals (\d+)$", method)
+        if not locals_match:
+            raise RuntimeError("Could not determine Home onViewCreated local registers")
+        local_count = int(locals_match.group(1))
+        root_register = f"v{local_count}"
+        method = method[:locals_match.start(1)] + str(local_count + 1) + method[locals_match.end(1):]
+        super_call = "    invoke-super {p0, p1, p2}, Landroidx/fragment/app/Fragment;->onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V"
+        if method.count(super_call) != 1:
+            raise RuntimeError("Could not locate unique Home onViewCreated super call")
+        method = method.replace(super_call, super_call + f"\n\n    move-object/from16 {root_register}, p1", 1)
         insertion = method.rfind("    return-void\n")
         if insertion < 0:
             raise RuntimeError("Could not locate Home onViewCreated return")
-        method = method[:insertion] + "    invoke-static {p1}, Lcom/tap_to_translate/snap_translate/hymt2/HomeOcrQuickSelector;->bind(Landroid/view/View;)V\n\n" + method[insertion:]
+        method = method[:insertion] + f"    invoke-static {{{root_register}}}, Lcom/tap_to_translate/snap_translate/hymt2/HomeOcrQuickSelector;->bind(Landroid/view/View;)V\n\n" + method[insertion:]
         text = text[:start] + method + text[end:]
 
     start = text.find(".method public final onResume()V")
