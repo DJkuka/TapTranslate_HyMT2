@@ -24,6 +24,8 @@ object DisplayProfilesStore {
     private const val KEY_BUILTIN_DEFAULTS = "builtin_defaults_json"
     private const val KEY_PENDING_ID = "pending_profile_id"
     private const val KEY_ACTIVE_ID = "active_profile_id"
+    private const val KEY_FIXED_FONT_MIGRATED = "fixed_font_size_migrated"
+    private const val KEY_FIXED_FONT_SIZE = "HAWK_FIXED_FONT_SIZE"
 
     private const val OCR_PREFS = "taptranslate_ocr_settings"
     private const val KEY_FREE_ALPHA_ENABLED = "ocr_free_text_alpha_enabled"
@@ -33,6 +35,7 @@ object DisplayProfilesStore {
         "HAWK_BG_TRANS" to 236,
         "HAWK_FONT_FULL" to "Roboto-Medium",
         "HAWK_FONT_SIZE" to 20,
+        KEY_FIXED_FONT_SIZE to false,
         "HAWK_BG_STROKE" to true,
         "HAWK_MANGA_MODE" to false,
         "HAWK_MANGA_FONT" to true,
@@ -54,12 +57,17 @@ object DisplayProfilesStore {
     @Synchronized
     fun ensureInitialized(context: Context) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        if (prefs.contains(KEY_PROFILES) && prefs.contains(KEY_BUILTIN_DEFAULTS)) return
+        if (prefs.contains(KEY_PROFILES) && prefs.contains(KEY_BUILTIN_DEFAULTS)) {
+            migrateFixedFontFlag(context, prefs)
+            return
+        }
 
         // Migration is deliberately read-only with respect to the active host
         // settings. The first Comics preset is a snapshot of the user's current
         // configuration, so opening this screen does not change appearance.
-        val comics = snapshotCurrent(context)
+        val comics = snapshotCurrent(context).apply {
+            optJSONObject("host")?.put(KEY_FIXED_FONT_SIZE, false)
+        }
         val books = createBooksSnapshot(context)
         val profiles = JSONArray()
             .put(profileJson("comics", "Комиксы", true, comics))
@@ -71,6 +79,7 @@ object DisplayProfilesStore {
             .putString(KEY_ACTIVE_ID, "comics")
             .remove(KEY_PENDING_ID)
             .apply()
+        prefs.edit().putBoolean(KEY_FIXED_FONT_MIGRATED, true).apply()
     }
 
     @Synchronized
@@ -96,6 +105,33 @@ object DisplayProfilesStore {
         ensureInitialized(context)
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .getString(KEY_ACTIVE_ID, "comics") ?: "comics"
+    }
+
+    @Synchronized
+    fun fixedFontSize(context: Context, profileId: String): Boolean {
+        ensureInitialized(context)
+        val profile = findProfile(readProfiles(context), profileId) ?: return profileId == "books"
+        val host = profile.optJSONObject("values")?.optJSONObject("host")
+        return host?.optBoolean(KEY_FIXED_FONT_SIZE, profileId == "books") ?: (profileId == "books")
+    }
+
+    @Synchronized
+    fun setFixedFontSize(context: Context, profileId: String, enabled: Boolean) {
+        ensureInitialized(context)
+        val array = readProfiles(context)
+        val profile = findProfile(array, profileId) ?: throw IllegalArgumentException("Профиль не найден")
+        val values = JSONObject(profile.optJSONObject("values")?.toString() ?: "{}")
+        val host = JSONObject(values.optJSONObject("host")?.toString() ?: "{}")
+        host.put(KEY_FIXED_FONT_SIZE, enabled)
+        values.put("host", host)
+        profile.put("values", values)
+        writeProfiles(context, array)
+
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.getString(KEY_ACTIVE_ID, "comics") == profileId) {
+            writeHawk(KEY_FIXED_FONT_SIZE, enabled)
+            notifyHostSettingsChanged()
+        }
     }
 
     @Synchronized
@@ -243,6 +279,7 @@ object DisplayProfilesStore {
         val host = JSONObject()
         for ((key, defaultValue) in hawkDefaults) {
             val value = when (key) {
+                KEY_FIXED_FONT_SIZE -> true
                 "HAWK_MANGA_MODE" -> false
                 "HAWK_MANGA_FONT" -> true
                 "HAWK_MANGA_BACKGROUND" -> true
@@ -265,6 +302,46 @@ object DisplayProfilesStore {
             .put(KEY_FREE_ALPHA_ENABLED, false)
             .put(KEY_FREE_ALPHA_PERCENT, freePercent)
         return JSONObject().put("host", host).put("ocr", ocr)
+    }
+
+    private fun migrateFixedFontFlag(context: Context, prefs: android.content.SharedPreferences) {
+        if (prefs.getBoolean(KEY_FIXED_FONT_MIGRATED, false)) return
+
+        fun migrate(source: JSONArray): JSONArray {
+            val updated = JSONArray()
+            for (i in 0 until source.length()) {
+                val original = source.optJSONObject(i) ?: continue
+                val profile = JSONObject(original.toString())
+                val values = JSONObject(profile.optJSONObject("values")?.toString() ?: "{}")
+                val host = JSONObject(values.optJSONObject("host")?.toString() ?: "{}")
+                if (!host.has(KEY_FIXED_FONT_SIZE)) {
+                    host.put(KEY_FIXED_FONT_SIZE, profile.optString("id") == "books")
+                }
+                values.put("host", host)
+                profile.put("values", values)
+                updated.put(profile)
+            }
+            return updated
+        }
+
+        val profiles = migrate(readProfiles(context))
+        val defaults = migrate(JSONArray(prefs.getString(KEY_BUILTIN_DEFAULTS, "[]") ?: "[]"))
+        prefs.edit()
+            .putString(KEY_PROFILES, profiles.toString())
+            .putString(KEY_BUILTIN_DEFAULTS, defaults.toString())
+            .putBoolean(KEY_FIXED_FONT_MIGRATED, true)
+            .apply()
+
+        val activeId = prefs.getString(KEY_ACTIVE_ID, "comics") ?: "comics"
+        val activeValue = findProfile(profiles, activeId)
+            ?.optJSONObject("values")?.optJSONObject("host")
+            ?.optBoolean(KEY_FIXED_FONT_SIZE, activeId == "books")
+            ?: (activeId == "books")
+        try {
+            writeHawk(KEY_FIXED_FONT_SIZE, activeValue)
+        } catch (t: Throwable) {
+            Log.w(TAG, "Could not migrate active fixed-font preference", t)
+        }
     }
 
     private fun snapshotCurrent(context: Context): JSONObject {

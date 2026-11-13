@@ -11,6 +11,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 
@@ -19,6 +20,8 @@ class DisplayProfilesActivity : Activity() {
     private lateinit var profileSpinner: Spinner
     private lateinit var description: TextView
     private lateinit var status: TextView
+    private lateinit var fixedFontSwitch: Switch
+    private var updatingFixedFontSwitch = false
     private var profiles: List<DisplayProfileInfo> = emptyList()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -59,7 +62,33 @@ class DisplayProfilesActivity : Activity() {
 
         profileSpinner = Spinner(this)
         root.addView(profileSpinner, matchWrap(dp(8)))
-        description = addText(root, "", 13f, false, dp(14))
+        description = addText(root, "", 13f, false, dp(8))
+        fixedFontSwitch = Switch(this).apply {
+            text = "Фиксированный размер шрифта"
+            setOnCheckedChangeListener { _, checked ->
+                if (!updatingFixedFontSwitch) {
+                    val selected = selectedProfile() ?: return@setOnCheckedChangeListener
+                    try {
+                        DisplayProfilesStore.setFixedFontSize(this@DisplayProfilesActivity, selected.id, checked)
+                        showStatus(
+                            if (checked) "Фиксированный размер включён для «" + selected.name + "»."
+                            else "Обычный подбор размера включён для «" + selected.name + "»."
+                        )
+                    } catch (t: Throwable) {
+                        showStatus(t.message ?: "Не удалось изменить режим размера шрифта")
+                        updateDescription()
+                    }
+                }
+            }
+        }
+        root.addView(fixedFontSwitch, matchWrap(dp(4)))
+        addText(
+            root,
+            "В этом режиме рендерер старается держать шрифт в диапазоне 85–100% от выбранного на главном экране максимума. Если даже 85% не помещается по высоте блока, включается обычный подбор меньшего размера, чтобы не обрезать текст.",
+            12f,
+            false,
+            dp(14)
+        )
 
         addButton(root, "Применить со следующей страницы") {
             val selected = selectedProfile() ?: return@addButton
@@ -199,6 +228,13 @@ class DisplayProfilesActivity : Activity() {
             selected.builtIn ->
                 "Встроенный профиль. Его параметры можно изменить в главном экране настроек оформления и сохранить сюда кнопкой ниже. Удаление недоступно."
             else -> "Пользовательский профиль. Его можно применить, обновить текущими настройками, дублировать или удалить."
+        }
+        if (::fixedFontSwitch.isInitialized) {
+            updatingFixedFontSwitch = true
+            fixedFontSwitch.isEnabled = selected != null
+            fixedFontSwitch.isChecked =
+                selected?.let { DisplayProfilesStore.fixedFontSize(this, it.id) } ?: false
+            updatingFixedFontSwitch = false
         }
     }
 

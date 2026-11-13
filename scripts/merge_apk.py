@@ -1114,6 +1114,174 @@ def patch_screenshot_button(base: Path) -> None:
     print("Added translation screenshot toolbar button and helper callback")
 
 
+
+def patch_home_ocr_quick_selector(base: Path) -> None:
+    """Add a Home shortcut that shares the native HAWK_OCR preference."""
+    layout = base / "res/layout/fragment_home.xml"
+    xml_text = layout.read_text(encoding="utf-8")
+    row_id = 'android:id="@id/fragment_home_ll_OCR_engine"'
+    if row_id not in xml_text:
+        anchor = '<LinearLayout android:gravity="center" android:orientation="horizontal" android:id="@id/fragment_home_ll_translation_engine"'
+        if xml_text.count(anchor) != 1:
+            raise RuntimeError("Could not locate Home translation-engine row")
+        row = '''<LinearLayout android:gravity="center" android:orientation="horizontal" android:id="@id/fragment_home_ll_OCR_engine" android:background="@drawable/bg_spinner_language" android:paddingTop="5.0dip" android:paddingBottom="5.0dip" android:focusable="true" android:clickable="true" android:layout_width="fill_parent" android:layout_height="45.0dip" android:layout_marginTop="8.0dip" android:foreground="@drawable/fg_efftect_8" android:paddingVertical="5.0dip">
+                <LinearLayout android:gravity="center|left" android:orientation="vertical" android:layout_width="0.0dip" android:layout_height="wrap_content" android:layout_marginLeft="20.0dip" android:layout_weight="1.0">
+                    <TextView android:theme="@style/fontSemi" android:textSize="17.0dip" android:textColor="@color/cl_text_word" android:gravity="center|left" android:id="@id/fragment_home_tv_OCR_engine" android:layout_width="fill_parent" android:layout_height="wrap_content" android:text="PP-OCRv6 (Comics)" android:includeFontPadding="false" />
+                </LinearLayout>
+                <ImageView android:layout_width="11.0dip" android:layout_height="11.0dip" android:layout_marginRight="20.0dip" android:src="@drawable/ic_more_dropdown_svg" />
+            </LinearLayout>
+            '''
+        xml_text = xml_text.replace(anchor, row + anchor, 1)
+        layout.write_text(xml_text, encoding="utf-8")
+
+    ids = base / "res/values/ids.xml"
+    public = base / "res/values/public.xml"
+    for resource_file in (ids, public):
+        data = resource_file.read_text(encoding="utf-8")
+        if "fragment_home_ll_OCR_engine" not in data or "fragment_home_tv_OCR_engine" not in data:
+            raise RuntimeError("OCR selector IDs are not registered in host resources")
+
+    fragment = base / "smali_classes3/mh/l.smali"
+    text = fragment.read_text(encoding="utf-8")
+    on_view = ".method public final onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V"
+    start = text.find(on_view)
+    end = text.find(".end method", start)
+    if start < 0 or end < 0:
+        raise RuntimeError("Could not isolate Home onViewCreated")
+    method = text[start:end]
+    if "HomeOcrQuickSelector;->bind" not in method:
+        insertion = method.rfind("    return-void\n")
+        if insertion < 0:
+            raise RuntimeError("Could not locate Home onViewCreated return")
+        method = method[:insertion] + "    invoke-static {p1}, Lcom/tap_to_translate/snap_translate/hymt2/HomeOcrQuickSelector;->bind(Landroid/view/View;)V\n\n" + method[insertion:]
+        text = text[:start] + method + text[end:]
+
+    start = text.find(".method public final onResume()V")
+    end = text.find(".end method", start)
+    if start < 0 or end < 0:
+        raise RuntimeError("Could not isolate Home onResume")
+    method = text[start:end]
+    if "HomeOcrQuickSelector;->sync" not in method:
+        insertion = method.rfind("    return-void\n")
+        if insertion < 0:
+            raise RuntimeError("Could not locate Home onResume return")
+        sync = """    invoke-virtual {p0}, Landroidx/fragment/app/Fragment;->getView()Landroid/view/View;
+
+    move-result-object v0
+
+    if-eqz v0, :hymt_home_ocr_sync_done
+
+    invoke-static {v0}, Lcom/tap_to_translate/snap_translate/hymt2/HomeOcrQuickSelector;->sync(Landroid/view/View;)V
+
+    :hymt_home_ocr_sync_done
+
+"""
+        method = method[:insertion] + sync + method[insertion:]
+        text = text[:start] + method + text[end:]
+    fragment.write_text(text, encoding="utf-8")
+    print("Added Home OCR quick selector sharing HAWK_OCR with native settings")
+
+
+def patch_fixed_font_size_renderers(base: Path) -> None:
+    """Enforce an 85% minimum only when that size fits; otherwise keep adaptive sizing."""
+    f_path = base / "smali_classes3/rh/f.smali"
+    g_path = base / "smali_classes3/rh/g.smali"
+
+    f_text = f_path.read_text(encoding="utf-8")
+    f_anchor = """    iget v4, v0, Lrh/f;->m:F
+
+    :goto_2"""
+    f_code = """    iget v4, v0, Lrh/f;->m:F
+
+    const/4 v5, 0x0
+    const-string v6, "HAWK_FIXED_FONT_SIZE"
+    invoke-static {v5, v6}, Lqh/n;->a(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;
+    move-result-object v5
+    check-cast v5, Ljava/lang/Boolean;
+    invoke-virtual {v5}, Ljava/lang/Boolean;->booleanValue()Z
+    move-result v5
+    if-eqz v5, :hymt_fixed_font_done_f
+
+    const v5, 0x3f59999a
+    mul-float/2addr v5, v4
+    cmpl-float v6, v5, v3
+    if-lez v6, :hymt_fixed_font_done_f
+
+    iget-object v6, v0, Lrh/f;->g:Landroid/text/TextPaint;
+    invoke-virtual {v6, v5}, Landroid/graphics/Paint;->setTextSize(F)V
+    iget-object v7, v0, Lrh/f;->l:Landroid/text/Layout$Alignment;
+    move-object/from16 v14, v6
+    move-object/from16 v16, v7
+    invoke-static/range {v13 .. v16}, Lca/c2;->f(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;)Landroid/text/StaticLayout;
+    move-result-object v8
+    invoke-virtual {v8}, Landroid/text/Layout;->getHeight()I
+    move-result v9
+    iget v17, v11, Loh/m;->f:I
+    iget v18, v11, Loh/m;->e:I
+    sub-int/2addr v17, v18
+    sget v18, Lca/g2;->h:I
+    add-int/2addr v17, v18
+    if-gt v9, v17, :hymt_fixed_font_done_f
+    move v3, v5
+
+    :hymt_fixed_font_done_f
+    :goto_2"""
+    if "hymt_fixed_font_done_f" not in f_text:
+        if f_text.count(f_anchor) != 1:
+            throw new Error("Cannot identify rh/f fixed-font binary-search prelude");
+        f_text = f_text.replace(f_anchor, f_code, 1)
+        f_path.write_text(f_text, encoding="utf-8")
+
+    g_text = g_path.read_text(encoding="utf-8")
+    g_anchor = """    iget v3, v0, Lrh/g;->m:F
+
+    const/4 v4, 0x1"""
+    g_code = """    iget v3, v0, Lrh/g;->m:F
+
+    const/4 v5, 0x0
+    const-string v6, "HAWK_FIXED_FONT_SIZE"
+    invoke-static {v5, v6}, Lqh/n;->a(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;
+    move-result-object v5
+    check-cast v5, Ljava/lang/Boolean;
+    invoke-virtual {v5}, Ljava/lang/Boolean;->booleanValue()Z
+    move-result v5
+    if-eqz v5, :hymt_fixed_font_done_g
+
+    const v5, 0x3f59999a
+    mul-float/2addr v5, v3
+    cmpl-float v6, v5, v2
+    if-lez v6, :hymt_fixed_font_done_g
+
+    iget-object v6, v0, Lrh/g;->g:Landroid/text/TextPaint;
+    invoke-virtual {v6, v5}, Landroid/graphics/Paint;->setTextSize(F)V
+    new-instance v12, Landroid/text/StaticLayout;
+    iget-object v14, v0, Lrh/g;->g:Landroid/text/TextPaint;
+    iget-object v7, v0, Lrh/g;->l:Landroid/text/Layout$Alignment;
+    const/16 v18, 0x0
+    const/16 v19, 0x0
+    const/high16 v17, 0x3f800000
+    move-object/from16 v16, v7
+    invoke-direct/range {v12 .. v19}, Landroid/text/StaticLayout;-><init>(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;FFZ)V
+    invoke-virtual {v12}, Landroid/text/Layout;->getHeight()I
+    move-result v9
+    iget v17, v11, Loh/m;->f:I
+    iget v18, v11, Loh/m;->e:I
+    sub-int/2addr v17, v18
+    sget v18, Lca/g2;->h:I
+    add-int/2addr v17, v18
+    if-gt v9, v17, :hymt_fixed_font_done_g
+    move v2, v5
+
+    :hymt_fixed_font_done_g
+    const/4 v4, 0x1"""
+    if "hymt_fixed_font_done_g" not in g_text:
+        if g_text.count(g_anchor) != 1:
+            throw new Error("Cannot identify rh/g fixed-font binary-search prelude");
+        g_text = g_text.replace(g_anchor, g_code, 1)
+        g_path.write_text(g_text, encoding="utf-8")
+    print("Added fixed-size floor with adaptive overflow fallback to both renderers")
+
+
 def patch_display_profiles(base: Path) -> None:
     """Expose the profile manager in the main Settings tab."""
     layout = base / "res/layout/fragment_settings.xml"
@@ -1472,6 +1640,8 @@ def main() -> int:
     patch_dispatcher(base)
     patch_live_hybrid_ocr(base)
     patch_free_text_alpha_renderers(base)
+    patch_fixed_font_size_renderers(base)
+    patch_home_ocr_quick_selector(base)
     patch_paddle_child_constructor(base)
     patch_picker_callbacks(base)
     patch_settings_click(base)

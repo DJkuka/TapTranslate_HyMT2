@@ -79,17 +79,28 @@ object PaddleOcrLiveBridge {
             engine?.let { return it }
             check(OpenCVUtils.init(context)) { "OpenCV initialization failed" }
             Log.i(TAG, "OpenCV initialization confirmed; abi=${Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"}")
-            val maxSideLimit = context
-                .getSharedPreferences("taptranslate_ocr_settings", Context.MODE_PRIVATE)
-                .getInt("ocr_det_max_side_limit", 4000)
-                .coerceIn(1280, 4000)
-            Log.i(TAG, "PP-OCRv6 detector max side limit=" + maxSideLimit)
+            val ocrPrefs = context.getSharedPreferences("taptranslate_ocr_settings", Context.MODE_PRIVATE)
+            val maxSideLimit = ocrPrefs.getInt("ocr_det_max_side_limit", 4000).coerceIn(1280, 4000)
+            val detThresh = ocrPrefs.getFloat("ocr_det_thresh", 0.20f).coerceIn(0.05f, 0.60f)
+            val detBoxThresh = ocrPrefs.getFloat("ocr_det_box_thresh", 0.45f).coerceIn(0.10f, 0.90f)
+            val detUnclipRatio = ocrPrefs.getFloat("ocr_det_unclip_ratio", 1.40f).coerceIn(1.00f, 2.00f)
+            val recScoreThresh = ocrPrefs.getFloat("ocr_rec_score_thresh", 0.00f).coerceIn(0.00f, 1.00f)
+            Log.i(TAG, "PP-OCRv6 config detThresh=" + detThresh +
+                " detBoxThresh=" + detBoxThresh +
+                " detUnclipRatio=" + detUnclipRatio +
+                " recScoreThresh=" + recScoreThresh +
+                " detMaxSideLimit=" + maxSideLimit)
             val created = runBlocking {
                 PaddleOCR.create(
                     context = context,
-                    config = PaddleOCRConfig(detThresh = 0.20f, detBoxThresh = 0.45f,
-                        detUnclipRatio = 1.4f, recScoreThresh = 0f, recBatchSize = 1,
-                        detMaxSideLimit = maxSideLimit),
+                    config = PaddleOCRConfig(
+                        detThresh = detThresh,
+                        detBoxThresh = detBoxThresh,
+                        detUnclipRatio = detUnclipRatio,
+                        recScoreThresh = recScoreThresh,
+                        recBatchSize = 1,
+                        detMaxSideLimit = maxSideLimit
+                    ),
                     engineConfig = EngineConfig(numThreads = 2),
                     detModelAssetPath = "models/det/inference.onnx",
                     recModelAssetPath = "models/rec/inference.onnx",
