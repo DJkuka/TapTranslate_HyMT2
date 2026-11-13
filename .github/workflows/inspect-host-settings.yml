@@ -116,6 +116,28 @@ jobs:
             fi
           done
           grep -R -n -i -E "$touch_pattern" build/decoded/smali* > diagnostics/touch-flow-index.txt || true
+
+          # Exact floating-icon double-tap path: listener, gesture callback,
+          # coordinate callback and selection-overlay view.
+          mkdir -p diagnostics/floating-icon
+          for root in build/decoded/smali*; do
+            [ -d "$root" ] || continue
+            for rel in \
+              "lb/b.smali" \
+              "sh/b.smali" \
+              "me/c.smali" \
+              "com/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget.smali" \
+              "com/tap_to_translate/snap_translate/domain/main/activitys/CameraTranslateActivity.smali" \
+              "com/tap_to_translate/snap_translate/domain/main/activitys/TransparentActivity.smali" \
+              "com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali"; do
+              if [ -f "$root/$rel" ]; then
+                mkdir -p "diagnostics/floating-icon/$(basename "$root")/$(dirname "$rel")"
+                cp "$root/$rel" "diagnostics/floating-icon/$(basename "$root")/$rel"
+              fi
+            done
+          done
+          grep -R -n -E 'Llb/b;-><init>|Lsh/b;-><init>|Lme/c;->|FloatingIconWidget;->|HAWK_.*(SELECT|MANUAL|REGION)|manual.*(select|region)|select.*(region|area)' \
+            build/decoded/smali* > diagnostics/floating-icon-call-sites.txt || true
           grep -R -n -E 'fragment_home_ll_(OCR|translation)_engine|fragment_home_tv_(OCR|translation)_engine' \
             build/decoded/res/layout* build/decoded/res/values/ids.xml build/decoded/res/values/public.xml \
             > diagnostics/home-ocr-layout-index.txt || true
