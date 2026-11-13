@@ -241,8 +241,8 @@ object HyMT2Runtime {
                                 maxTokens = effectiveMaxTokens,
                             )
                             val translatedBlock = completion.text
-                                .replace('\\r', '\\n')
-                                .split('\\n')
+                                .replace('\r', '\n')
+                                .split('\n')
                                 .joinToString(" ") { it.trim() }
                                 .replace(Regex("\\s+"), " ")
                                 .trim()
