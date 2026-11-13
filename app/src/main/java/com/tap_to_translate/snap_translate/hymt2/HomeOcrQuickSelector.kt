@@ -11,8 +11,6 @@ import android.widget.Toast
 object HomeOcrQuickSelector {
     private const val PREF_KEY = "HAWK_OCR"
     private const val DEFAULT_ENGINE = "PP-OCRv6 (Comics)"
-    private const val ROW_ID = 0x7f0a01b7
-    private const val LABEL_ID = 0x7f0a01bb
     private val options = arrayOf(
         "PP-OCRv6 (Comics)",
         "ML Kit (Device Text Recognition)",
@@ -22,11 +20,13 @@ object HomeOcrQuickSelector {
     @JvmStatic
     fun bind(root: View) {
         Log.e("HomeOcrQuickSelector", "bind invoked")
-        val row = root.findViewById<View>(ROW_ID) ?: run {
+        val rowId = resourceId(root, "fragment_home_ll_OCR_engine")
+        val labelId = resourceId(root, "fragment_home_tv_OCR_engine")
+        val row = root.findViewById<View>(rowId) ?: run {
             Log.e("HomeOcrQuickSelector", "Home OCR row ID not found")
             return
         }
-        val label = root.findViewById<TextView>(LABEL_ID) ?: run {
+        val label = root.findViewById<TextView>(labelId) ?: run {
             Log.e("HomeOcrQuickSelector", "Home OCR label ID not found")
             return
         }
@@ -47,9 +47,13 @@ object HomeOcrQuickSelector {
 
     @JvmStatic
     fun sync(root: View) {
-        val label = root.findViewById<TextView>(LABEL_ID) ?: return
+        val labelId = resourceId(root, "fragment_home_tv_OCR_engine")
+        val label = root.findViewById<TextView>(labelId) ?: return
         label.text = currentEngine()
     }
+
+    private fun resourceId(root: View, name: String): Int =
+        root.resources.getIdentifier(name, "id", root.context.packageName)
 
     private fun showChooser(context: Context, label: TextView) {
         val selected = options.indexOf(currentEngine()).let { if (it >= 0) it else 0 }

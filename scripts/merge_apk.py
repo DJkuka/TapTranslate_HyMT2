@@ -1163,9 +1163,7 @@ def patch_manual_selection_touch_routing(base: Path) -> None:
 
     iget-object v10, v0, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->b:Landroid/view/WindowManager;
 
-    const/4 v1, 0x1
-
-    invoke-static {v9, v10, v1}, Lcom/tap_to_translate/snap_translate/hymt2/ManualSelectionTouchMode;->setTouchable(Landroid/view/View;Landroid/view/WindowManager;Z)V
+    invoke-static {v9, v10}, Lcom/tap_to_translate/snap_translate/hymt2/ManualSelectionTouchMode;->restoreTouchable(Landroid/view/View;Landroid/view/WindowManager;)V
 
     iget-object v0, v0, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->k:Lrh/c;
 """
