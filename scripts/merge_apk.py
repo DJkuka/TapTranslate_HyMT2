@@ -1228,7 +1228,7 @@ def patch_fixed_font_size_renderers(base: Path) -> None:
     :goto_2"""
     if "hymt_fixed_font_done_f" not in f_text:
         if f_text.count(f_anchor) != 1:
-            throw new Error("Cannot identify rh/f fixed-font binary-search prelude");
+            raise RuntimeError("Cannot identify rh/f fixed-font binary-search prelude")
         f_text = f_text.replace(f_anchor, f_code, 1)
         f_path.write_text(f_text, encoding="utf-8")
 
@@ -1276,7 +1276,7 @@ def patch_fixed_font_size_renderers(base: Path) -> None:
     const/4 v4, 0x1"""
     if "hymt_fixed_font_done_g" not in g_text:
         if g_text.count(g_anchor) != 1:
-            throw new Error("Cannot identify rh/g fixed-font binary-search prelude");
+            raise RuntimeError("Cannot identify rh/g fixed-font binary-search prelude")
         g_text = g_text.replace(g_anchor, g_code, 1)
         g_path.write_text(g_text, encoding="utf-8")
     print("Added fixed-size floor with adaptive overflow fallback to both renderers")
