@@ -21,8 +21,15 @@ object HomeOcrQuickSelector {
 
     @JvmStatic
     fun bind(root: View) {
-        val row = root.findViewById<View>(ROW_ID) ?: return
-        val label = root.findViewById<TextView>(LABEL_ID) ?: return
+        Log.e("HomeOcrQuickSelector", "bind invoked")
+        val row = root.findViewById<View>(ROW_ID) ?: run {
+            Log.e("HomeOcrQuickSelector", "Home OCR row ID not found")
+            return
+        }
+        val label = root.findViewById<TextView>(LABEL_ID) ?: run {
+            Log.e("HomeOcrQuickSelector", "Home OCR label ID not found")
+            return
+        }
         sync(root)
         row.isEnabled = true
         row.isClickable = true
