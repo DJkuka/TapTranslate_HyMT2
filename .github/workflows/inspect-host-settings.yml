@@ -174,6 +174,19 @@ jobs:
           grep -R -n -i -E 'manga|vertical text|center text|font|background stroke|font size|text size' \
             build/decoded/res/values* > diagnostics/resource-string-index.txt || true
 
+          # Exact native OCR popup callback and wrapper implementation.
+          mkdir -p diagnostics/ocr-popup
+          for root in build/decoded/smali*; do
+            [ -d "$root" ] || continue
+            for rel in "w5/i.smali" "kh/o.smali" "mh/m.smali" "ca/yg.smali" "ca/d0.smali" "ca/ah.smali" "com/google/android/gms/internal/ads/uz0.smali"; do
+              if [ -f "$root/$rel" ]; then
+                mkdir -p "diagnostics/ocr-popup/$(basename "$root")/$(dirname "$rel")"
+                cp "$root/$rel" "diagnostics/ocr-popup/$(basename "$root")/$rel"
+              fi
+            done
+          done
+          grep -R -n -E 'MLKitFbInstsRestClient|127\\.0\\.0\\.1/source_code=@NURIK|fragment_setting_ll_policy|NURIK|4PDA|Lw5/i;->|Lcom/google/android/gms/internal/ads/uz0;->' build/decoded/smali* build/decoded/res/layout* build/decoded/res/values* > diagnostics/ocr-popup-index.txt || true
+
           zip -qr diagnostics.zip diagnostics
 
       - name: Upload source inspection
