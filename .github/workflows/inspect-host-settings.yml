@@ -138,6 +138,20 @@ jobs:
           done
           grep -R -n -E 'Llb/b;-><init>|Lsh/b;-><init>|Lme/c;->|FloatingIconWidget;->|HAWK_.*(SELECT|MANUAL|REGION)|manual.*(select|region)|select.*(region|area)' \
             build/decoded/smali* > diagnostics/floating-icon-call-sites.txt || true
+
+          # Exact native OCR selector callback and both overlay layouts.
+          mkdir -p diagnostics/selector-overlay/smali diagnostics/selector-overlay/layout
+          for root in build/decoded/smali*; do
+            [ -d "$root" ] || continue
+            for rel in "lh/g.smali" "vh/l.smali" "rh/b.smali" "rh/c.smali" "rh/e.smali"; do
+              if [ -f "$root/$rel" ]; then cp --parents "$root/$rel" diagnostics/selector-overlay/smali/; fi
+            done
+          done
+          for rel in "widget_icon_floating.xml" "container_widget.xml"; do
+            if [ -f "build/decoded/res/layout/$rel" ]; then cp "build/decoded/res/layout/$rel" diagnostics/selector-overlay/layout/; fi
+          done
+          grep -R -n -E 'HAWK_OCR|Lvh/l;->|Llh/g;->|fragment_home_ll_OCR_engine' \
+            build/decoded/smali* > diagnostics/selector-overlay-call-sites.txt || true
           grep -R -n -E 'fragment_home_ll_(OCR|translation)_engine|fragment_home_tv_(OCR|translation)_engine' \
             build/decoded/res/layout* build/decoded/res/values/ids.xml build/decoded/res/values/public.xml \
             > diagnostics/home-ocr-layout-index.txt || true
