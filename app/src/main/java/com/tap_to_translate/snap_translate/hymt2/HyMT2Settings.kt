@@ -34,7 +34,7 @@ data class HyMT2Stats(
 object HyMT2Settings {
     private const val TAG = "TapTranslateHyMT2"
     private const val PREFS = "hymt2_engine_settings"
-    private const val THREADS_MATCH_STANDALONE_MIGRATION = "threads_match_standalone_v1"
+    private const val THREADS_MATCH_TESTED_6_THREADS_MIGRATION = "threads_match_tested_6_threads_v1"
 
     // The integrated AAR contains both CPU/NEON and Vulkan backends.
     const val VULKAN_BACKEND_COMPILED = true
@@ -66,15 +66,16 @@ object HyMT2Settings {
                 .putBoolean("vulkan_v12_migrated", true)
                 .apply()
         }
-        // The standalone Vulkan test defaults to four threads; use the same baseline.
-        // Apply once to existing installs, preserving any later manual user selection.
-        if (!p.getBoolean(THREADS_MATCH_STANDALONE_MIGRATION, false)) {
+        // The tablet-tested standalone configuration reached its best throughput
+        // with 6 CPU threads and 8 Vulkan layers. Migrate once from the previous
+        // mistaken 4-thread default, then preserve subsequent manual selections.
+        if (!p.getBoolean(THREADS_MATCH_TESTED_6_THREADS_MIGRATION, false)) {
             p.edit()
-                .putInt("threads", minOf(4, Runtime.getRuntime().availableProcessors().coerceAtLeast(2)))
-                .putBoolean(THREADS_MATCH_STANDALONE_MIGRATION, true)
+                .putInt("threads", minOf(6, Runtime.getRuntime().availableProcessors().coerceAtLeast(2)))
+                .putBoolean(THREADS_MATCH_TESTED_6_THREADS_MIGRATION, true)
                 .apply()
         }
-        val defaultThreads = minOf(4, Runtime.getRuntime().availableProcessors().coerceAtLeast(2))
+        val defaultThreads = minOf(6, Runtime.getRuntime().availableProcessors().coerceAtLeast(2))
         return HyMT2Options(
             threads = p.getInt("threads", defaultThreads).coerceIn(1, 8),
             contextSize = p.getInt("context_size", 2048).coerceIn(256, 8192),
