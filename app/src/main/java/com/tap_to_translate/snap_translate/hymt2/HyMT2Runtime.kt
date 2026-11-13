@@ -162,6 +162,7 @@ object HyMT2Runtime {
                         val sourceLanguageKey = sourceLanguage ?: "auto"
                         val targetLanguage = languageName(targetCode) ?: "Russian"
                         val systemPrompt = buildTranslationSystemPrompt(sourceLanguage, targetLanguage)
+                        Log.i(TAG, "Hy-MT2 request: sourceCode=$sourceCode source=${sourceLanguage ?: "auto"} targetCode=$targetCode target=$targetLanguage context=${options.contextSize} maxTokens=${options.maxTokens} temperature=${options.temperature} topP=${options.topP} topK=${options.topK} threads=${options.threads} Vulkan=${options.useVulkan} gpuLayers=${if (options.useVulkan) options.gpuLayers else 0}; generation=Llama.complete")
                         val contextPairs = if (options.useRecentContext && options.recentContextPairs > 0) {
                             recentContextFor(host, sourceLanguageKey, targetLanguage, options.recentContextPairs)
                         } else emptyList()
@@ -197,10 +198,6 @@ object HyMT2Runtime {
                                     prompt = prompt,
                                     systemPrompt = systemPrompt,
                                     maxTokens = effectiveMaxTokens,
-                                    temperature = options.temperature,
-                                    topP = options.topP,
-                                    topK = options.topK,
-                                    repetitionPenalty = options.repetitionPenalty,
                                 )
                                 // One OCR block must yield exactly one output line. If the
                                 // model wraps a sentence, flatten those wraps within this block.
