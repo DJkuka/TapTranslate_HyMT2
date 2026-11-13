@@ -92,14 +92,42 @@ object HyMT2Runtime {
             Log.w(TAG, "Unable to inspect persisted SAF permissions for $uri", t)
             false
         }
-        if (hasPersistedReadGrant) return true
+        if (!hasPersistedReadGrant) {
+            clearStaleModelUri(app, uri, "no persisted read permission")
+            return false
+        }
 
-        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        // A persisted permission record alone is not sufficient: providers can revoke access,
+        // removable storage can disappear, or a document can be deleted. Probe the descriptor
+        // before advertising this URI as a usable model.
+        return try {
+            val descriptor = app.contentResolver.openFileDescriptor(uri, "r")
+                ?: error("SAF returned no file descriptor")
+            descriptor.use {
+                val stat = Os.fstat(it.fileDescriptor)
+                if (!OsConstants.S_ISREG(stat.st_mode) || stat.st_size < MIN_MODEL_BYTES) {
+                    error("Selected model is not an accessible regular GGUF file")
+                }
+                val magic = ByteArray(4)
+                val read = Os.pread(it.fileDescriptor, magic, 0, magic.size, 0L)
+                if (read != 4 || magic.toString(Charsets.US_ASCII) != "GGUF") {
+                    error("Selected model is not a readable GGUF file")
+                }
+            }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "Stored model URI is no longer readable; clearing it so the picker can reopen: $uri", t)
+            clearStaleModelUri(app, uri, t.javaClass.simpleName)
+            false
+        }
+    }
+
+    private fun clearStaleModelUri(context: Context, uri: Uri, reason: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .remove(KEY_MODEL_URI)
             .apply()
-        Log.w(TAG, "Stored model URI has no persisted read permission; cleared stale selection so the picker can reopen: $uri")
-        return false
+        Log.w(TAG, "Cleared stale Hy-MT2 model URI ($reason): $uri")
     }
 
     @JvmStatic
@@ -290,14 +318,14 @@ object HyMT2Runtime {
         targetLanguage: String,
         options: HyMT2Options,
     ): String {
-        // Tencent's official Hy-MT2 instruction format. Do not add a system prompt:
-        // the model is instruction-tuned for a single user message.
+        // Match the concise user prompt used by the working standalone Vulkan test.
+        // Context and glossary sections are added only when the user has configured them.
         val background = options.backgroundContext.trim()
         val glossary = options.glossary.trim()
         return buildString {
             append("Translate the following text into ")
                 .append(targetLanguage)
-                .append(". Note that you should only output the translated result without any additional explanation:")
+                .append(". Output only the translated result without explanations:")
             if (background.isNotEmpty()) {
                 append("\n\nBackground information:\n").append(background)
             }
@@ -399,6 +427,7 @@ object HyMT2Runtime {
             loadedDescriptor = descriptor
             descriptor = null // Ownership moved to loadedDescriptor.
             Log.i(TAG, "Hy-MT2 loaded from $sourceKey; CPU threads=$threads, context=${options.contextSize}, Vulkan=${options.useVulkan}, GPU layers=${if (options.useVulkan) options.gpuLayers else 0}")
+            Log.i(TAG, "llama.cpp system info: ${Llama.getSystemInfo()}")
             created
         } finally {
             descriptor?.close()
@@ -498,11 +527,12 @@ object HyMT2Runtime {
     private fun languageName(value: String): String? {
         val normalized = value.trim().replace('_', '-')
         if (normalized.isEmpty() || normalized.equals("und", true) || normalized.startsWith("auto", true)) return null
-        if (normalized.contains(' ')) return normalized
+        if (normalized.contains(' ')) return normalized.replaceFirstChar { it.titlecase(Locale.ENGLISH) }
         return try {
             val locale = Locale.forLanguageTag(normalized)
             val name = locale.getDisplayLanguage(Locale.ENGLISH)
-            if (name.isBlank() || name.equals("und", true)) normalized else name
+            val resolved = if (name.isBlank() || name.equals("und", true)) normalized else name
+            resolved.replaceFirstChar { it.titlecase(Locale.ENGLISH) }
         } catch (_: Throwable) {
             normalized
         }
