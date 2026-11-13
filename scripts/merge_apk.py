@@ -1265,10 +1265,10 @@ def patch_fixed_font_size_renderers(base: Path) -> None:
     invoke-virtual {v12}, Landroid/text/Layout;->getHeight()I
     move-result v17
     iget v18, v11, Loh/m;->f:I
-    iget v9, v11, Loh/m;->e:I
-    sub-int v18, v18, v9
-    sget v9, Lca/g2;->h:I
-    add-int v18, v18, v9
+    iget v19, v11, Loh/m;->e:I
+    sub-int v18, v18, v19
+    sget v19, Lca/g2;->h:I
+    add-int v18, v18, v19
     if-gt v17, v18, :hymt_fixed_font_done_g
     move v2, v5
 
