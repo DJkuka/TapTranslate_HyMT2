@@ -144,7 +144,7 @@ jobs:
           test -d "$decoded"
           for root in "$decoded"/smali*; do
             [ -d "$root" ] || continue
-            for package in vh xh loh rh nf gi gf; do
+            for package in vh xh loh rh nf gi gf mh qh; do
               if [ -d "$root/$package" ]; then
                 mkdir -p "$trace/smali/$(basename "$root")"
                 cp -R "$root/$package" "$trace/smali/$(basename "$root")/"
@@ -167,6 +167,23 @@ jobs:
           {
             find "$trace/smali" -type f -name '*.smali' -print0 | sort -z | xargs -0 grep -nE '^\.class|^\.method' || true
           } > "$trace/method-index.txt"
+          # Include the UI fragments involved in the current regression and their layouts.
+          for root in "$decoded"/smali*; do
+            [ -d "$root" ] || continue
+            for rel in "mh/l.smali" "mh/p.smali"; do
+              if [ -f "$root/$rel" ]; then
+                mkdir -p "$trace/smali/$(basename "$root")/mh"
+                cp "$root/$rel" "$trace/smali/$(basename "$root")/$rel"
+              fi
+            done
+          done
+          mkdir -p "$trace/res/layout" "$trace/res/values"
+          for rel in fragment_home.xml fragment_settings.xml fragment_translate.xml; do
+            [ -f "$decoded/res/layout/$rel" ] && cp "$decoded/res/layout/$rel" "$trace/res/layout/$rel"
+          done
+          for rel in ids.xml public.xml; do
+            [ -f "$decoded/res/values/$rel" ] && cp "$decoded/res/values/$rel" "$trace/res/values/$rel"
+          done
           echo "Trace files:"
           find "$trace" -type f -printf '%p %s bytes\n' | sort
 
