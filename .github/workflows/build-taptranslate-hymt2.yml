@@ -144,7 +144,7 @@ jobs:
           test -d "$decoded"
           for root in "$decoded"/smali*; do
             [ -d "$root" ] || continue
-            for package in vh xh loh rh nf gi gf mh qh; do
+            for package in vh xh loh rh nf gi gf mh qh sh me; do
               if [ -d "$root/$package" ]; then
                 mkdir -p "$trace/smali/$(basename "$root")"
                 cp -R "$root/$package" "$trace/smali/$(basename "$root")/"
@@ -153,7 +153,8 @@ jobs:
             for rel in \
               "com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali" \
               "ca/c2.smali" "u3/u.smali" "bo/t5.smali" \
-              "la/s.smali" "la/v.smali"; do
+              "la/s.smali" "la/v.smali" \
+              "com/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget.smali"; do
               if [ -f "$root/$rel" ]; then
                 mkdir -p "$trace/smali/$(basename "$root")/$(dirname "$rel")"
                 cp "$root/$rel" "$trace/smali/$(basename "$root")/$rel"
