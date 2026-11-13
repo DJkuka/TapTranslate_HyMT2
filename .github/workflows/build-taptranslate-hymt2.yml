@@ -144,7 +144,7 @@ jobs:
           test -d "$decoded"
           for root in "$decoded"/smali*; do
             [ -d "$root" ] || continue
-            for package in vh xh loh rh nf gi gf mh qh sh me; do
+            for package in vh xh loh rh nf gi gf mh qh sh me lb; do
               if [ -d "$root/$package" ]; then
                 mkdir -p "$trace/smali/$(basename "$root")"
                 cp -R "$root/$package" "$trace/smali/$(basename "$root")/"
