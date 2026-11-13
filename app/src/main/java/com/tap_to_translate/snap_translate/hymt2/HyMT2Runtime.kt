@@ -220,53 +220,90 @@ object HyMT2Runtime {
                         // never break that contract.
                         val sourceBlocks = java.util.regex.Pattern.compile("\\n").split(sourceText).toList()
                         if (sourceBlocks.isEmpty()) error("Входной OCR-текст пуст")
-                        val translatedBlocks = ArrayList<String>(sourceBlocks.size)
+                        val translatedBlocks = MutableList(sourceBlocks.size) { "" }
                         val translationStartedAt = SystemClock.elapsedRealtime()
                         var generatedTokens = 0
                         var generatedTimeMs = 0L
 
-                        sourceBlocks.forEachIndexed { index, sourceBlock ->
-                            if (sourceBlock.isBlank()) {
-                                translatedBlocks += ""
+                        suspend fun translateSingleBlock(index: Int): String {
+                            val cleanSourceBlock = sourceBlocks[index].trim()
+                            val prompt = buildTranslationPrompt(cleanSourceBlock, targetLanguage)
+                            val promptTokens = HyMT2PenaltyNative.countPromptTokens(model, prompt, systemPrompt)
+                            val availableOutputTokens = (options.contextSize - promptTokens - 32).coerceAtLeast(0)
+                            if (availableOutputTokens < 8) {
+                                error("OCR-блок ${index + 1}/${sourceBlocks.size} не помещается в контекст ${options.contextSize}. Выбери больший контекст.")
+                            }
+                            val effectiveMaxTokens = min(options.maxTokens, availableOutputTokens)
+                            val completion = HyMT2PenaltyNative.complete(
+                                model = model,
+                                prompt = prompt,
+                                systemPrompt = systemPrompt,
+                                maxTokens = effectiveMaxTokens,
+                            )
+                            val translatedBlock = completion.text
+                                .replace('\\r', '\\n')
+                                .split('\\n')
+                                .joinToString(" ") { it.trim() }
+                                .replace(Regex("\\s+"), " ")
+                                .trim()
+                            if (translatedBlock.isBlank()) {
+                                error("Hy-MT2 вернул пустой перевод для OCR-блока ${index + 1}/${sourceBlocks.size}")
+                            }
+                            generatedTokens += completion.tokensGenerated
+                            generatedTimeMs += completion.generateTimeMs
+                            Log.d(TAG, "OCR single block ${index + 1}/${sourceBlocks.size}: promptTokens=$promptTokens, generatedTokens=${completion.tokensGenerated}/$effectiveMaxTokens, promptEvalMs=${completion.promptEvalTimeMs}, generateMs=${completion.generateTimeMs}, tps=${"%.2f".format(Locale.US, completion.tokensPerSecond)}, outputPreview=${translatedBlock.take(120)}")
+                            return translatedBlock
+                        }
+
+                        // PP-OCRv6 can produce many short, independent lines. Group up to
+                        // three at a time to reduce repeated prompt-prefill overhead. Each
+                        // group is accepted only if every numbered marker is returned once
+                        // and in order; otherwise retry that group through the old one-by-one
+                        // path so host OCR geometry mapping remains unchanged.
+                        val nonBlankIndices = sourceBlocks.indices.filter { sourceBlocks[it].isNotBlank() }
+                        val batchSize = 3
+                        Log.i(TAG, "Hy-MT2 OCR batching: sourceBlocks=${sourceBlocks.size}, nonBlank=${nonBlankIndices.size}, batchSize=$batchSize")
+                        nonBlankIndices.chunked(batchSize).forEachIndexed { batchIndex, indices ->
+                            if (indices.size == 1) {
+                                translatedBlocks[indices[0]] = translateSingleBlock(indices[0])
                             } else {
-                                val cleanSourceBlock = sourceBlock.trim()
-                                val prompt = buildTranslationPrompt(
-                                    sourceText = cleanSourceBlock,
-                                    targetLanguage = targetLanguage,
-                                )
-                                val promptTokens = HyMT2PenaltyNative.countPromptTokens(model, prompt, systemPrompt)
+                                val batchEntries = indices.mapIndexed { markerIndex, sourceIndex ->
+                                    "[[${markerIndex + 1}]] ${sourceBlocks[sourceIndex].trim()}"
+                                }
+                                val batchPrompt = buildTranslationBatchPrompt(targetLanguage, batchEntries)
+                                val promptTokens = HyMT2PenaltyNative.countPromptTokens(model, batchPrompt, systemPrompt)
                                 val availableOutputTokens = (options.contextSize - promptTokens - 32).coerceAtLeast(0)
-                                if (availableOutputTokens < 8) {
-                                    error("OCR-блок ${index + 1}/${sourceBlocks.size} не помещается в контекст ${options.contextSize}. Выбери больший контекст.")
+                                var accepted = false
+                                if (availableOutputTokens >= 8) {
+                                    val effectiveMaxTokens = min(options.maxTokens, availableOutputTokens)
+                                    val completion = HyMT2PenaltyNative.complete(
+                                        model = model,
+                                        prompt = batchPrompt,
+                                        systemPrompt = systemPrompt,
+                                        maxTokens = effectiveMaxTokens,
+                                    )
+                                    val parsed = parseTranslationBatch(completion.text, indices.size)
+                                    if (parsed != null) {
+                                        indices.forEachIndexed { markerIndex, sourceIndex ->
+                                            translatedBlocks[sourceIndex] = parsed[markerIndex + 1]!!
+                                        }
+                                        generatedTokens += completion.tokensGenerated
+                                        generatedTimeMs += completion.generateTimeMs
+                                        Log.i(TAG, "OCR batch ${batchIndex + 1}: blocks=${indices.size}, promptTokens=$promptTokens, generatedTokens=${completion.tokensGenerated}/$effectiveMaxTokens, promptEvalMs=${completion.promptEvalTimeMs}, generateMs=${completion.generateTimeMs}, tps=${"%.2f".format(Locale.US, completion.tokensPerSecond)}, markerValidation=passed")
+                                        accepted = true
+                                    } else {
+                                        Log.w(TAG, "OCR batch ${batchIndex + 1}: marker validation failed; retrying ${indices.size} blocks individually")
+                                    }
+                                } else {
+                                    Log.w(TAG, "OCR batch ${batchIndex + 1}: prompt leaves too little output context; retrying individually")
                                 }
-                                val effectiveMaxTokens = min(options.maxTokens, availableOutputTokens)
-                                val completion = HyMT2PenaltyNative.complete(
-                                    model = model,
-                                    prompt = prompt,
-                                    systemPrompt = systemPrompt,
-                                    maxTokens = effectiveMaxTokens,
-                                )
-                                // One OCR block must yield exactly one output line. If the
-                                // model wraps a sentence, flatten those wraps within this block.
-                                val translatedBlock = completion.text
-                                    .replace('\r', '\n')
-                                    .split('\n')
-                                    .joinToString(" ") { it.trim() }
-                                    .replace(Regex("\\s+"), " ")
-                                    .trim()
-                                if (translatedBlock.isBlank()) {
-                                    error("Hy-MT2 вернул пустой перевод для OCR-блока ${index + 1}/${sourceBlocks.size}")
-                                }
-                                translatedBlocks += translatedBlock
-                                generatedTokens += completion.tokensGenerated
-                                generatedTimeMs += completion.generateTimeMs
-                                Log.d(TAG, "OCR block ${index + 1}/${sourceBlocks.size}: sourcePreview=${cleanSourceBlock.take(80)}, promptPreview=${prompt.take(180).replace("\\n", "\\\\n")}, systemPromptChars=${systemPrompt.length}, promptTokens=$promptTokens, generatedTokens=${completion.tokensGenerated}/$effectiveMaxTokens, promptEvalMs=${completion.promptEvalTimeMs}, generateMs=${completion.generateTimeMs}, tps=${"%.2f".format(Locale.US, completion.tokensPerSecond)}, outputPreview=${translatedBlock.take(120)}")
-                                if (completion.tokensGenerated >= effectiveMaxTokens) {
-                                    Log.w(TAG, "OCR block ${index + 1}/${sourceBlocks.size} reached the output token limit; result may be truncated")
+                                if (!accepted) {
+                                    indices.forEach { sourceIndex ->
+                                        translatedBlocks[sourceIndex] = translateSingleBlock(sourceIndex)
+                                    }
                                 }
                             }
                         }
-
                         if (translatedBlocks.size != sourceBlocks.size) {
                             error("Нарушено соответствие OCR-блоков: вход=${sourceBlocks.size}, выход=${translatedBlocks.size}")
                         }
@@ -337,6 +374,38 @@ object HyMT2Runtime {
         return if (additions.isEmpty()) base else {
             base + "\n\nTranslation style: " + additions.joinToString(" ")
         }
+    }
+
+    private fun buildTranslationBatchPrompt(targetLanguage: String, entries: List<String>): String {
+        return """Translate each numbered text segment into $targetLanguage.
+Return exactly one translated segment per input. Preserve every marker ([[1]], [[2]], etc.) exactly.
+Put each marker at the beginning of its own line, followed by that segment's translation.
+Do not merge, omit, reorder, renumber, or add segments. Output no explanations.
+
+${entries.joinToString("\\n")}"""
+    }
+
+    private fun parseTranslationBatch(output: String, expectedCount: Int): Map<Int, String>? {
+        val marker = Regex("""^\\s*\\[\\[(\\d+)]]\\s*(.*)$""")
+        val parsed = linkedMapOf<Int, String>()
+        var current = -1
+        for (rawLine in output.replace('\\r', '\\n').split('\\n')) {
+            val line = rawLine.trim()
+            if (line.isEmpty()) continue
+            val match = marker.matchEntire(line)
+            if (match != null) {
+                val index = match.groupValues[1].toIntOrNull() ?: return null
+                if (index !in 1..expectedCount || parsed.containsKey(index)) return null
+                current = index
+                parsed[index] = match.groupValues[2].trim()
+            } else {
+                if (current < 1) return null
+                parsed[current] = (parsed[current].orEmpty() + " " + line).trim()
+            }
+        }
+        if (parsed.size != expectedCount || (1..expectedCount).any { parsed[it].isNullOrBlank() }) return null
+        if (parsed.keys.toList() != (1..expectedCount).toList()) return null
+        return parsed
     }
 
     private fun buildTranslationPrompt(
