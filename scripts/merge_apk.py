@@ -1193,7 +1193,7 @@ def patch_fixed_font_size_renderers(base: Path) -> None:
     :goto_2"""
     f_code = """    iget v4, v0, Lrh/f;->m:F
 
-    const/4 v5, 0x0
+    sget-object v5, Ljava/lang/Boolean;->FALSE:Ljava/lang/Boolean;
     const-string v6, "HAWK_FIXED_FONT_SIZE"
     invoke-static {v5, v6}, Lqh/n;->a(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;
     move-result-object v5
@@ -1238,7 +1238,7 @@ def patch_fixed_font_size_renderers(base: Path) -> None:
     const/4 v4, 0x1"""
     g_code = """    iget v3, v0, Lrh/g;->m:F
 
-    const/4 v5, 0x0
+    sget-object v5, Ljava/lang/Boolean;->FALSE:Ljava/lang/Boolean;
     const-string v6, "HAWK_FIXED_FONT_SIZE"
     invoke-static {v5, v6}, Lqh/n;->a(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;
     move-result-object v5
