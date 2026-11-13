@@ -1115,6 +1115,71 @@ def patch_screenshot_button(base: Path) -> None:
 
 
 
+def patch_manual_selection_touch_routing(base: Path) -> None:
+    """Keep the full-screen result overlay from intercepting manual icon-drag selection."""
+    helper = base / "smali_classes2/me/c.smali"
+    text = helper.read_text(encoding="utf-8")
+    method_start = text.find(".method public m(II)V")
+    method_end = text.find(".end method", method_start)
+    if method_start < 0 or method_end < 0:
+        raise RuntimeError("Could not isolate floating-icon manual-selection callback me/c.m")
+    method = text[method_start:method_end]
+    if "ManualSelectionTouchMode;->setTouchable" not in method:
+        method = method.replace("    .locals 3\n", "    .locals 5\n", 1)
+        anchor = "    invoke-virtual {p1}, Lrh/c;->b()V\n"
+        if method.count(anchor) != 1:
+            raise RuntimeError("Could not find manual-selection overlay reset in me/c.m")
+        code = """    invoke-virtual {p1}, Lrh/c;->b()V
+
+    iget-object v1, v0, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->k:Lrh/c;
+
+    iget-object v2, v0, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->b:Landroid/view/WindowManager;
+
+    const/4 v3, 0x0
+
+    invoke-static {v1, v2, v3}, Lcom/tap_to_translate/snap_translate/hymt2/ManualSelectionTouchMode;->setTouchable(Landroid/view/View;Landroid/view/WindowManager;Z)V
+"""
+        method = method.replace(anchor, code, 1)
+        text = text[:method_start] + method + text[method_end:]
+        helper.write_text(text, encoding="utf-8")
+
+    gesture = base / "smali_classes3/sh/b.smali"
+    gtext = gesture.read_text(encoding="utf-8")
+    gstart = gtext.find(".method public final onTouch(Landroid/view/View;Landroid/view/MotionEvent;)Z")
+    gend = gtext.find(".end method", gstart)
+    if gstart < 0 or gend < 0:
+        raise RuntimeError("Could not isolate floating-icon touch listener sh/b.onTouch")
+    gmethod = gtext[gstart:gend]
+    if "ManualSelectionTouchMode;->setTouchable" not in gmethod:
+        anchor = """    invoke-virtual {v9, v10}, Lxh/c;->d(Lcom/google/android/gms/internal/ads/mk0;)V
+
+    iget-object v0, v0, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->k:Lrh/c;
+"""
+        if gmethod.count(anchor) != 1:
+            raise RuntimeError("Could not find manual-selection completion in sh/b.onTouch")
+        code = """    invoke-virtual {v9, v10}, Lxh/c;->d(Lcom/google/android/gms/internal/ads/mk0;)V
+
+    iget-object v9, v0, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->k:Lrh/c;
+
+    iget-object v10, v0, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->b:Landroid/view/WindowManager;
+
+    const/4 v1, 0x1
+
+    invoke-static {v9, v10, v1}, Lcom/tap_to_translate/snap_translate/hymt2/ManualSelectionTouchMode;->setTouchable(Landroid/view/View;Landroid/view/WindowManager;Z)V
+
+    iget-object v0, v0, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->k:Lrh/c;
+"""
+        gmethod = gmethod.replace(anchor, code, 1)
+        gtext = gtext[:gstart] + gmethod + gtext[gend:]
+        gesture.write_text(gtext, encoding="utf-8")
+
+    verify_a = helper.read_text(encoding="utf-8")
+    verify_b = gesture.read_text(encoding="utf-8")
+    if verify_a.count("ManualSelectionTouchMode;->setTouchable") != 1 or verify_b.count("ManualSelectionTouchMode;->setTouchable") != 1:
+        raise RuntimeError("Manual-selection touchability hooks were not installed exactly once")
+    print("Added non-touchable routing during manual selection and restored touch handling after selection")
+
+
 def patch_home_ocr_quick_selector(base: Path) -> None:
     """Add a Home shortcut that shares the native HAWK_OCR preference."""
     layout = base / "res/layout/fragment_home.xml"
@@ -1646,6 +1711,7 @@ def main() -> int:
     patch_free_text_alpha_renderers(base)
     patch_fixed_font_size_renderers(base)
     patch_home_ocr_quick_selector(base)
+    patch_manual_selection_touch_routing(base)
     patch_paddle_child_constructor(base)
     patch_picker_callbacks(base)
     patch_settings_click(base)

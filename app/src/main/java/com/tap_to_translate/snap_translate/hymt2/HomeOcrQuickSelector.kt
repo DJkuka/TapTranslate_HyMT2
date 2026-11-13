@@ -2,6 +2,7 @@ package com.tap_to_translate.snap_translate.hymt2
 
 import android.app.AlertDialog
 import android.content.Context
+import android.util.Log
 import android.view.View
 import android.widget.TextView
 import android.widget.Toast
@@ -23,7 +24,18 @@ object HomeOcrQuickSelector {
         val row = root.findViewById<View>(ROW_ID) ?: return
         val label = root.findViewById<TextView>(LABEL_ID) ?: return
         sync(root)
-        row.setOnClickListener { showChooser(row.context, label) }
+        row.isEnabled = true
+        row.isClickable = true
+        row.isFocusable = true
+        label.isEnabled = true
+        label.isClickable = true
+        val click = View.OnClickListener { clicked ->
+            Log.e("HomeOcrQuickSelector", "OCR row clicked")
+            showChooser(clicked.context, label)
+        }
+        row.setOnClickListener(click)
+        label.setOnClickListener(click)
+        Log.e("HomeOcrQuickSelector", "bound row shown=" + row.isShown + " label shown=" + label.isShown)
     }
 
     @JvmStatic
@@ -34,6 +46,7 @@ object HomeOcrQuickSelector {
 
     private fun showChooser(context: Context, label: TextView) {
         val selected = options.indexOf(currentEngine()).let { if (it >= 0) it else 0 }
+        Log.e("HomeOcrQuickSelector", "opening OCR chooser selected=" + selected)
         AlertDialog.Builder(context)
             .setTitle("Движок распознавания текста")
             .setSingleChoiceItems(options, selected) { dialog, which ->
@@ -45,6 +58,7 @@ object HomeOcrQuickSelector {
                     label.text = choice
                     dialog.dismiss()
                 } catch (t: Throwable) {
+                    Log.e("HomeOcrQuickSelector", "Could not persist HAWK_OCR", t)
                     Toast.makeText(context, "Не удалось сохранить выбор OCR", Toast.LENGTH_SHORT).show()
                 }
             }
