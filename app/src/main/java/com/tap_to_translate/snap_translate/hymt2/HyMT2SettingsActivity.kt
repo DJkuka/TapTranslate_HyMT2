@@ -257,7 +257,7 @@ class HyMT2SettingsActivity : Activity() {
     private fun applyPerformanceProfile(profile: String) {
         when (profile) {
             HyMT2Settings.profileChoices[0] -> {
-                selectSpinner(threadsSpinner, HyMT2Settings.threadChoices.indexOf(4))
+                selectSpinner(threadsSpinner, HyMT2Settings.threadChoices.indexOf(6))
                 selectSpinner(gpuLayerSpinner, HyMT2Settings.gpuLayerChoices.indexOf(8))
                 selectSpinner(contextSpinner, HyMT2Settings.contextChoices.indexOf(1024))
                 selectSpinner(maxTokensSpinner, HyMT2Settings.maxTokenChoices.indexOf(256))
@@ -267,7 +267,7 @@ class HyMT2SettingsActivity : Activity() {
                 selectSpinner(historySpinner, HyMT2Settings.historyChoices.indexOf(1))
             }
             HyMT2Settings.profileChoices[1] -> {
-                selectSpinner(threadsSpinner, HyMT2Settings.threadChoices.indexOf(4))
+                selectSpinner(threadsSpinner, HyMT2Settings.threadChoices.indexOf(6))
                 selectSpinner(gpuLayerSpinner, HyMT2Settings.gpuLayerChoices.indexOf(8))
                 selectSpinner(contextSpinner, HyMT2Settings.contextChoices.indexOf(2048))
                 selectSpinner(maxTokensSpinner, HyMT2Settings.maxTokenChoices.indexOf(768))
@@ -277,7 +277,7 @@ class HyMT2SettingsActivity : Activity() {
                 selectSpinner(historySpinner, HyMT2Settings.historyChoices.indexOf(2))
             }
             HyMT2Settings.profileChoices[2] -> {
-                selectSpinner(threadsSpinner, HyMT2Settings.threadChoices.indexOf(4))
+                selectSpinner(threadsSpinner, HyMT2Settings.threadChoices.indexOf(6))
                 selectSpinner(gpuLayerSpinner, HyMT2Settings.gpuLayerChoices.indexOf(8))
                 selectSpinner(contextSpinner, HyMT2Settings.contextChoices.indexOf(4096))
                 selectSpinner(maxTokensSpinner, HyMT2Settings.maxTokenChoices.indexOf(1024))
