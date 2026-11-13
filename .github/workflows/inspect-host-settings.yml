@@ -187,6 +187,23 @@ jobs:
           done
           grep -R -n -E 'MLKitFbInstsRestClient|127\\.0\\.0\\.1/source_code=@NURIK|fragment_setting_ll_policy|NURIK|4PDA|Lw5/i;->|Lcom/google/android/gms/internal/ads/uz0;->' build/decoded/smali* build/decoded/res/layout* build/decoded/res/values* > diagnostics/ocr-popup-index.txt || true
 
+          # Exact callback interface and footer attribution click wiring.
+          mkdir -p diagnostics/ocr-popup-callback diagnostics/attribution
+          for root in build/decoded/smali*; do
+            [ -d "$root" ] || continue
+            for rel in "kh/o.smali" "kh/f.smali" "p7/a.smali" "mh/m.smali"; do
+              if [ -f "$root/$rel" ]; then
+                mkdir -p "diagnostics/ocr-popup-callback/$(basename "$root")/$(dirname "$rel")"
+                cp "$root/$rel" "diagnostics/ocr-popup-callback/$(basename "$root")/$rel"
+              fi
+            done
+            while IFS= read -r -d '' f; do
+              mkdir -p "diagnostics/attribution/$(basename "$root")/$(dirname "${f#"$root"/}")"
+              cp "$f" "diagnostics/attribution/$(basename "$root")/${f#"$root"/}"
+            done < <(find "$root" -type f -name '*.smali' -print0 | xargs -0 -r grep -lZ 'fragment_setting_ll_policy' || true)
+          done
+          grep -R -n -E 'fragment_setting_ll_policy|NURIK \\| 4PDA|MLKitFbInstsRestClient' diagnostics/attribution diagnostics/ocr-popup-callback > diagnostics/attribution-index.txt || true
+
           zip -qr diagnostics.zip diagnostics
 
       - name: Upload source inspection
