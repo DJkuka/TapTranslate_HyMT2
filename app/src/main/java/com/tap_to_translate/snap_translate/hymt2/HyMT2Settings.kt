@@ -90,7 +90,7 @@ object HyMT2Settings {
             recentContextPairs = p.getInt("recent_context_pairs", 2).coerceIn(0, 4),
             backgroundContext = p.getString("background_context", "") ?: "",
             glossary = p.getString("glossary", "") ?: "",
-            stylePreset = p.getString("style_preset", styleChoices.first()) ?: styleChoices.first(),
+            stylePreset = p.getString("style_preset", styleChoices[1]) ?: styleChoices[1],
             customStyle = p.getString("custom_style", "") ?: "",
             // Vulkan is enabled by default with the tablet-tested 8-layer profile.
             useVulkan = VULKAN_BACKEND_COMPILED && p.getBoolean("use_vulkan", true),
