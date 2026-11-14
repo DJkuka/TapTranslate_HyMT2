@@ -43,6 +43,7 @@ class HyMT2SettingsActivity : Activity() {
     private lateinit var maxTokensSpinner: Spinner
     private lateinit var historySpinner: Spinner
     private lateinit var styleSpinner: Spinner
+    private lateinit var promptFormatSpinner: Spinner
     private lateinit var temperatureInput: EditText
     private lateinit var topPInput: EditText
     private lateinit var topKInput: EditText
@@ -147,6 +148,10 @@ class HyMT2SettingsActivity : Activity() {
         customStyleInput.minLines = 2
         customStyleInput.maxLines = 5
 
+        addSection(root, "ФОРМАТ ЗАПРОСА")
+        addText(root, "Можно сравнить исходный запрос сборки №187 и короткий вариант PocketPal. Изменяется только формулировка инструкции; блоки OCR по-прежнему переводятся отдельно.", 13f)
+        promptFormatSpinner = addSpinner(root, "Шаблон запроса", HyMT2Settings.promptFormatChoices)
+
         addSection(root, "УСКОРЕНИЕ GPU")
         vulkanSwitch = addSwitch(root, "Использовать Vulkan на Adreno 610", true)
         vulkanSwitch.isEnabled = HyMT2Settings.VULKAN_BACKEND_COMPILED
@@ -183,6 +188,7 @@ class HyMT2SettingsActivity : Activity() {
         selectSpinner(maxTokensSpinner, HyMT2Settings.maxTokenChoices.indexOf(options.maxTokens))
         selectSpinner(historySpinner, HyMT2Settings.historyChoices.indexOf(options.recentContextPairs))
         selectSpinner(styleSpinner, HyMT2Settings.styleChoices.indexOf(options.stylePreset))
+        selectSpinner(promptFormatSpinner, HyMT2Settings.promptFormatChoices.indexOf(options.promptFormat))
         temperatureInput.setText(options.temperature.toString())
         topPInput.setText(options.topP.toString())
         topKInput.setText(options.topK.toString())
@@ -209,6 +215,7 @@ class HyMT2SettingsActivity : Activity() {
             val topK = topKInput.text.toString().trim().toInt()
             val repetitionPenalty = repetitionPenaltyInput.text.toString().trim().replace(',', '.').toFloat()
             val style = styleSpinner.selectedItem?.toString() ?: HyMT2Settings.styleChoices.first()
+            val promptFormat = promptFormatSpinner.selectedItem?.toString() ?: HyMT2Settings.PROMPT_FORMAT_BASELINE
             val options = HyMT2Options(
                 threads = threads,
                 contextSize = contextSize,
@@ -226,6 +233,7 @@ class HyMT2SettingsActivity : Activity() {
                 customStyle = customStyleInput.text.toString(),
                 useVulkan = vulkanSwitch.isChecked,
                 performanceProfile = profileSpinner.selectedItem?.toString() ?: HyMT2Settings.profileChoices.last(),
+                promptFormat = promptFormat,
             )
             HyMT2Settings.save(this, options)
             val requiresReload = old.threads != options.threads ||

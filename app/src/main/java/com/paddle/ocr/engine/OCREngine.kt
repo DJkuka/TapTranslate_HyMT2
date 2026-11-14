@@ -56,6 +56,12 @@ class OCREngine(
         return runWithOwnedMat(srcMat)
     }
 
+    fun run(bitmap: Bitmap, traceId: String): OCREngineResult {
+        // The trace identifier is shared with the live bridge. The OCR result and
+        // execution path are deliberately identical to the regular overload.
+        return run(bitmap)
+    }
+
     fun run(imageBytes: ByteArray): OCREngineResult {
         val srcMat = BitmapUtils.imdecodeBGR(imageBytes)
         if (srcMat.empty()) {

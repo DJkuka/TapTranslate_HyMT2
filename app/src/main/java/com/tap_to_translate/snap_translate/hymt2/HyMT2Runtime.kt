@@ -220,7 +220,7 @@ object HyMT2Runtime {
                         val sourceLanguageKey = sourceLanguage ?: "auto"
                         val targetLanguage = languageName(targetCode) ?: "Russian"
                         val systemPrompt = buildTranslationSystemPrompt(sourceLanguage, targetLanguage)
-                        Log.i(TAG, "Hy-MT2 request: sourceCode=$sourceCode source=${sourceLanguage ?: "auto"} targetCode=$targetCode target=$targetLanguage sourceChars=${sourceText.length} background=${options.backgroundContext.isNotBlank()} glossary=${options.glossary.isNotBlank()} style=${options.stylePreset}; context=${options.contextSize} maxTokens=${options.maxTokens} temperature=${options.temperature} topP=${options.topP} topK=${options.topK} threads=${options.threads} Vulkan=${options.useVulkan} gpuLayers=${if (options.useVulkan) options.gpuLayers else 0}; generation=Llama.complete")
+                        Log.i(TAG, "Hy-MT2 request: sourceCode=$sourceCode source=${sourceLanguage ?: "auto"} targetCode=$targetCode target=$targetLanguage sourceChars=${sourceText.length} promptFormat=${options.promptFormat} background=${options.backgroundContext.isNotBlank()} glossary=${options.glossary.isNotBlank()} style=${options.stylePreset}; context=${options.contextSize} maxTokens=${options.maxTokens} temperature=${options.temperature} topP=${options.topP} topK=${options.topK} threads=${options.threads} Vulkan=${options.useVulkan} gpuLayers=${if (options.useVulkan) options.gpuLayers else 0}; generation=Llama.complete")
                         val contextPairs = if (options.useRecentContext && options.recentContextPairs > 0) {
                             recentContextFor(host, sourceLanguageKey, targetLanguage, options.recentContextPairs)
                         } else emptyList()
@@ -252,6 +252,7 @@ object HyMT2Runtime {
                                 val prompt = buildTranslationPrompt(
                                     sourceText = cleanSourceBlock,
                                     targetLanguage = targetLanguage,
+                                    promptFormat = options.promptFormat,
                                 )
                                 val promptBuildMs = (SystemClock.elapsedRealtimeNanos() - promptBuildStartNs) / 1_000_000L
                                 val tokenCountStartNs = SystemClock.elapsedRealtimeNanos()
@@ -286,11 +287,6 @@ object HyMT2Runtime {
                                 translatedBlocks += translatedBlock
                                 generatedTokens += completion.tokensGenerated
                                 generatedTimeMs += completion.generateTimeMs
-                                promptTokensTotal += promptTokens
-                                promptEvalTimeTotalMs += completion.promptEvalTimeMs
-                                completionWallTotalMs += completionWallMs
-                                promptCountTotalMs += tokenCountMs
-                                modelCalls++
                                 promptTokensTotal += promptTokens
                                 promptEvalTimeTotalMs += completion.promptEvalTimeMs
                                 completionWallTotalMs += completionWallMs
@@ -365,13 +361,18 @@ object HyMT2Runtime {
     private fun buildTranslationPrompt(
         sourceText: String,
         targetLanguage: String,
+        promptFormat: String,
     ): String {
-        // Exact user prompt used by the working standalone Vulkan test.
-        // Background, glossary and style are intentionally bypassed during this
-        // controlled comparison so the integrated request cannot drift.
-        return """Translate the following text into $targetLanguage. Output only the translated result without explanations:
+        // Keep the original #187 prompt as a reproducible baseline. PocketPal's
+        // alternative changes only the instruction wording; each OCR block is
+        // still translated independently, preserving the host's one-line mapping.
+        return if (promptFormat == HyMT2Settings.PROMPT_FORMAT_POCKETPAL) {
+            "Translate the following segment into $targetLanguage, without additional explanation. $sourceText"
+        } else {
+            """Translate the following text into $targetLanguage. Output only the translated result without explanations:
 
 $sourceText"""
+        }
     }
 
     private fun recentContextFor(

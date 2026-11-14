@@ -21,6 +21,7 @@ data class HyMT2Options(
     val customStyle: String,
     val useVulkan: Boolean,
     val performanceProfile: String,
+    val promptFormat: String,
 )
 
 data class HyMT2Stats(
@@ -52,6 +53,9 @@ object HyMT2Settings {
         "Драматичный стиль, ирония и сарказм",
         "Свой стиль (описать ниже)",
     )
+    const val PROMPT_FORMAT_BASELINE = "Формат №187 (базовый)"
+    const val PROMPT_FORMAT_POCKETPAL = "PocketPal · segment"
+    val promptFormatChoices = listOf(PROMPT_FORMAT_BASELINE, PROMPT_FORMAT_POCKETPAL)
 
     fun load(context: Context): HyMT2Options {
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -94,6 +98,8 @@ object HyMT2Settings {
             // Vulkan is enabled by default with the tablet-tested 8-layer profile.
             useVulkan = VULKAN_BACKEND_COMPILED && p.getBoolean("use_vulkan", true),
             performanceProfile = p.getString("performance_profile", profileChoices[1]) ?: profileChoices[1],
+            promptFormat = p.getString("prompt_format", PROMPT_FORMAT_BASELINE)
+                ?.takeIf { it in promptFormatChoices } ?: PROMPT_FORMAT_BASELINE,
         )
     }
 
@@ -107,6 +113,7 @@ object HyMT2Settings {
         require(options.topP in 0.05f..1f) { "Top-P должна быть от 0,05 до 1" }
         require(options.topK in 1..100) { "Top-K должен быть от 1 до 100" }
         require(options.recentContextPairs in 0..4) { "Число предыдущих реплик должно быть от 0 до 4" }
+        require(options.promptFormat in promptFormatChoices) { "Недопустимый формат запроса Hy-MT2" }
 
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putInt("threads", options.threads)
@@ -125,8 +132,9 @@ object HyMT2Settings {
             .putString("custom_style", options.customStyle.take(1000))
             .putBoolean("use_vulkan", options.useVulkan)
             .putString("performance_profile", options.performanceProfile)
+            .putString("prompt_format", options.promptFormat)
             .apply()
-        Log.i(TAG, "Hy-MT2 settings saved: threads=${options.threads}, context=${options.contextSize}, maxTokens=${options.maxTokens}, Vulkan=${options.useVulkan}, gpuLayers=${options.gpuLayers}, repetitionPenalty=${options.repetitionPenalty}")
+        Log.i(TAG, "Hy-MT2 settings saved: threads=${options.threads}, context=${options.contextSize}, maxTokens=${options.maxTokens}, Vulkan=${options.useVulkan}, gpuLayers=${options.gpuLayers}, repetitionPenalty=${options.repetitionPenalty}, promptFormat=${options.promptFormat}")
     }
 
     fun recordTranslation(context: Context, durationMs: Long, tokensPerSecond: Double, outputChars: Int) {
