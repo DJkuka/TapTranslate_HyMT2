@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import com.paddle.ocr.EngineConfig
 import com.paddle.ocr.PaddleOCR
@@ -21,6 +22,7 @@ import kotlin.math.floor
 /** PP-OCRv6 recognition adapter. RT-DETR supplies bubble boundaries; ML Kit is only a free-text fallback. */
 object PaddleOcrLiveBridge {
     private const val TAG = "TapTranslatePaddle"
+    private const val PERF_TAG = "TapTranslatePerf"
     private val busy = AtomicBoolean(false)
     private val lock = Any()
     @Volatile private var engine: PaddleOCR? = null
@@ -42,21 +44,47 @@ object PaddleOcrLiveBridge {
         timeoutMs: Long
     ): List<PaddleOcrTextGroup>? {
         if (context == null || source == null || source.isRecycled) return null
+        val bridgeStartNs = SystemClock.elapsedRealtimeNanos()
+        val frameId = Integer.toHexString(System.identityHashCode(source))
         if (!busy.compareAndSet(false, true)) {
             Log.w(TAG, "Paddle busy; ML Kit fallback retained")
+            Log.i(PERF_TAG, "event=paddle_skipped frame=$frameId reason=busy")
             return null
         }
+        val copyStartNs = SystemClock.elapsedRealtimeNanos()
         val bitmap = try { source.copy(Bitmap.Config.ARGB_8888, false) } catch (t: Throwable) {
-            busy.set(false); Log.w(TAG, "frame copy failed", t); return null
-        } ?: run { busy.set(false); return null }
+            busy.set(false); Log.w(TAG, "frame copy failed", t)
+            Log.i(PERF_TAG, "event=paddle_copy_failed frame=$frameId")
+            return null
+        } ?: run { busy.set(false); Log.i(PERF_TAG, "event=paddle_copy_failed frame=$frameId reason=null_bitmap"); return null }
+        val copyMs = (SystemClock.elapsedRealtimeNanos() - copyStartNs) / 1_000_000L
         val app = context.applicationContext ?: context
         val regions = detectedRegions?.toList() ?: emptyList()
         val future = java.util.concurrent.CompletableFuture<List<PaddleOcrTextGroup>>()
+        val submittedNs = SystemClock.elapsedRealtimeNanos()
+        Log.i(PERF_TAG, "event=paddle_submitted frame=$frameId width=${bitmap.width} height=${bitmap.height} region_count=${regions.size} bitmap_copy_ms=$copyMs")
         executor.execute {
+            val workerStartNs = SystemClock.elapsedRealtimeNanos()
+            val queueWaitMs = (workerStartNs - submittedNs) / 1_000_000L
+            Log.i(PERF_TAG, "event=paddle_worker_started frame=$frameId queue_wait_ms=$queueWaitMs")
             try {
+                val engineStartNs = SystemClock.elapsedRealtimeNanos()
                 val ocr = getEngine(app)
+                val engineAcquireMs = (SystemClock.elapsedRealtimeNanos() - engineStartNs) / 1_000_000L
+                val ocrStartNs = SystemClock.elapsedRealtimeNanos()
                 val result = runBlocking { ocr.recognize(bitmap) }
-                future.complete(logAndAssemble(result, bitmap.width, bitmap.height, regions))
+                val ocrWallMs = (SystemClock.elapsedRealtimeNanos() - ocrStartNs) / 1_000_000L
+                Log.i(PERF_TAG, "event=ppocr_stages frame=$frameId engine_acquire_ms=$engineAcquireMs cold_model_load_ms=${result.coldLoadTimeMs} " +
+                    "det_preprocess_ms=${result.detPreprocessMs} det_inference_ms=${result.detInferenceMs} det_postprocess_ms=${result.detPostprocessMs} " +
+                    "detected_lines=${result.lineCount} rec_preprocess_ms=${result.recPreprocessMs} rec_inference_ms=${result.recInferenceMs} " +
+                    "rec_postprocess_ms=${result.recPostprocessMs} rec_batch_calls=${result.recInputShapes.size} " +
+                    "rec_batch_shapes=${result.recInputShapes.joinToString(";") { it.joinToString("x") }} " +
+                    "pipeline_overhead_ms=${result.pipelineOverheadMs} ocr_core_ms=${result.totalTimeMs} ocr_wall_ms=$ocrWallMs")
+                val assembleStartNs = SystemClock.elapsedRealtimeNanos()
+                val groups = logAndAssemble(result, bitmap.width, bitmap.height, regions)
+                val assembleMs = (SystemClock.elapsedRealtimeNanos() - assembleStartNs) / 1_000_000L
+                Log.i(PERF_TAG, "event=paddle_assemble frame=$frameId lines=${result.lineCount} output_groups=${groups.size} assembly_ms=$assembleMs")
+                future.complete(groups)
             } catch (t: Throwable) {
                 Log.e(TAG, "Paddle inference failed; ML Kit output remains unchanged", t)
                 future.completeExceptionally(t)
@@ -66,9 +94,16 @@ object PaddleOcrLiveBridge {
             }
         }
         return try {
-            future.get(timeoutMs.coerceAtLeast(1L), TimeUnit.MILLISECONDS)
+            val waitStartNs = SystemClock.elapsedRealtimeNanos()
+            val result = future.get(timeoutMs.coerceAtLeast(1L), TimeUnit.MILLISECONDS)
+            val waitMs = (SystemClock.elapsedRealtimeNanos() - waitStartNs) / 1_000_000L
+            val totalMs = (SystemClock.elapsedRealtimeNanos() - bridgeStartNs) / 1_000_000L
+            Log.i(PERF_TAG, "event=paddle_bridge_complete frame=$frameId groups=${result.size} caller_wait_ms=$waitMs bridge_total_ms=$totalMs")
+            result
         } catch (t: Throwable) {
+            val totalMs = (SystemClock.elapsedRealtimeNanos() - bridgeStartNs) / 1_000_000L
             Log.w(TAG, "Paddle result unavailable; ML Kit fallback retained", t)
+            Log.i(PERF_TAG, "event=paddle_bridge_failed frame=$frameId bridge_total_ms=$totalMs timeout_ms=$timeoutMs")
             null
         }
     }

@@ -25,6 +25,7 @@ import java.util.Locale
 import java.util.ArrayDeque
 import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.min
 
 /** Runtime bridge called from the original app's translation dispatcher (yh.f). */
@@ -34,6 +35,8 @@ object HyMT2Runtime {
     private const val MIN_MODEL_BYTES = 100L * 1024L * 1024L
     private const val PREFS = "hymt2_model_selection"
     private const val KEY_MODEL_URI = "model_uri"
+    private const val PERF_TAG = "TapTranslatePerf"
+    private val requestCounter = AtomicLong(0L)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val modelMutex = Mutex()
@@ -199,17 +202,25 @@ object HyMT2Runtime {
             return
         }
 
+        val requestId = requestCounter.incrementAndGet()
+        val requestStartNs = SystemClock.elapsedRealtimeNanos()
         try {
             scope.launch {
+                val coroutineStartNs = SystemClock.elapsedRealtimeNanos()
+                Log.i(PERF_TAG, "event=hy_request_started request=$requestId coroutine_queue_ms=${(coroutineStartNs - requestStartNs) / 1_000_000L} source_chars=${sourceText.length}")
                 try {
+                    val inferenceLockStartNs = SystemClock.elapsedRealtimeNanos()
                     val result = inferenceMutex.withLock {
+                        val inferenceLockWaitMs = (SystemClock.elapsedRealtimeNanos() - inferenceLockStartNs) / 1_000_000L
+                        val modelReadyStartNs = SystemClock.elapsedRealtimeNanos()
                         val model = ensureLoaded(appContext)
+                        val modelReadyMs = (SystemClock.elapsedRealtimeNanos() - modelReadyStartNs) / 1_000_000L
                         val options = HyMT2Settings.load(appContext)
                         val sourceLanguage = languageName(sourceCode)
                         val sourceLanguageKey = sourceLanguage ?: "auto"
                         val targetLanguage = languageName(targetCode) ?: "Russian"
                         val systemPrompt = buildTranslationSystemPrompt(sourceLanguage, targetLanguage)
-                        Log.i(TAG, "Hy-MT2 request: sourceCode=$sourceCode source=${sourceLanguage ?: "auto"} targetCode=$targetCode target=$targetLanguage sourceChars=${sourceText.length} sourcePreview=${if (sourceText.length <= 64) sourceText.replace("\\n", "\\\\n") else "<omitted>"} background=${options.backgroundContext.isNotBlank()} glossary=${options.glossary.isNotBlank()} style=${options.stylePreset}; context=${options.contextSize} maxTokens=${options.maxTokens} temperature=${options.temperature} topP=${options.topP} topK=${options.topK} threads=${options.threads} Vulkan=${options.useVulkan} gpuLayers=${if (options.useVulkan) options.gpuLayers else 0}; generation=Llama.complete")
+                        Log.i(TAG, "Hy-MT2 request: sourceCode=$sourceCode source=${sourceLanguage ?: "auto"} targetCode=$targetCode target=$targetLanguage sourceChars=${sourceText.length} background=${options.backgroundContext.isNotBlank()} glossary=${options.glossary.isNotBlank()} style=${options.stylePreset}; context=${options.contextSize} maxTokens=${options.maxTokens} temperature=${options.temperature} topP=${options.topP} topK=${options.topK} threads=${options.threads} Vulkan=${options.useVulkan} gpuLayers=${if (options.useVulkan) options.gpuLayers else 0}; generation=Llama.complete")
                         val contextPairs = if (options.useRecentContext && options.recentContextPairs > 0) {
                             recentContextFor(host, sourceLanguageKey, targetLanguage, options.recentContextPairs)
                         } else emptyList()
@@ -222,30 +233,44 @@ object HyMT2Runtime {
                         if (sourceBlocks.isEmpty()) error("Входной OCR-текст пуст")
                         val translatedBlocks = ArrayList<String>(sourceBlocks.size)
                         val translationStartedAt = SystemClock.elapsedRealtime()
+                        val translationWorkStartNs = SystemClock.elapsedRealtimeNanos()
+                        val nonBlankBlocks = sourceBlocks.count { it.isNotBlank() }
                         var generatedTokens = 0
                         var generatedTimeMs = 0L
+                        var promptTokensTotal = 0
+                        var promptEvalTimeTotalMs = 0L
+                        var completionWallTotalMs = 0L
+                        var promptCountTotalMs = 0L
+                        var modelCalls = 0
 
                         sourceBlocks.forEachIndexed { index, sourceBlock ->
                             if (sourceBlock.isBlank()) {
                                 translatedBlocks += ""
                             } else {
                                 val cleanSourceBlock = sourceBlock.trim()
+                                val promptBuildStartNs = SystemClock.elapsedRealtimeNanos()
                                 val prompt = buildTranslationPrompt(
                                     sourceText = cleanSourceBlock,
                                     targetLanguage = targetLanguage,
                                 )
+                                val promptBuildMs = (SystemClock.elapsedRealtimeNanos() - promptBuildStartNs) / 1_000_000L
+                                val tokenCountStartNs = SystemClock.elapsedRealtimeNanos()
                                 val promptTokens = HyMT2PenaltyNative.countPromptTokens(model, prompt, systemPrompt)
+                                val tokenCountMs = (SystemClock.elapsedRealtimeNanos() - tokenCountStartNs) / 1_000_000L
                                 val availableOutputTokens = (options.contextSize - promptTokens - 32).coerceAtLeast(0)
                                 if (availableOutputTokens < 8) {
                                     error("OCR-блок ${index + 1}/${sourceBlocks.size} не помещается в контекст ${options.contextSize}. Выбери больший контекст.")
                                 }
                                 val effectiveMaxTokens = min(options.maxTokens, availableOutputTokens)
+                                val completionStartNs = SystemClock.elapsedRealtimeNanos()
                                 val completion = HyMT2PenaltyNative.complete(
                                     model = model,
                                     prompt = prompt,
                                     systemPrompt = systemPrompt,
                                     maxTokens = effectiveMaxTokens,
                                 )
+                                val completionWallMs = (SystemClock.elapsedRealtimeNanos() - completionStartNs) / 1_000_000L
+                                val postprocessStartNs = SystemClock.elapsedRealtimeNanos()
                                 // One OCR block must yield exactly one output line. If the
                                 // model wraps a sentence, flatten those wraps within this block.
                                 val translatedBlock = completion.text
@@ -260,7 +285,16 @@ object HyMT2Runtime {
                                 translatedBlocks += translatedBlock
                                 generatedTokens += completion.tokensGenerated
                                 generatedTimeMs += completion.generateTimeMs
-                                Log.d(TAG, "OCR block ${index + 1}/${sourceBlocks.size}: sourcePreview=${cleanSourceBlock.take(80)}, promptPreview=${prompt.take(180).replace("\\n", "\\\\n")}, systemPromptChars=${systemPrompt.length}, promptTokens=$promptTokens, generatedTokens=${completion.tokensGenerated}/$effectiveMaxTokens, promptEvalMs=${completion.promptEvalTimeMs}, generateMs=${completion.generateTimeMs}, tps=${"%.2f".format(Locale.US, completion.tokensPerSecond)}, outputPreview=${translatedBlock.take(120)}")
+                                val postprocessMs = (SystemClock.elapsedRealtimeNanos() - postprocessStartNs) / 1_000_000L
+                                translatedBlocks += translatedBlock
+                                generatedTokens += completion.tokensGenerated
+                                generatedTimeMs += completion.generateTimeMs
+                                promptTokensTotal += promptTokens
+                                promptEvalTimeTotalMs += completion.promptEvalTimeMs
+                                completionWallTotalMs += completionWallMs
+                                promptCountTotalMs += tokenCountMs
+                                modelCalls++
+                                Log.i(PERF_TAG, "event=hy_block request=$requestId block=${index + 1}/${sourceBlocks.size} source_chars=${cleanSourceBlock.length} prompt_chars=${prompt.length} prompt_build_ms=$promptBuildMs token_count_ms=$tokenCountMs prompt_tokens=$promptTokens prompt_eval_ms=${completion.promptEvalTimeMs} generate_ms=${completion.generateTimeMs} completion_wall_ms=$completionWallMs postprocess_ms=$postprocessMs generated_tokens=${completion.tokensGenerated} output_chars=${translatedBlock.length} tps=${"%.2f".format(Locale.US, completion.tokensPerSecond)}")
                                 if (completion.tokensGenerated >= effectiveMaxTokens) {
                                     Log.w(TAG, "OCR block ${index + 1}/${sourceBlocks.size} reached the output token limit; result may be truncated")
                                 }
@@ -275,6 +309,8 @@ object HyMT2Runtime {
                         val aggregateTokensPerSecond = if (generatedTimeMs > 0L) {
                             generatedTokens * 1000.0 / generatedTimeMs
                         } else 0.0
+                        val translationWorkMs = (SystemClock.elapsedRealtimeNanos() - translationWorkStartNs) / 1_000_000L
+                        Log.i(PERF_TAG, "event=hy_translation_complete request=$requestId source_chars=${sourceText.length} blocks=${sourceBlocks.size} nonblank_blocks=$nonBlankBlocks model_calls=$modelCalls inference_lock_wait_ms=$inferenceLockWaitMs model_ready_ms=$modelReadyMs prompt_tokens_total=$promptTokensTotal prompt_count_ms=$promptCountTotalMs prompt_eval_ms_total=$promptEvalTimeTotalMs generate_ms_total=$generatedTimeMs completion_wall_ms_total=$completionWallTotalMs generated_tokens=$generatedTokens translation_work_ms=$translationWorkMs request_elapsed_ms=${(SystemClock.elapsedRealtimeNanos() - requestStartNs) / 1_000_000L}")
                         Log.i(TAG, "OCR block mapping preserved: input=${sourceBlocks.size}, output=${translatedBlocks.size}")
                         rememberRecentContext(host, sourceLanguageKey, targetLanguage, sourceText, translated)
                         HyMT2Settings.recordTranslation(
@@ -286,8 +322,16 @@ object HyMT2Runtime {
                         translated
                     }
 
-                    mainHandler.post { deliverResult(host, result, sourceText) }
+                    val resultReadyNs = SystemClock.elapsedRealtimeNanos()
+                    mainHandler.post {
+                        val mainDispatchMs = (SystemClock.elapsedRealtimeNanos() - resultReadyNs) / 1_000_000L
+                        val deliveryStartNs = SystemClock.elapsedRealtimeNanos()
+                        deliverResult(host, result, sourceText)
+                        val deliveryMs = (SystemClock.elapsedRealtimeNanos() - deliveryStartNs) / 1_000_000L
+                        Log.i(PERF_TAG, "event=hy_result_delivery request=$requestId main_dispatch_wait_ms=$mainDispatchMs callback_ms=$deliveryMs total_request_ms=${(SystemClock.elapsedRealtimeNanos() - requestStartNs) / 1_000_000L}")
+                    }
                 } catch (t: Throwable) {
+                    Log.w(PERF_TAG, "event=hy_translation_failed request=$requestId elapsed_ms=${(SystemClock.elapsedRealtimeNanos() - requestStartNs) / 1_000_000L} error=${t.javaClass.simpleName}")
                     Log.e(TAG, "Hy-MT2 translation failed; falling back to ML Kit", t)
                     mainHandler.post {
                         showFallbackNotice(appContext, "Ошибка Hy-MT2. Для этого фрагмента используется Google Offline Translate.")

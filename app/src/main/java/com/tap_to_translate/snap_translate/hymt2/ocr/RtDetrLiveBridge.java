@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Rect;
 import android.graphics.Point;
+import android.os.SystemClock;
 import android.util.Log;
 
 import java.lang.reflect.Field;
@@ -29,6 +30,7 @@ import java.util.concurrent.TimeUnit;
  */
 public final class RtDetrLiveBridge {
     private static final String TAG = "TapTranslateRTDETR";
+    private static final String PERF_TAG = "TapTranslatePerf";
     private static final Object LOCK = new Object();
     private static final Map<Object, PendingFrame> PENDING =
             Collections.synchronizedMap(new WeakHashMap<Object, PendingFrame>());
@@ -58,6 +60,8 @@ public final class RtDetrLiveBridge {
     /** Called from the real vh.j.j(Bitmap) entry point before the existing OCR starts. */
     public static void onFrame(final Object owner, final Bitmap source) {
         if (owner == null || source == null || source.isRecycled()) return;
+        final long captureStartNs = SystemClock.elapsedRealtimeNanos();
+        final String frameId = Integer.toHexString(System.identityHashCode(source));
 
         final Context context = resolveContext(owner);
         if (context == null) {
@@ -86,24 +90,44 @@ public final class RtDetrLiveBridge {
                 previous.task.cancel(true);
             }
 
+            final long copyStartNs = SystemClock.elapsedRealtimeNanos();
             final Bitmap snapshot;
             try {
                 snapshot = source.copy(Bitmap.Config.ARGB_8888, false);
             } catch (Throwable error) {
                 Log.w(TAG, "RT-DETR screenshot copy failed; keeping original OCR", error);
+                Log.i(PERF_TAG, "event=rtdetr_copy_failed frame=" + frameId);
                 return;
             }
-            if (snapshot == null) return;
+            final long snapshotCopyMs = (SystemClock.elapsedRealtimeNanos() - copyStartNs) / 1_000_000L;
+            if (snapshot == null) {
+                Log.i(PERF_TAG, "event=rtdetr_copy_failed frame=" + frameId + " reason=null_bitmap");
+                return;
+            }
 
+            final long submittedNs = SystemClock.elapsedRealtimeNanos();
             FutureTask<List<DetectedRegion>> task = new FutureTask<>(
                     () -> {
+                        final long workerStartNs = SystemClock.elapsedRealtimeNanos();
+                        Log.i(PERF_TAG, "event=rtdetr_worker_started frame=" + frameId
+                                + " queue_wait_ms=" + ((workerStartNs - submittedNs) / 1_000_000L)
+                                + " snapshot_copy_ms=" + snapshotCopyMs
+                                + " snapshot_id=" + Integer.toHexString(System.identityHashCode(snapshot)));
                         try {
+                            long detectorAcquireStartNs = SystemClock.elapsedRealtimeNanos();
                             RtDetrComicRegionDetector active = getDetector(context);
+                            long detectorAcquireMs = (SystemClock.elapsedRealtimeNanos() - detectorAcquireStartNs) / 1_000_000L;
                             OcrFrame frame = new OcrFrame(
                                     snapshot,
                                     new Rect(0, 0, snapshot.getWidth(), snapshot.getHeight()),
                                     0, 0, 1f, 1f);
+                            long detectStartNs = SystemClock.elapsedRealtimeNanos();
                             List<DetectedRegion> result = active.detect(frame);
+                            long detectWallMs = (SystemClock.elapsedRealtimeNanos() - detectStartNs) / 1_000_000L;
+                            Log.i(PERF_TAG, "event=rtdetr_complete frame=" + frameId
+                                    + " detector_acquire_ms=" + detectorAcquireMs
+                                    + " detect_wall_ms=" + detectWallMs
+                                    + " detected_regions=" + (result == null ? 0 : result.size()));
                             int containers = 0;
                             int bubbleText = 0;
                             int free = 0;
@@ -126,7 +150,10 @@ public final class RtDetrLiveBridge {
                             if (!snapshot.isRecycled()) snapshot.recycle();
                         }
                     });
-            PENDING.put(owner, new PendingFrame(source, task));
+            PENDING.put(owner, new PendingFrame(source, task, captureStartNs, submittedNs, snapshotCopyMs));
+            Log.i(PERF_TAG, "event=rtdetr_submitted frame=" + frameId
+                    + " width=" + source.getWidth() + " height=" + source.getHeight()
+                    + " snapshot_copy_ms=" + snapshotCopyMs);
             EXECUTOR.execute(task);
         }
     }
@@ -137,6 +164,8 @@ public final class RtDetrLiveBridge {
      */
     public static void filter(
             Object owner, Context ignoredContext, Object mlKitResult, Bitmap source) {
+        final long filterStartNs = SystemClock.elapsedRealtimeNanos();
+        final String frameId = source == null ? "null" : Integer.toHexString(System.identityHashCode(source));
         if (owner == null || mlKitResult == null || source == null) {
             Log.w(TAG, "hybrid OCR skipped: null owner/result/source");
             return;
@@ -168,7 +197,14 @@ public final class RtDetrLiveBridge {
 
         final List<DetectedRegion> regions;
         try {
+            long waitStartNs = SystemClock.elapsedRealtimeNanos();
             regions = pending.task.get(20, TimeUnit.SECONDS);
+            long detectorJoinWaitMs = (SystemClock.elapsedRealtimeNanos() - waitStartNs) / 1_000_000L;
+            long hostCallbackElapsedMs = (filterStartNs - pending.captureStartedNs) / 1_000_000L;
+            Log.i(PERF_TAG, "event=rtdetr_join frame=" + frameId
+                    + " callback_elapsed_ms=" + hostCallbackElapsedMs
+                    + " detector_join_wait_ms=" + detectorJoinWaitMs
+                    + " regions=" + (regions == null ? 0 : regions.size()));
         } catch (Throwable error) {
             Log.w(TAG, "RT-DETR result unavailable; original OCR retained", error);
             removeIfCurrent(owner, pending);
@@ -229,10 +265,20 @@ public final class RtDetrLiveBridge {
 
             // This method is reached from the host's dedicated OCR callback executor.
             // Wait only there (never on the UI thread); keep ML Kit intact on timeout/failure.
+            long paddleStartNs = SystemClock.elapsedRealtimeNanos();
             List<PaddleOcrTextGroup> paddleGroups = PaddleOcrLiveBridge.recognizeBlocking(
                     ignoredContext, source, regions, 15000L);
+            long paddleBridgeMs = (SystemClock.elapsedRealtimeNanos() - paddleStartNs) / 1_000_000L;
             if (paddleGroups != null && !paddleGroups.isEmpty()) {
+                long handoffStartNs = SystemClock.elapsedRealtimeNanos();
                 int created = applyPaddleBubbleGroups(blocks, paddleGroups, regions);
+                long handoffMs = (SystemClock.elapsedRealtimeNanos() - handoffStartNs) / 1_000_000L;
+                Log.i(PERF_TAG, "event=host_ocr_handoff frame=" + frameId
+                        + " mlkit_blocks_before=" + originalCount
+                        + " paddle_groups=" + paddleGroups.size()
+                        + " native_blocks_created=" + created
+                        + " handoff_ms=" + handoffMs
+                        + " paddle_bridge_ms=" + paddleBridgeMs);
                 Log.i(TAG, "Paddle host handoff completed: groups=" + paddleGroups.size()
                         + " native_bubble_blocks=" + created
                         + " mlkit_fallback=" + (created == 0));
@@ -698,10 +744,17 @@ public final class RtDetrLiveBridge {
     private static final class PendingFrame {
         final Bitmap source;
         final FutureTask<List<DetectedRegion>> task;
+        final long captureStartedNs;
+        final long submittedNs;
+        final long snapshotCopyMs;
 
-        PendingFrame(Bitmap source, FutureTask<List<DetectedRegion>> task) {
+        PendingFrame(Bitmap source, FutureTask<List<DetectedRegion>> task,
+                     long captureStartedNs, long submittedNs, long snapshotCopyMs) {
             this.source = source;
             this.task = task;
+            this.captureStartedNs = captureStartedNs;
+            this.submittedNs = submittedNs;
+            this.snapshotCopyMs = snapshotCopyMs;
         }
     }
 }
