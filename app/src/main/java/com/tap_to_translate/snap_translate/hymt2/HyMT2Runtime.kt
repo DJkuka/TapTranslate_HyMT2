@@ -282,13 +282,15 @@ object HyMT2Runtime {
                                 if (translatedBlock.isBlank()) {
                                     error("Hy-MT2 вернул пустой перевод для OCR-блока ${index + 1}/${sourceBlocks.size}")
                                 }
-                                translatedBlocks += translatedBlock
-                                generatedTokens += completion.tokensGenerated
-                                generatedTimeMs += completion.generateTimeMs
                                 val postprocessMs = (SystemClock.elapsedRealtimeNanos() - postprocessStartNs) / 1_000_000L
                                 translatedBlocks += translatedBlock
                                 generatedTokens += completion.tokensGenerated
                                 generatedTimeMs += completion.generateTimeMs
+                                promptTokensTotal += promptTokens
+                                promptEvalTimeTotalMs += completion.promptEvalTimeMs
+                                completionWallTotalMs += completionWallMs
+                                promptCountTotalMs += tokenCountMs
+                                modelCalls++
                                 promptTokensTotal += promptTokens
                                 promptEvalTimeTotalMs += completion.promptEvalTimeMs
                                 completionWallTotalMs += completionWallMs

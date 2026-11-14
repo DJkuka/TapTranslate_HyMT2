@@ -79,6 +79,13 @@ class PaddleOCR private constructor(
         return recognizeResult { engine.run(bitmap) }
     }
 
+    suspend fun recognize(bitmap: Bitmap, traceId: String): OCRRunResult {
+        if (bitmap.width == 0 || bitmap.height == 0) {
+            throw OCRError.InvalidImage()
+        }
+        return recognizeResult { engine.run(bitmap, traceId) }
+    }
+
     suspend fun recognize(imageBytes: ByteArray): OCRRunResult {
         if (imageBytes.isEmpty()) {
             throw OCRError.InvalidImage()
