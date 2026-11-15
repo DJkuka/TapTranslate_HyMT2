@@ -152,7 +152,7 @@ public final class TranslationRegionEditor {
         state.overlay.lastTapTime = 0L;
         updateSelectionButtons(state);
         state.overlay.invalidate();
-        toast(state.root, "Тяните внутри рамки для перемещения, за маркеры — для изменения размера");
+        toast(state.root, "Два пальца в любых местах экрана — перемещение; угловые маркеры — изменение размера");
         Log.i(TAG, "Geometry edit mode entered for one region");
     }
 
@@ -620,8 +620,8 @@ public final class TranslationRegionEditor {
                         if (activeBounds != null && isDoubleTapCandidate(state.transformTarget, x, y)
                                 && activeBounds.contains(Math.round(x), Math.round(y))) {
                             exitDoubleTap = true;
-                            // A second pointer may still turn this into an intentional
-                            // two-finger drag; ACTION_POINTER_DOWN takes precedence.
+                            // A second pointer anywhere on the overlay turns this into
+                            // a two-finger move; pointer-down takes precedence over the tap.
                             return true;
                         }
 
@@ -640,14 +640,9 @@ public final class TranslationRegionEditor {
                             }
                         }
 
-                        if (downTarget != state.transformTarget) {
-                            exitTransformMode(state);
-                            downTarget = findTarget(x, y);
-                            pendingDoubleTap = downTarget != null
-                                    && isDoubleTapCandidate(downTarget, x, y);
-                        }
-                        // A single finger in the interior does not move the panel.
-                        // Place a second finger inside it to translate the whole region.
+                        // Do not leave transform mode on ACTION_DOWN outside the selected
+                        // region. The user may be placing the first finger of a global
+                        // two-finger drag. A single-finger tap is resolved later on ACTION_UP.
                         return true;
                     }
 
@@ -691,7 +686,7 @@ public final class TranslationRegionEditor {
                         performClick();
                         return true;
                     }
-                    if (state.transformMode && exitDoubleTap) {
+                    if (state.transformMode && exitDoubleTap && !moved) {
                         exitTransformMode(state);
                     } else if (state.transformMode && dragging) {
                         if (moved) {
@@ -700,7 +695,20 @@ public final class TranslationRegionEditor {
                         }
                         clearDrag();
                     } else if (state.transformMode) {
-                        if (!moved) recordTap(state.transformTarget, x, y);
+                        if (!moved && downTarget != null && downTarget != state.transformTarget) {
+                            // A single-finger tap on another panel exits geometry mode
+                            // and selects that panel. A second finger would already have
+                            // intercepted the gesture in ACTION_POINTER_DOWN.
+                            Object tappedTarget = downTarget;
+                            exitTransformMode(state);
+                            toggleAt(tappedTarget);
+                            recordTap(tappedTarget, x, y);
+                        } else if (!moved && downTarget == null) {
+                            exitTransformMode(state);
+                            clearTap();
+                        } else if (!moved) {
+                            recordTap(state.transformTarget, x, y);
+                        }
                     } else if (!moved && downTarget != null && pendingDoubleTap) {
                         enterTransformMode(state, downTarget);
                     } else if (!moved && downTarget != null) {
@@ -735,15 +743,14 @@ public final class TranslationRegionEditor {
             int firstIndex = secondIndex == 0 ? 1 : 0;
             if (firstIndex >= event.getPointerCount() || secondIndex >= event.getPointerCount()) return;
 
+            // The two pointers are deliberately accepted anywhere inside this
+            // full-screen overlay, not merely within the small selected rectangle.
+            // Their midpoint controls translation, so neither corner handles nor
+            // neighbouring panels can steal the gesture.
             float ax = event.getX(firstIndex);
             float ay = event.getY(firstIndex);
             float bx = event.getX(secondIndex);
             float by = event.getY(secondIndex);
-            float padding = dp(getContext(), 18.0f);
-            RectF allowed = new RectF(
-                    bounds.left - padding, bounds.top - padding,
-                    bounds.right + padding, bounds.bottom + padding);
-            if (!allowed.contains(ax, ay) || !allowed.contains(bx, by)) return;
 
             int[] geometry = readRawBounds(state.transformTarget);
             if (geometry == null) return;
