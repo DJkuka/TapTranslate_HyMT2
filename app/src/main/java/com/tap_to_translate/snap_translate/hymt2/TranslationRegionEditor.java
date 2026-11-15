@@ -155,8 +155,11 @@ public final class TranslationRegionEditor {
         // source regions the normal minimum (36x28 dp) would be larger than the
         // original, making it impossible to shrink an expanded region back.
         if (!state.minimumResizeSizes.containsKey(item)) {
-            int minWidth = Math.max(1, Math.round(dp(state.root.getContext(), 36.0f)));
-            int minHeight = Math.max(1, Math.round(dp(state.root.getContext(), 28.0f)));
+            // Use a small common minimum for every region. Preserve an even
+            // smaller original dimension so existing tiny balloons are not forced
+            // to grow just to enter geometry-edit mode.
+            int minWidth = Math.max(1, Math.round(dp(state.root.getContext(), 16.0f)));
+            int minHeight = Math.max(1, Math.round(dp(state.root.getContext(), 16.0f)));
             state.minimumResizeSizes.put(item, new int[] {
                     Math.min(minWidth, initialBounds.width()),
                     Math.min(minHeight, initialBounds.height())
