@@ -993,7 +993,7 @@ def patch_translation_region_editor(base: Path) -> None:
     for name in ("container_widget_iv_edit_regions", "container_widget_iv_delete_regions"):
         if name not in ids_text:
             ids_text = ids_text.replace("</resources>",
-                f'    <item type="id" name="{name}" />\\n</resources>', 1)
+                f'    <item type="id" name="{name}" />\n</resources>', 1)
     ids.write_text(ids_text, encoding="utf-8")
 
     public = base / "res/values/public.xml"
@@ -1007,7 +1007,7 @@ def patch_translation_region_editor(base: Path) -> None:
             if re.search(r'id="' + value + r'"', pub_text):
                 raise RuntimeError("Resource ID is already occupied: " + value)
             pub_text = pub_text.replace("</resources>",
-                f'    <public type="id" name="{name}" id="{value}" />\\n</resources>', 1)
+                f'    <public type="id" name="{name}" id="{value}" />\n</resources>', 1)
     public.write_text(pub_text, encoding="utf-8")
 
     for name, path_data in (
@@ -1045,7 +1045,7 @@ def patch_translation_region_editor(base: Path) -> None:
     end = close_text.find(".end method", start)
     method = close_text[start:end]
     if "TranslationRegionEditor;->forceExit" not in method:
-        anchor = "    .locals 3\\n"
+        anchor = "    .locals 3\n"
         if anchor not in method:
             raise RuntimeError("Could not locate translated overlay close method prologue")
         method = method.replace(anchor, anchor + '''
@@ -1069,7 +1069,7 @@ def patch_floating_icon_z_order(base: Path) -> None:
         anchor = ".field public b:Landroid/view/WindowManager$LayoutParams;"
         if text.count(anchor) != 1:
             raise RuntimeError("Could not locate floating icon layout params field")
-        text = text.replace(anchor, anchor + "\\n\\n" + field, 1)
+        text = text.replace(anchor, anchor + "\n\n" + field, 1)
 
     start = text.find(".method public final onDetachedFromWindow()V")
     end = text.find(".end method", start)
@@ -1106,7 +1106,7 @@ def patch_floating_icon_z_order(base: Path) -> None:
         anchor = "    invoke-interface {v1, v0, v2}, Landroid/view/ViewManager;->addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V"
         if method.count(anchor) != 1:
             raise RuntimeError("Could not locate translated overlay WindowManager addView")
-        method = method.replace(anchor, anchor + "\\n\\n" + hook, 1)
+        method = method.replace(anchor, anchor + "\n\n" + hook, 1)
         source = source[:start] + method + source[end:]
         service.write_text(source, encoding="utf-8")
     print("Added floating icon re-stack after translation window creation")
