@@ -988,18 +988,6 @@ def patch_translation_region_editor(base: Path) -> None:
         xml = xml[:end + 2] + button + xml[end + 2:]
         layout.write_text(xml, encoding="utf-8")
 
-    if 'android:id="@id/container_widget_iv_add_region"' not in xml:
-        marker = 'android:id="@id/container_widget_iv_edit_text_regions"'
-        pos = xml.find(marker)
-        end = xml.find("/>", pos)
-        if pos < 0 or end < 0:
-            raise RuntimeError("Could not isolate text-edit toolbar button")
-        button = """
-            <ImageView android:id="@id/container_widget_iv_add_region" android:contentDescription="Добавить панель" android:background="@drawable/bg_circle_black" android:padding="6.0dip" android:layout_width="32.0dip" android:layout_height="32.0dip" android:layout_marginRight="10.0dip" android:src="@drawable/ic_add_region" android:visibility="gone" />
-"""
-        xml = xml[:end + 2] + button + xml[end + 2:]
-        layout.write_text(xml, encoding="utf-8")
-
     if 'android:id="@id/container_widget_iv_edit_text_regions"' not in xml:
         marker = 'android:id="@id/container_widget_iv_delete_regions"'
         pos = xml.find(marker)
@@ -1009,6 +997,18 @@ def patch_translation_region_editor(base: Path) -> None:
         button = '''
             <ImageView android:id="@id/container_widget_iv_edit_text_regions" android:contentDescription="Редактировать текст перевода" android:background="@drawable/bg_circle_black" android:padding="6.0dip" android:layout_width="32.0dip" android:layout_height="32.0dip" android:layout_marginRight="10.0dip" android:src="@drawable/ic_edit_text_region" android:visibility="gone" />
 '''
+        xml = xml[:end + 2] + button + xml[end + 2:]
+        layout.write_text(xml, encoding="utf-8")
+
+    if 'android:id="@id/container_widget_iv_add_region"' not in xml:
+        marker = 'android:id="@id/container_widget_iv_edit_text_regions"'
+        pos = xml.find(marker)
+        end = xml.find("/>", pos)
+        if pos < 0 or end < 0:
+            raise RuntimeError("Could not isolate text-edit toolbar button")
+        button = """
+            <ImageView android:id="@id/container_widget_iv_add_region" android:contentDescription="Добавить панель" android:background="@drawable/bg_circle_black" android:padding="6.0dip" android:layout_width="32.0dip" android:layout_height="32.0dip" android:layout_marginRight="10.0dip" android:src="@drawable/ic_add_region" android:visibility="gone" />
+"""
         xml = xml[:end + 2] + button + xml[end + 2:]
         layout.write_text(xml, encoding="utf-8")
 
