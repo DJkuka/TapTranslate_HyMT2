@@ -26,6 +26,7 @@ object DisplayProfilesStore {
     private const val KEY_ACTIVE_ID = "active_profile_id"
     private const val KEY_FIXED_FONT_MIGRATED = "fixed_font_size_migrated"
     private const val KEY_FIXED_FONT_SIZE = "HAWK_FIXED_FONT_SIZE"
+    private const val KEY_COMICS_PRESET_MIGRATED = "comics_preset_user_json_v1_migrated"
 
     private const val OCR_PREFS = "taptranslate_ocr_settings"
     private const val KEY_FREE_ALPHA_ENABLED = "ocr_free_text_alpha_enabled"
@@ -59,15 +60,13 @@ object DisplayProfilesStore {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         if (prefs.contains(KEY_PROFILES) && prefs.contains(KEY_BUILTIN_DEFAULTS)) {
             migrateFixedFontFlag(context, prefs)
+            migrateComicsPreset(context, prefs)
             return
         }
 
-        // Migration is deliberately read-only with respect to the active host
-        // settings. The first Comics preset is a snapshot of the user's current
-        // configuration, so opening this screen does not change appearance.
-        val comics = snapshotCurrent(context).apply {
-            optJSONObject("host")?.put(KEY_FIXED_FONT_SIZE, false)
-        }
+        // The built-in Comics preset is based on the supplied TapTranslate JSON,
+        // not on whichever transient settings happen to be active at first launch.
+        val comics = createComicsSnapshot()
         val books = createBooksSnapshot(context)
         val profiles = JSONArray()
             .put(profileJson("comics", "Комиксы", true, comics))
@@ -79,7 +78,78 @@ object DisplayProfilesStore {
             .putString(KEY_ACTIVE_ID, "comics")
             .remove(KEY_PENDING_ID)
             .apply()
-        prefs.edit().putBoolean(KEY_FIXED_FONT_MIGRATED, true).apply()
+        prefs.edit()
+            .putBoolean(KEY_FIXED_FONT_MIGRATED, true)
+            .putBoolean(KEY_COMICS_PRESET_MIGRATED, true)
+            .apply()
+    }
+
+    /**
+     * Updates both the live built-in preset and its reset snapshot exactly once.
+     * User-created profiles and non-Comics built-ins are left untouched.
+     */
+    private fun migrateComicsPreset(context: Context, prefs: android.content.SharedPreferences) {
+        if (prefs.getBoolean(KEY_COMICS_PRESET_MIGRATED, false)) return
+
+        fun replaceComics(source: JSONArray): JSONArray {
+            val updated = JSONArray()
+            var found = false
+            for (i in 0 until source.length()) {
+                val original = source.optJSONObject(i) ?: continue
+                val profile = JSONObject(original.toString())
+                if (profile.optString("id") == "comics" &&
+                    profile.optBoolean("builtIn", true)
+                ) {
+                    profile.put("values", createComicsSnapshot())
+                    found = true
+                }
+                updated.put(profile)
+            }
+            if (!found) {
+                updated.put(profileJson("comics", "Комиксы", true, createComicsSnapshot()))
+            }
+            return updated
+        }
+
+        val updatedProfiles = replaceComics(readProfiles(context))
+        val defaults = JSONArray(
+            prefs.getString(KEY_BUILTIN_DEFAULTS, "[]") ?: "[]"
+        )
+        val updatedDefaults = replaceComics(defaults)
+        val editor = prefs.edit()
+            .putString(KEY_PROFILES, updatedProfiles.toString())
+            .putString(KEY_BUILTIN_DEFAULTS, updatedDefaults.toString())
+            .putBoolean(KEY_COMICS_PRESET_MIGRATED, true)
+
+        val activeId = prefs.getString(KEY_ACTIVE_ID, "comics")
+        val pendingId = prefs.getString(KEY_PENDING_ID, null)
+        if (activeId == "comics" && (pendingId == null || pendingId == "comics")) {
+            editor.putString(KEY_PENDING_ID, "comics")
+        }
+        editor.apply()
+        Log.i(TAG, "Migrated built-in Comics preset from the supplied JSON profile")
+    }
+
+    private fun createComicsSnapshot(): JSONObject {
+        val host = JSONObject()
+            .put("HAWK_BG_TRANS", 255)
+            .put("HAWK_FONT_FULL", "5QrComicBetaRegular-ARAgm")
+            .put("HAWK_FONT_SIZE", 40)
+            .put(KEY_FIXED_FONT_SIZE, false)
+            .put("HAWK_BG_STROKE", false)
+            .put("HAWK_MANGA_MODE", true)
+            .put("HAWK_MANGA_FONT", false)
+            .put("HAWK_MANGA_BACKGROUND", false)
+            .put("HAWK_VERTICAL", false)
+            .put("HAWK_UPCASE", true)
+            .put("HAWK_CENTER", true)
+            .put("text_style", 3)
+            .put("text_style_custom_bg_color", -3152)
+            .put("text_style_custom_text_color", -12766720)
+        val ocr = JSONObject()
+            .put(KEY_FREE_ALPHA_ENABLED, true)
+            .put(KEY_FREE_ALPHA_PERCENT, 89)
+        return JSONObject().put("host", host).put("ocr", ocr)
     }
 
     @Synchronized
