@@ -268,11 +268,11 @@ public final class TranslationRegionEditor {
                     | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
             editor.setHint("Текст перевода");
             editor.setVerticalScrollBarEnabled(true);
-            editor.setPadding(dp(context, 12), dp(context, 10), dp(context, 12), dp(context, 10));
+            editor.setPadding(Math.round(dp(context, 12)), Math.round(dp(context, 10)), Math.round(dp(context, 12)), Math.round(dp(context, 10)));
 
             LinearLayout container = new LinearLayout(context);
             container.setOrientation(LinearLayout.VERTICAL);
-            container.setPadding(dp(context, 8), dp(context, 4), dp(context, 8), dp(context, 4));
+            container.setPadding(Math.round(dp(context, 8)), Math.round(dp(context, 4)), Math.round(dp(context, 8)), Math.round(dp(context, 4)));
             container.addView(editor, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -603,7 +603,7 @@ public final class TranslationRegionEditor {
                     if (state.transformMode) {
                         Rect activeBounds = readBounds(state.transformTarget);
                         if (activeBounds != null && isDoubleTapCandidate(state.transformTarget, x, y)
-                                && activeBounds.contains(x, y)) {
+                                && activeBounds.contains(Math.round(x), Math.round(y))) {
                             exitDoubleTap = true;
                             return true;
                         }
@@ -772,7 +772,7 @@ public final class TranslationRegionEditor {
                 }
             }
             if (bestMode != DragMode.NONE) return bestMode;
-            return bounds.contains(x, y) ? DragMode.MOVE : DragMode.NONE;
+            return bounds.contains(Math.round(x), Math.round(y)) ? DragMode.MOVE : DragMode.NONE;
         }
 
         private Object findTarget(float x, float y) {
