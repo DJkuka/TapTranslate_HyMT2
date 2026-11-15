@@ -23,6 +23,9 @@ class DisplayProfilesActivity : Activity() {
     private lateinit var fixedFontSwitch: Switch
     private var updatingFixedFontSwitch = false
     private var profiles: List<DisplayProfileInfo> = emptyList()
+    private var pendingExportJson: String? = null
+    private val requestCreateExport = 4101
+    private val requestImportProfiles = 4102
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -122,6 +125,53 @@ class DisplayProfilesActivity : Activity() {
             }
         }
 
+        addButton(root, "Экспортировать выбранный профиль") {
+            val selected = selectedProfile() ?: return@addButton
+            try {
+                pendingExportJson = DisplayProfilesStore.exportProfiles(this, listOf(selected.id))
+                val safeName = selected.name.replace(Regex("[^A-Za-zА-Яа-яЁё0-9_-]"), "_")
+                startActivityForResult(
+                    android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT).apply {
+                        addCategory(android.content.Intent.CATEGORY_OPENABLE)
+                        type = "application/json"
+                        putExtra(android.content.Intent.EXTRA_TITLE, "TapTranslate_$safeName.json")
+                    },
+                    requestCreateExport
+                )
+            } catch (t: Throwable) {
+                showStatus(t.message ?: "Не удалось подготовить экспорт")
+            }
+        }
+
+        addButton(root, "Экспортировать все профили") {
+            try {
+                pendingExportJson = DisplayProfilesStore.exportProfiles(
+                    this, profiles.map { it.id }
+                )
+                startActivityForResult(
+                    android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT).apply {
+                        addCategory(android.content.Intent.CATEGORY_OPENABLE)
+                        type = "application/json"
+                        putExtra(android.content.Intent.EXTRA_TITLE, "TapTranslate_DisplayProfiles.json")
+                    },
+                    requestCreateExport
+                )
+            } catch (t: Throwable) {
+                showStatus(t.message ?: "Не удалось подготовить экспорт")
+            }
+        }
+
+        addButton(root, "Импортировать профили из JSON") {
+            startActivityForResult(
+                android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(android.content.Intent.CATEGORY_OPENABLE)
+                    type = "application/json"
+                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                },
+                requestImportProfiles
+            )
+        }
+
         addButton(root, "Дублировать выбранный профиль") {
             val selected = selectedProfile() ?: return@addButton
             promptName("Копия профиля", selected.name + " — копия") { name ->
@@ -182,6 +232,42 @@ class DisplayProfilesActivity : Activity() {
             dp(10)
         )
         status = addText(root, "", 13f, false, 0)
+    }
+
+    @Deprecated("Deprecated in Android API  Activity result callback retained for Android 12 compatibility")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (resultCode != RESULT_OK) {
+            if (requestCode == requestCreateExport) pendingExportJson = null
+            return
+        }
+        val uri = data?.data ?: return
+        when (requestCode) {
+            requestCreateExport -> {
+                val json = pendingExportJson ?: return
+                pendingExportJson = null
+                try {
+                    contentResolver.openOutputStream(uri)?.bufferedWriter(Charsets.UTF_8)?.use {
+                        it.write(json)
+                    } ?: throw IllegalStateException("Не удалось открыть файл для записи")
+                    showStatus("Профиль(и) экспортированы.")
+                } catch (t: Throwable) {
+                    showStatus(t.message ?: "Ошибка экспорта")
+                }
+            }
+            requestImportProfiles -> {
+                try {
+                    val json = contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use {
+                        it.readText()
+                    } ?: throw IllegalStateException("Не удалось прочитать файл")
+                    val imported = DisplayProfilesStore.importProfiles(this, json)
+                    reloadProfiles(imported.firstOrNull())
+                    showStatus("Импортировано профилей: " + imported.size)
+                } catch (t: Throwable) {
+                    showStatus(t.message ?: "Ошибка импорта")
+                }
+            }
+        }
     }
 
     override fun onResume() {
