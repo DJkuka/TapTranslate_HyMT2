@@ -1603,6 +1603,24 @@ def patch_fixed_font_size_renderers(base: Path) -> None:
     print("Added fixed-size floor with adaptive overflow fallback to both renderers")
 
 
+def patch_max_font_size(base: Path) -> None:
+    """Raise the translated-font size selector maximum from 40dp to 72dp."""
+    target = base / "smali_classes3/mh/l.smali"
+    text = target.read_text(encoding="utf-8")
+    anchor = '''    const/16 v9, 0x6
+
+    const/16 v10, 0x28
+
+    invoke-virtual {v2, v9, v10, v6, v7}, Lcom/tap_to_translate/snap_translate/domain/main/widgets/custom/WidgetChooseValue;->b(IIILsh/p;)V'''
+    replacement = anchor.replace("const/16 v10, 0x28", "const/16 v10, 0x48")
+    if "const/16 v10, 0x48" not in text:
+        if text.count(anchor) != 1:
+            raise RuntimeError("Could not locate HAWK_FONT_SIZE selector range")
+        text = text.replace(anchor, replacement, 1)
+        target.write_text(text, encoding="utf-8")
+    print("Raised translated font-size selector maximum to 72dp")
+
+
 def patch_display_profiles(base: Path) -> None:
     """Expose the profile manager in the main Settings tab."""
     layout = base / "res/layout/fragment_settings.xml"
@@ -1962,6 +1980,7 @@ def main() -> int:
     patch_live_hybrid_ocr(base)
     patch_free_text_alpha_renderers(base)
     patch_fixed_font_size_renderers(base)
+    patch_max_font_size(base)
     patch_home_ocr_quick_selector(base)
     patch_remove_nurik_attribution(base)
     patch_manual_selection_touch_routing(base)
