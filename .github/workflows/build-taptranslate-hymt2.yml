@@ -89,7 +89,7 @@ jobs:
           test "$(stat -c%s "$model")" -eq 11120765
 
       - name: Fetch pinned PP-OCRv6 small ONNX models and verify hashes
-        if: github.ref == 'refs/heads/ocr-paddle-prototype'
+        if: github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing'
         shell: bash
         run: |
           set -euo pipefail
@@ -205,7 +205,7 @@ jobs:
           ls -lh build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
 
       - name: Verify hybrid OCR contracts were merged into classes5.dex
-        if: github.ref == 'refs/heads/ocr-hybrid-prototype' || github.ref == 'refs/heads/ocr-paddle-prototype'
+        if: github.ref == 'refs/heads/ocr-hybrid-prototype' || github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing'
         shell: bash
         run: |
           set -euo pipefail
