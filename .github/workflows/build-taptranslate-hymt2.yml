@@ -152,7 +152,7 @@ jobs:
             done
             for rel in \
               "com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali" \
-              "ca/c2.smali" "u3/u.smali" "bo/t5.smali" \
+              "ca/c2.smali" "ca/g2.smali" "oh/m.smali" "u3/u.smali" "bo/t5.smali" \
               "la/s.smali" "la/v.smali"; do
               if [ -f "$root/$rel" ]; then
                 mkdir -p "$trace/smali/$(basename "$root")/$(dirname "$rel")"
@@ -162,7 +162,7 @@ jobs:
           done
           {
             echo "=== OCR entrypoints and callbacks ==="
-            grep -RInE 'Lvh/j;->|Lvh/k;->|Loh/m;->|ScreenTranslateService;->c\(' "$decoded"/smali* 2>/dev/null | head -n 1200 || true
+            grep -RInE 'Lvh/j;->|Lvh/k;->|Loh/m;->|Loh/m;-><init>|ScreenTranslateService;->c\(' "$decoded"/smali* 2>/dev/null | head -n 1600 || true
           } > "$trace/call-sites.txt"
           {
             find "$trace/smali" -type f -name '*.smali' -print0 | sort -z | xargs -0 grep -nE '^\.class|^\.method' || true
