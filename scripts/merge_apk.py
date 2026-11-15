@@ -967,6 +967,150 @@ def patch_resources(base: Path) -> None:
     if "HyMT2SettingsClickListener" not in fragment_smali:
         raise RuntimeError("Primary settings row has no click listener")
 
+
+def patch_translation_region_editor(base: Path) -> None:
+    """Add edit/delete controls and bind the live translated-region editor."""
+    layout = base / "res/layout/container_widget.xml"
+    xml = layout.read_text(encoding="utf-8")
+    screenshot = 'android:id="@id/container_widget_iv_screenshot"'
+    if screenshot not in xml:
+        raise RuntimeError("Screenshot toolbar control must exist before region editor")
+    if 'android:id="@id/container_widget_iv_edit_regions"' not in xml:
+        marker = 'android:id="@id/container_widget_iv_screenshot"'
+        pos = xml.find(marker)
+        end = xml.find("/>", pos)
+        if pos < 0 or end < 0:
+            raise RuntimeError("Could not isolate screenshot toolbar button")
+        button = '''
+            <ImageView android:id="@id/container_widget_iv_edit_regions" android:contentDescription="Редактировать области" android:background="@drawable/bg_circle_black" android:padding="6.0dip" android:layout_width="32.0dip" android:layout_height="32.0dip" android:layout_marginRight="10.0dip" android:src="@drawable/ic_edit_regions" android:alpha="0.55" />
+            <ImageView android:id="@id/container_widget_iv_delete_regions" android:contentDescription="Удалить выбранные области" android:background="@drawable/bg_circle_black" android:padding="6.0dip" android:layout_width="32.0dip" android:layout_height="32.0dip" android:layout_marginRight="10.0dip" android:src="@drawable/ic_delete_regions" android:alpha="0.35" android:visibility="gone" />
+'''
+        xml = xml[:end + 2] + button + xml[end + 2:]
+        layout.write_text(xml, encoding="utf-8")
+
+    ids = base / "res/values/ids.xml"
+    ids_text = ids.read_text(encoding="utf-8")
+    for name in ("container_widget_iv_edit_regions", "container_widget_iv_delete_regions"):
+        if name not in ids_text:
+            ids_text = ids_text.replace("</resources>",
+                f'    <item type="id" name="{name}" />\\n</resources>', 1)
+    ids.write_text(ids_text, encoding="utf-8")
+
+    public = base / "res/values/public.xml"
+    pub_text = public.read_text(encoding="utf-8")
+    allocations = (
+        ("container_widget_iv_edit_regions", "0x7f0a04f5"),
+        ("container_widget_iv_delete_regions", "0x7f0a04f6"),
+    )
+    for name, value in allocations:
+        if name not in pub_text:
+            if re.search(r'id="' + value + r'"', pub_text):
+                raise RuntimeError("Resource ID is already occupied: " + value)
+            pub_text = pub_text.replace("</resources>",
+                f'    <public type="id" name="{name}" id="{value}" />\\n</resources>', 1)
+    public.write_text(pub_text, encoding="utf-8")
+
+    for name, icon_path, path_data in (
+        ("ic_edit_regions", "M3 17.25 V21 H6.75 L17.81 9.94 L14.06 6.19 Z M20.71 7.04 C21.1 6.65 21.1 6.02 20.71 5.63 L18.37 3.29 C17.98 2.9 17.35 2.9 16.96 3.29 L15.13 5.12 L18.88 8.87 Z"),
+        ("ic_delete_regions", "M6 19 C6 20.1 6.9 21 8 21 H16 C17.1 21 18 20.1 18 19 V7 H6 Z M19 4 H15.5 L14.5 3 H9.5 L8.5 4 H5 V6 H19 Z"),
+    ):
+        icon = base / f"res/drawable/{name}.xml"
+        icon.write_text(f'''<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#FFFFFFFF" android:pathData="{path_data}" />
+</vector>
+''', encoding="utf-8")
+
+    service = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali"
+    service_text = service.read_text(encoding="utf-8")
+    method_start = service_text.find(".method public final h()Lrh/c;")
+    method_end = service_text.find(".end method", method_start)
+    if method_start < 0 or method_end < 0:
+        raise RuntimeError("Could not isolate translated overlay factory")
+    method = service_text[method_start:method_end]
+    if "TranslationRegionEditor;->bind" not in method:
+        anchor = "    iput-object v0, p0, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->k:Lrh/c;"
+        if method.count(anchor) != 1:
+            raise RuntimeError("Could not locate translated overlay instance assignment")
+        method = method.replace(anchor, anchor + '''
+
+    invoke-static {v0}, Lcom/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor;->bind(Landroid/view/View;)V
+''', 1)
+        service_text = service_text[:method_start] + method + service_text[method_end:]
+        service.write_text(service_text, encoding="utf-8")
+
+    close = base / "smali_classes3/rh/c.smali"
+    close_text = close.read_text(encoding="utf-8")
+    start = close_text.find(".method public final b()V")
+    end = close_text.find(".end method", start)
+    method = close_text[start:end]
+    if "TranslationRegionEditor;->forceExit" not in method:
+        anchor = "    .locals 3\\n"
+        if anchor not in method:
+            raise RuntimeError("Could not locate translated overlay close method prologue")
+        method = method.replace(anchor, anchor + '''
+    invoke-static {p0}, Lcom/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor;->forceExit(Landroid/view/View;)V
+
+''', 1)
+        close_text = close_text[:start] + method + close_text[end:]
+        close.write_text(close_text, encoding="utf-8")
+
+    if "TranslationRegionEditor;->bind" not in service.read_text(encoding="utf-8"):
+        raise RuntimeError("Region editor was not bound to the translation toolbar")
+    print("Added translation-region edit mode and multi-delete toolbar controls")
+
+
+def patch_floating_icon_z_order(base: Path) -> None:
+    """Keep the floating icon window above the full-screen translated overlay."""
+    widget = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget.smali"
+    text = widget.read_text(encoding="utf-8")
+    field = ".field public hymt2PreserveOnReattach:Z"
+    if field not in text:
+        anchor = ".field public b:Landroid/view/WindowManager$LayoutParams;"
+        if text.count(anchor) != 1:
+            raise RuntimeError("Could not locate floating icon layout params field")
+        text = text.replace(anchor, anchor + "\\n\\n" + field, 1)
+
+    start = text.find(".method public final onDetachedFromWindow()V")
+    end = text.find(".end method", start)
+    method = text[start:end]
+    if ":hymt2_keep_icon_state" not in method:
+        anchor = "    invoke-super {p0}, Landroid/view/View;->onDetachedFromWindow()V"
+        guard = anchor + '''
+
+    iget-boolean v0, p0, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->hymt2PreserveOnReattach:Z
+
+    if-eqz v0, :hymt2_normal_detach
+
+    const/4 v0, 0x0
+
+    iput-boolean v0, p0, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->hymt2PreserveOnReattach:Z
+
+    return-void
+
+    :hymt2_normal_detach
+'''
+        if method.count(anchor) != 1:
+            raise RuntimeError("Could not guard floating icon detach cleanup")
+        method = method.replace(anchor, guard, 1)
+        text = text[:start] + method + text[end:]
+    widget.write_text(text, encoding="utf-8")
+
+    service = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali"
+    source = service.read_text(encoding="utf-8")
+    start = source.find(".method public final h()Lrh/c;")
+    end = source.find(".end method", start)
+    method = source[start:end]
+    hook = "    invoke-static {p0}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingIconZOrderFix;->bringToFront(Ljava/lang/Object;)V"
+    if hook not in method:
+        anchor = "    invoke-interface {v1, v0, v2}, Landroid/view/ViewManager;->addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V"
+        if method.count(anchor) != 1:
+            raise RuntimeError("Could not locate translated overlay WindowManager addView")
+        method = method.replace(anchor, anchor + "\\n\\n" + hook, 1)
+        source = source[:start] + method + source[end:]
+        service.write_text(source, encoding="utf-8")
+    print("Added floating icon re-stack after translation window creation")
+
 def patch_screenshot_button(base: Path) -> None:
     """Add a screenshot button to the result toolbar and wire it to the helper saver."""
     layout = base / "res/layout/container_widget.xml"
@@ -1813,6 +1957,8 @@ def main() -> int:
     patch_resources(base)
     patch_ocr_resources(base)
     patch_screenshot_button(base)
+    patch_translation_region_editor(base)
+    patch_floating_icon_z_order(base)
     patch_display_profiles(base)
     patch_display_profiles_click(base)
     patch_profile_host_notifier(base)
