@@ -497,7 +497,7 @@ public final class TranslationRegionEditor {
     }
 
     private enum DragMode {
-        NONE, MOVE, NW, N, NE, E, SE, S, SW, W
+        NONE, NW, NE, SE, SW
     }
 
     private static final class SelectionOverlay extends View {
@@ -519,6 +519,18 @@ public final class TranslationRegionEditor {
         private DragMode dragMode = DragMode.NONE;
         private Rect dragStart;
         private int[] rawStart;
+
+        // Whole-region movement is deliberately a two-finger gesture. This avoids
+        // competing with the four single-finger corner resize targets on small panels.
+        private boolean twoFingerMove;
+        private boolean twoFingerConsumed;
+        private boolean twoFingerMoved;
+        private int pointerIdA = -1;
+        private int pointerIdB = -1;
+        private float twoFingerStartCenterX;
+        private float twoFingerStartCenterY;
+        private Rect twoFingerStartBounds;
+        private int[] twoFingerRawStart;
 
         private Object lastTapTarget;
         private float lastTapX;
@@ -565,13 +577,12 @@ public final class TranslationRegionEditor {
         }
 
         private void drawHandles(Canvas canvas, Rect rect) {
+            // Only four corner handles remain. Mid-edge touch zones made small
+            // comic balloons impossible to drag reliably.
             float half = dp(getContext(), 5.5f);
-            float midX = (rect.left + rect.right) / 2.0f;
-            float midY = (rect.top + rect.bottom) / 2.0f;
             float[][] points = new float[][] {
-                    {rect.left, rect.top}, {midX, rect.top}, {rect.right, rect.top},
-                    {rect.right, midY}, {rect.right, rect.bottom}, {midX, rect.bottom},
-                    {rect.left, rect.bottom}, {rect.left, midY}
+                    {rect.left, rect.top}, {rect.right, rect.top},
+                    {rect.right, rect.bottom}, {rect.left, rect.bottom}
             };
             for (float[] point : points) {
                 RectF handle = new RectF(
@@ -584,10 +595,11 @@ public final class TranslationRegionEditor {
 
         @Override public boolean onTouchEvent(MotionEvent event) {
             if (!state.editing) return false;
-            float x = event.getX();
-            float y = event.getY();
+            final int action = event.getActionMasked();
+            final float x = event.getX();
+            final float y = event.getY();
 
-            switch (event.getActionMasked()) {
+            switch (action) {
                 case MotionEvent.ACTION_DOWN:
                     downX = x;
                     downY = y;
@@ -599,12 +611,17 @@ public final class TranslationRegionEditor {
                     dragMode = DragMode.NONE;
                     dragStart = null;
                     rawStart = null;
+                    twoFingerMove = false;
+                    twoFingerConsumed = false;
+                    twoFingerMoved = false;
 
                     if (state.transformMode) {
                         Rect activeBounds = readBounds(state.transformTarget);
                         if (activeBounds != null && isDoubleTapCandidate(state.transformTarget, x, y)
                                 && activeBounds.contains(Math.round(x), Math.round(y))) {
                             exitDoubleTap = true;
+                            // A second pointer may still turn this into an intentional
+                            // two-finger drag; ACTION_POINTER_DOWN takes precedence.
                             return true;
                         }
 
@@ -628,13 +645,9 @@ public final class TranslationRegionEditor {
                             downTarget = findTarget(x, y);
                             pendingDoubleTap = downTarget != null
                                     && isDoubleTapCandidate(downTarget, x, y);
-                        } else if (activeBounds != null && activeBounds.contains(Math.round(x), Math.round(y))) {
-                            // The hit is inside the active rectangle but outside a visible handle.
-                            dragMode = DragMode.MOVE;
-                            dragStart = new Rect(activeBounds);
-                            rawStart = readRawBounds(state.transformTarget);
-                            dragging = rawStart != null;
                         }
+                        // A single finger in the interior does not move the panel.
+                        // Place a second finger inside it to translate the whole region.
                         return true;
                     }
 
@@ -642,43 +655,67 @@ public final class TranslationRegionEditor {
                             && isDoubleTapCandidate(downTarget, x, y);
                     return true;
 
+                case MotionEvent.ACTION_POINTER_DOWN:
+                    if (state.transformMode && event.getPointerCount() >= 2) {
+                        beginTwoFingerMove(event);
+                    }
+                    return true;
+
                 case MotionEvent.ACTION_MOVE:
+                    if (twoFingerMove && event.getPointerCount() >= 2) {
+                        updateTwoFingerMove(event);
+                        return true;
+                    }
                     if (distanceSquared(x, y, downX, downY) > touchSlop * touchSlop) {
                         moved = true;
                     }
                     if (state.transformMode && dragging && dragStart != null && rawStart != null && moved) {
-                        applyDrag(x, y);
+                        applyCornerResize(x, y);
+                    }
+                    return true;
+
+                case MotionEvent.ACTION_POINTER_UP:
+                    if (twoFingerMove) {
+                        updateTwoFingerMove(event);
+                        twoFingerMove = false;
+                        twoFingerConsumed = true;
+                        clearTwoFingerData();
                     }
                     return true;
 
                 case MotionEvent.ACTION_UP:
+                    if (twoFingerConsumed) {
+                        twoFingerConsumed = false;
+                        clearTwoFingerData();
+                        clearDrag();
+                        performClick();
+                        return true;
+                    }
                     if (state.transformMode && exitDoubleTap) {
                         exitTransformMode(state);
                     } else if (state.transformMode && dragging) {
                         if (moved) {
-                            applyDrag(x, y);
-                            Log.i(TAG, "Translated region geometry changed");
-                        } else {
-                            recordTap(state.transformTarget, x, y);
+                            applyCornerResize(x, y);
+                            Log.i(TAG, "Translated region corner geometry changed");
                         }
                         clearDrag();
-                    } else if (!state.transformMode) {
-                        if (!moved && downTarget != null && pendingDoubleTap) {
-                            enterTransformMode(state, downTarget);
-                        } else if (!moved && downTarget != null) {
-                            toggleAt(downTarget);
-                            recordTap(downTarget, x, y);
-                        } else if (!moved) {
-                            clearTap();
-                        } else {
-                            clearTap();
-                        }
+                    } else if (state.transformMode) {
+                        if (!moved) recordTap(state.transformTarget, x, y);
+                    } else if (!moved && downTarget != null && pendingDoubleTap) {
+                        enterTransformMode(state, downTarget);
+                    } else if (!moved && downTarget != null) {
+                        toggleAt(downTarget);
+                        recordTap(downTarget, x, y);
+                    } else {
+                        clearTap();
                     }
                     performClick();
                     return true;
 
                 case MotionEvent.ACTION_CANCEL:
                     clearDrag();
+                    clearTwoFingerData();
+                    twoFingerConsumed = false;
                     moved = false;
                     pendingDoubleTap = false;
                     exitDoubleTap = false;
@@ -689,12 +726,85 @@ public final class TranslationRegionEditor {
             }
         }
 
+        private void beginTwoFingerMove(MotionEvent event) {
+            if (twoFingerMove || event.getPointerCount() < 2 || state.transformTarget == null) return;
+            Rect bounds = readBounds(state.transformTarget);
+            if (bounds == null) return;
+
+            int secondIndex = event.getActionIndex();
+            int firstIndex = secondIndex == 0 ? 1 : 0;
+            if (firstIndex >= event.getPointerCount() || secondIndex >= event.getPointerCount()) return;
+
+            float ax = event.getX(firstIndex);
+            float ay = event.getY(firstIndex);
+            float bx = event.getX(secondIndex);
+            float by = event.getY(secondIndex);
+            float padding = dp(getContext(), 18.0f);
+            RectF allowed = new RectF(
+                    bounds.left - padding, bounds.top - padding,
+                    bounds.right + padding, bounds.bottom + padding);
+            if (!allowed.contains(ax, ay) || !allowed.contains(bx, by)) return;
+
+            int[] geometry = readRawBounds(state.transformTarget);
+            if (geometry == null) return;
+
+            pointerIdA = event.getPointerId(firstIndex);
+            pointerIdB = event.getPointerId(secondIndex);
+            twoFingerStartCenterX = (ax + bx) / 2.0f;
+            twoFingerStartCenterY = (ay + by) / 2.0f;
+            twoFingerStartBounds = new Rect(bounds);
+            twoFingerRawStart = geometry;
+            twoFingerMove = true;
+            twoFingerConsumed = true;
+            twoFingerMoved = false;
+            dragging = false;
+            dragMode = DragMode.NONE;
+            exitDoubleTap = false;
+            clearTap();
+            Log.i(TAG, "Two-finger region move started");
+        }
+
+        private void updateTwoFingerMove(MotionEvent event) {
+            if (!twoFingerMove || twoFingerStartBounds == null || twoFingerRawStart == null) return;
+            int indexA = event.findPointerIndex(pointerIdA);
+            int indexB = event.findPointerIndex(pointerIdB);
+            if (indexA < 0 || indexB < 0) return;
+
+            float centerX = (event.getX(indexA) + event.getX(indexB)) / 2.0f;
+            float centerY = (event.getY(indexA) + event.getY(indexB)) / 2.0f;
+            if (distanceSquared(centerX, centerY,
+                    twoFingerStartCenterX, twoFingerStartCenterY) > touchSlop * touchSlop) {
+                twoFingerMoved = true;
+            }
+            if (!twoFingerMoved) return;
+
+            int dx = Math.round(centerX - twoFingerStartCenterX);
+            int dy = Math.round(centerY - twoFingerStartCenterY);
+            Rect updated = new Rect(twoFingerStartBounds);
+            int maxX = Math.max(getWidth(), updated.right);
+            int maxY = Math.max(getHeight(), updated.bottom);
+            int left = clamp(updated.left + dx, 0, Math.max(0, maxX - updated.width()));
+            int top = clamp(updated.top + dy, 0, Math.max(0, maxY - updated.height()));
+            updated.set(left, top, left + twoFingerStartBounds.width(),
+                    top + twoFingerStartBounds.height());
+            writeGeometry(state.transformTarget, twoFingerStartBounds, twoFingerRawStart, updated);
+            refreshRenderers(state);
+        }
+
+        private void clearTwoFingerData() {
+            pointerIdA = -1;
+            pointerIdB = -1;
+            twoFingerStartBounds = null;
+            twoFingerRawStart = null;
+            twoFingerMoved = false;
+        }
+
         @Override public boolean performClick() {
             super.performClick();
             return true;
         }
 
-        private void applyDrag(float x, float y) {
+        private void applyCornerResize(float x, float y) {
             if (state.transformTarget == null || dragStart == null || rawStart == null) return;
             int dx = Math.round(x - downX);
             int dy = Math.round(y - downY);
@@ -705,62 +815,39 @@ public final class TranslationRegionEditor {
             int minHeight = Math.max(1, Math.round(dp(getContext(), 28.0f)));
 
             switch (dragMode) {
-                case MOVE: {
-                    int left = dragStart.left + dx;
-                    int top = dragStart.top + dy;
-                    left = clamp(left, 0, Math.max(0, maxX - dragStart.width()));
-                    top = clamp(top, 0, Math.max(0, maxY - dragStart.height()));
-                    updated.set(left, top, left + dragStart.width(), top + dragStart.height());
-                    break;
-                }
                 case NW:
                     updated.left = clamp(dragStart.left + dx, 0, dragStart.right - minWidth);
-                    updated.top = clamp(dragStart.top + dy, 0, dragStart.bottom - minHeight);
-                    break;
-                case N:
                     updated.top = clamp(dragStart.top + dy, 0, dragStart.bottom - minHeight);
                     break;
                 case NE:
                     updated.right = clamp(dragStart.right + dx, dragStart.left + minWidth, maxX);
                     updated.top = clamp(dragStart.top + dy, 0, dragStart.bottom - minHeight);
                     break;
-                case E:
-                    updated.right = clamp(dragStart.right + dx, dragStart.left + minWidth, maxX);
-                    break;
                 case SE:
                     updated.right = clamp(dragStart.right + dx, dragStart.left + minWidth, maxX);
-                    updated.bottom = clamp(dragStart.bottom + dy, dragStart.top + minHeight, maxY);
-                    break;
-                case S:
                     updated.bottom = clamp(dragStart.bottom + dy, dragStart.top + minHeight, maxY);
                     break;
                 case SW:
                     updated.left = clamp(dragStart.left + dx, 0, dragStart.right - minWidth);
                     updated.bottom = clamp(dragStart.bottom + dy, dragStart.top + minHeight, maxY);
                     break;
-                case W:
-                    updated.left = clamp(dragStart.left + dx, 0, dragStart.right - minWidth);
-                    break;
                 default:
                     return;
             }
-
             writeGeometry(state.transformTarget, dragStart, rawStart, updated);
             refreshRenderers(state);
         }
 
         private DragMode findDragMode(float x, float y, Rect bounds) {
-            float hitRadius = dp(getContext(), 20.0f);
-            float midX = (bounds.left + bounds.right) / 2.0f;
-            float midY = (bounds.top + bounds.bottom) / 2.0f;
+            float shortestSide = Math.min(bounds.width(), bounds.height());
+            float hitRadius = Math.min(dp(getContext(), 16.0f),
+                    Math.max(dp(getContext(), 7.0f), shortestSide * 0.30f));
             float[][] points = new float[][] {
-                    {bounds.left, bounds.top}, {midX, bounds.top}, {bounds.right, bounds.top},
-                    {bounds.right, midY}, {bounds.right, bounds.bottom}, {midX, bounds.bottom},
-                    {bounds.left, bounds.bottom}, {bounds.left, midY}
+                    {bounds.left, bounds.top}, {bounds.right, bounds.top},
+                    {bounds.right, bounds.bottom}, {bounds.left, bounds.bottom}
             };
             DragMode[] modes = new DragMode[] {
-                    DragMode.NW, DragMode.N, DragMode.NE, DragMode.E,
-                    DragMode.SE, DragMode.S, DragMode.SW, DragMode.W
+                    DragMode.NW, DragMode.NE, DragMode.SE, DragMode.SW
             };
             float best = hitRadius * hitRadius;
             DragMode bestMode = DragMode.NONE;
@@ -771,8 +858,7 @@ public final class TranslationRegionEditor {
                     bestMode = modes[i];
                 }
             }
-            if (bestMode != DragMode.NONE) return bestMode;
-            return bounds.contains(Math.round(x), Math.round(y)) ? DragMode.MOVE : DragMode.NONE;
+            return bestMode;
         }
 
         private Object findTarget(float x, float y) {
