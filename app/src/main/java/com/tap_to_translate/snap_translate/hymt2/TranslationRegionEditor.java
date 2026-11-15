@@ -1,5 +1,6 @@
 package com.tap_to_translate.snap_translate.hymt2;
 
+import android.app.AlertDialog;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -7,14 +8,20 @@ import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.os.SystemClock;
+import android.text.InputType;
 import android.util.Log;
 import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
+import android.view.WindowManager;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.Button;
+import android.widget.EditText;
 import android.widget.ImageView;
-import android.widget.RelativeLayout;
+import android.widget.LinearLayout;
 import android.widget.Toast;
 
 import java.lang.reflect.Field;
@@ -27,13 +34,17 @@ import java.util.Map;
 import java.util.WeakHashMap;
 
 /**
- * Allows the user to select and remove already translated OCR regions.
- * The host's Loh/m objects are kept intact; selection is based on object identity.
+ * Edits the geometry and translated text of existing host overlay regions.
+ *
+ * The host renderer already performs a StaticLayout-based font-size fit for
+ * every region, so changing the model bounds and invalidating the renderer
+ * automatically reflows and resizes the translated text.
  */
 public final class TranslationRegionEditor {
     private static final String TAG = "TapTranslateEditor";
     private static final int EDIT_BUTTON_ID = 0x7f0a04f5;
     private static final int DELETE_BUTTON_ID = 0x7f0a04f6;
+    private static final int EDIT_TEXT_BUTTON_ID = 0x7f0a04f7;
     private static final int CONTENT_ID = 0x7f0a00d3;
     private static final Map<View, State> STATES =
             Collections.synchronizedMap(new WeakHashMap<View, State>());
@@ -47,12 +58,13 @@ public final class TranslationRegionEditor {
             View content = root.findViewById(CONTENT_ID);
             View edit = root.findViewById(EDIT_BUTTON_ID);
             View delete = root.findViewById(DELETE_BUTTON_ID);
+            View editText = root.findViewById(EDIT_TEXT_BUTTON_ID);
             if (!(content instanceof ViewGroup) || edit == null || delete == null) {
                 Log.w(TAG, "Cannot bind region editor: toolbar or content view is missing");
                 return;
             }
 
-            State state = new State(root, (ViewGroup) content, edit, delete);
+            State state = new State(root, (ViewGroup) content, edit, delete, editText);
             SelectionOverlay overlay = new SelectionOverlay(root.getContext(), state);
             state.overlay = overlay;
             overlay.setVisibility(View.GONE);
@@ -60,8 +72,8 @@ public final class TranslationRegionEditor {
             overlay.setFocusable(false);
 
             ViewGroup.LayoutParams params;
-            if (content instanceof RelativeLayout) {
-                params = new RelativeLayout.LayoutParams(
+            if (content instanceof android.widget.RelativeLayout) {
+                params = new android.widget.RelativeLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT);
             } else {
@@ -73,18 +85,25 @@ public final class TranslationRegionEditor {
 
             edit.setOnClickListener(v -> toggleEditing(state));
             delete.setOnClickListener(v -> deleteSelected(state));
+            if (editText != null) {
+                editText.setOnClickListener(v -> editSelectedText(state));
+                editText.setVisibility(View.GONE);
+            }
             state.deleteButton.setVisibility(View.GONE);
             state.editButton.setAlpha(0.55f);
             STATES.put(root, state);
-            Log.i(TAG, "Region editor attached to translated overlay");
+            Log.i(TAG, "Region editor attached: selection, geometry and text editing enabled");
         }
     }
 
-    /** Called when the host closes the translation panel or starts a new translation. */
+    /** Called when the host closes the translation panel. */
     public static void forceExit(View root) {
         if (root == null) return;
         State state = STATES.get(root);
-        if (state != null) exitEditing(state);
+        if (state != null) {
+            exitEditing(state);
+            state.originalTexts.clear();
+        }
     }
 
     private static void toggleEditing(State state) {
@@ -98,30 +117,54 @@ public final class TranslationRegionEditor {
             return;
         }
         state.selected.clear();
+        state.transformTarget = null;
+        state.transformMode = false;
         state.editing = true;
         state.overlay.setVisibility(View.VISIBLE);
         state.overlay.bringToFront();
         state.overlay.invalidate();
         state.editButton.setAlpha(1.0f);
-        state.deleteButton.setVisibility(View.VISIBLE);
-        updateDeleteButton(state);
-        toast(state.root, "Нажмите на рамки, чтобы выбрать области");
+        updateSelectionButtons(state);
+        toast(state.root, "Касание выбирает область; двойное касание включает перемещение и изменение размера");
         Log.i(TAG, "Edit mode entered; regions=" + regions.size());
     }
 
     private static void exitEditing(State state) {
-        if (!state.editing && state.selected.isEmpty()) {
-            state.overlay.setVisibility(View.GONE);
-            state.deleteButton.setVisibility(View.GONE);
-            return;
-        }
         state.editing = false;
+        state.transformMode = false;
+        state.transformTarget = null;
         state.selected.clear();
         state.overlay.setVisibility(View.GONE);
         state.deleteButton.setVisibility(View.GONE);
+        if (state.editTextButton != null) state.editTextButton.setVisibility(View.GONE);
         state.editButton.setAlpha(0.55f);
         state.overlay.invalidate();
         Log.i(TAG, "Edit mode exited");
+    }
+
+    private static void enterTransformMode(State state, Object item) {
+        if (item == null || readBounds(item) == null) return;
+        state.selected.clear();
+        state.selected.put(item, Boolean.TRUE);
+        state.transformTarget = item;
+        state.transformMode = true;
+        state.overlay.lastTapTarget = null;
+        state.overlay.lastTapTime = 0L;
+        updateSelectionButtons(state);
+        state.overlay.invalidate();
+        toast(state.root, "Тяните внутри рамки для перемещения, за маркеры — для изменения размера");
+        Log.i(TAG, "Geometry edit mode entered for one region");
+    }
+
+    private static void exitTransformMode(State state) {
+        state.transformMode = false;
+        state.transformTarget = null;
+        state.overlay.lastTapTarget = null;
+        state.overlay.lastTapTime = 0L;
+        state.overlay.clearDrag();
+        updateSelectionButtons(state);
+        state.overlay.invalidate();
+        toast(state.root, "Режим изменения рамки завершён");
     }
 
     private static void deleteSelected(State state) {
@@ -140,23 +183,25 @@ public final class TranslationRegionEditor {
         for (Object item : current) {
             if (state.selected.containsKey(item)) {
                 removed++;
+                state.originalTexts.remove(item);
             } else {
                 remaining.add(item);
             }
         }
         if (removed == 0) {
             state.selected.clear();
-            updateDeleteButton(state);
+            updateSelectionButtons(state);
             state.overlay.invalidate();
             toast(state.root, "Выбранные области уже отсутствуют");
             return;
         }
 
+        state.transformMode = false;
+        state.transformTarget = null;
         try {
             Method setRootList = state.root.getClass().getMethod("setList", List.class);
             setRootList.invoke(state.root, remaining);
 
-            // rh/c.m is the normal text/background renderer used by the toolbar overlay.
             Field rendererField = state.root.getClass().getField("m");
             Object renderer = rendererField.get(state.root);
             if (renderer != null) {
@@ -169,11 +214,9 @@ public final class TranslationRegionEditor {
             state.overlay.invalidate();
             state.root.invalidate();
             state.content.invalidate();
-            updateDeleteButton(state);
+            updateSelectionButtons(state);
 
-            if (remaining.isEmpty()) {
-                exitEditing(state);
-            }
+            if (remaining.isEmpty()) exitEditing(state);
             toast(state.root, "Удалено областей: " + removed);
             Log.i(TAG, "Deleted translated regions=" + removed + " remaining=" + remaining.size());
         } catch (Throwable error) {
@@ -182,11 +225,141 @@ public final class TranslationRegionEditor {
         }
     }
 
+    private static void updateSelectionButtons(State state) {
+        int count = state.selected.size();
+        state.deleteButton.setVisibility(state.editing ? View.VISIBLE : View.GONE);
+        state.deleteButton.setEnabled(count > 0);
+        state.deleteButton.setAlpha(count > 0 ? 1.0f : 0.35f);
+        state.deleteButton.setContentDescription(
+                count > 0 ? "Удалить выбранные области: " + count : "Удалить выбранные области");
+
+        if (state.editTextButton != null) {
+            boolean oneRegion = state.editing && count == 1;
+            state.editTextButton.setVisibility(oneRegion ? View.VISIBLE : View.GONE);
+            state.editTextButton.setEnabled(oneRegion);
+            state.editTextButton.setContentDescription("Редактировать текст перевода");
+        }
+    }
+
+    private static void editSelectedText(State state) {
+        if (!state.editing || state.selected.size() != 1) {
+            toast(state.root, "Для редактирования текста выберите одну область");
+            return;
+        }
+        Object item = state.selected.keySet().iterator().next();
+        String current = readStringField(item, "b");
+        if (current == null) current = "";
+        if (!state.originalTexts.containsKey(item)) {
+            state.originalTexts.put(item, current);
+        }
+        final String original = state.originalTexts.get(item);
+        final String initialText = current;
+
+        try {
+            Context context = state.root.getContext();
+            EditText editor = new EditText(context);
+            editor.setText(initialText);
+            editor.setSelection(editor.length());
+            editor.setMinLines(4);
+            editor.setMaxLines(10);
+            editor.setGravity(Gravity.TOP | Gravity.START);
+            editor.setInputType(InputType.TYPE_CLASS_TEXT
+                    | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                    | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+            editor.setHint("Текст перевода");
+            editor.setVerticalScrollBarEnabled(true);
+            editor.setPadding(dp(context, 12), dp(context, 10), dp(context, 12), dp(context, 10));
+
+            LinearLayout container = new LinearLayout(context);
+            container.setOrientation(LinearLayout.VERTICAL);
+            container.setPadding(dp(context, 8), dp(context, 4), dp(context, 8), dp(context, 4));
+            container.addView(editor, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            AlertDialog dialog = new AlertDialog.Builder(context)
+                    .setTitle("Редактировать перевод")
+                    .setView(container)
+                    .setPositiveButton("Сохранить", null)
+                    .setNegativeButton("Отмена", null)
+                    .setNeutralButton("Исходный перевод", null)
+                    .create();
+
+            // The host panel is a system overlay created by a Service, not an Activity.
+            // Use the same overlay window type so the editor can safely obtain IME focus.
+            if (dialog.getWindow() != null && android.os.Build.VERSION.SDK_INT >= 26) {
+                dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
+                dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+            }
+
+            dialog.setOnShowListener(ignored -> {
+                Button save = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+                Button cancel = dialog.getButton(AlertDialog.BUTTON_NEGATIVE);
+                Button restore = dialog.getButton(AlertDialog.BUTTON_NEUTRAL);
+
+                save.setOnClickListener(v -> {
+                    String updated = editor.getText() == null ? "" : editor.getText().toString();
+                    if (writeStringField(item, "b", updated)) {
+                        refreshRenderers(state);
+                        toast(state.root, "Текст области обновлён");
+                        dialog.dismiss();
+                    } else {
+                        toast(state.root, "Не удалось сохранить текст области");
+                    }
+                });
+                cancel.setOnClickListener(v -> dialog.dismiss());
+                restore.setOnClickListener(v -> {
+                    editor.setText(original == null ? "" : original);
+                    editor.setSelection(editor.length());
+                });
+
+                editor.requestFocus();
+                editor.post(() -> {
+                    try {
+                        InputMethodManager imm = (InputMethodManager)
+                                context.getSystemService(Context.INPUT_METHOD_SERVICE);
+                        if (imm != null) imm.showSoftInput(editor, InputMethodManager.SHOW_IMPLICIT);
+                    } catch (Throwable error) {
+                        Log.w(TAG, "Could not show keyboard for translated text editor", error);
+                    }
+                });
+            });
+            dialog.show();
+            Log.i(TAG, "Opened translated text editor");
+        } catch (Throwable error) {
+            Log.e(TAG, "Could not open translated text editor", error);
+            toast(state.root, "Не удалось открыть редактор текста");
+        }
+    }
+
+    private static void refreshRenderers(State state) {
+        List<?> current = readList(state.root);
+        if (current == null) return;
+        try {
+            state.root.getClass().getMethod("setList", List.class).invoke(state.root, current);
+        } catch (Throwable error) {
+            Log.w(TAG, "Root region list refresh failed", error);
+        }
+        try {
+            Field rendererField = state.root.getClass().getField("m");
+            Object renderer = rendererField.get(state.root);
+            if (renderer != null) {
+                renderer.getClass().getMethod("setList", List.class).invoke(renderer, current);
+                if (renderer instanceof View) ((View) renderer).invalidate();
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "Primary text renderer refresh failed", error);
+        }
+        updateSecondaryRenderer(state.root, new ArrayList<Object>(current));
+        state.root.invalidate();
+        state.content.invalidate();
+        state.overlay.invalidate();
+    }
+
     /**
-     * In alternate host display mode rh/d draws the same output list in a second
-     * renderer. Keep it synchronized without creating that renderer unnecessarily.
+     * The alternate host display mode may draw through a second renderer.
+     * Keep that renderer in sync without creating it when it is not active.
      */
-    private static void updateSecondaryRenderer(View root, List<Object> remaining) {
+    private static void updateSecondaryRenderer(View root, List<Object> regions) {
         try {
             Field callbackField = root.getClass().getField("e");
             Object callback = callbackField.get(root);
@@ -200,21 +373,14 @@ public final class TranslationRegionEditor {
             Object secondary = secondaryField.get(service);
             if (secondary == null) return;
 
-            secondary.getClass().getMethod("setList", List.class).invoke(secondary, remaining);
+            secondary.getClass().getMethod("setList", List.class).invoke(secondary, regions);
             secondary.getClass().getMethod("a").invoke(secondary);
+            if (secondary instanceof View) ((View) secondary).invalidate();
         } catch (NoSuchFieldException ignored) {
             // The normal renderer is still updated; optional secondary mode is absent.
         } catch (Throwable error) {
             Log.w(TAG, "Secondary translated renderer was not updated", error);
         }
-    }
-
-    private static void updateDeleteButton(State state) {
-        int count = state.selected.size();
-        state.deleteButton.setEnabled(count > 0);
-        state.deleteButton.setAlpha(count > 0 ? 1.0f : 0.35f);
-        state.deleteButton.setContentDescription(
-                count > 0 ? "Удалить выбранные области: " + count : "Удалить выбранные области");
     }
 
     private static void toast(View anchor, String message) {
@@ -249,31 +415,115 @@ public final class TranslationRegionEditor {
         }
     }
 
+    private static int[] readRawBounds(Object item) {
+        try {
+            Class<?> type = item.getClass();
+            return new int[] {
+                    type.getField("c").getInt(item),
+                    type.getField("d").getInt(item),
+                    type.getField("e").getInt(item),
+                    type.getField("f").getInt(item)
+            };
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not read writable region geometry", error);
+            return null;
+        }
+    }
+
+    private static void writeGeometry(Object item, Rect start, int[] rawStart, Rect updated) {
+        try {
+            Class<?> type = item.getClass();
+            type.getField("c").setInt(item, rawStart[0] + updated.left - start.left);
+            type.getField("d").setInt(item, rawStart[1] + updated.right - start.right);
+            type.getField("e").setInt(item, rawStart[2] + updated.top - start.top);
+            type.getField("f").setInt(item, rawStart[3] + updated.bottom - start.bottom);
+        } catch (Throwable error) {
+            Log.e(TAG, "Could not update translated region geometry", error);
+        }
+    }
+
+    private static String readStringField(Object item, String name) {
+        try {
+            Object value = item.getClass().getField(name).get(item);
+            return value instanceof String ? (String) value : null;
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not read translated text field " + name, error);
+            return null;
+        }
+    }
+
+    private static boolean writeStringField(Object item, String name, String value) {
+        try {
+            item.getClass().getField(name).set(item, value);
+            return true;
+        } catch (Throwable error) {
+            Log.e(TAG, "Could not update translated text field " + name, error);
+            return false;
+        }
+    }
+
+    private static float dp(Context context, float value) {
+        return TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP,
+                value,
+                context.getResources().getDisplayMetrics());
+    }
+
+    private static int clamp(int value, int min, int max) {
+        if (max < min) max = min;
+        return Math.max(min, Math.min(max, value));
+    }
+
     private static final class State {
         final View root;
         final ViewGroup content;
         final View editButton;
         final View deleteButton;
+        final View editTextButton;
         final IdentityHashMap<Object, Boolean> selected = new IdentityHashMap<>();
+        final IdentityHashMap<Object, String> originalTexts = new IdentityHashMap<>();
         SelectionOverlay overlay;
         boolean editing;
+        boolean transformMode;
+        Object transformTarget;
 
-        State(View root, ViewGroup content, View editButton, View deleteButton) {
+        State(View root, ViewGroup content, View editButton, View deleteButton, View editTextButton) {
             this.root = root;
             this.content = content;
             this.editButton = editButton;
             this.deleteButton = deleteButton;
+            this.editTextButton = editTextButton;
         }
+    }
+
+    private enum DragMode {
+        NONE, MOVE, NW, N, NE, E, SE, S, SW, W
     }
 
     private static final class SelectionOverlay extends View {
         private final State state;
         private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint outline = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint handleFill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint handleOutline = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final float touchPadding;
+        private final int touchSlop;
+
         private float downX;
         private float downY;
-        private final int touchSlop;
+        private Object downTarget;
+        private boolean pendingDoubleTap;
+        private boolean exitDoubleTap;
+        private boolean moved;
+        private boolean dragging;
+        private DragMode dragMode = DragMode.NONE;
+        private Rect dragStart;
+        private int[] rawStart;
+
+        private Object lastTapTarget;
+        private float lastTapX;
+        private float lastTapY;
+        private long lastTapTime;
 
         SelectionOverlay(Context context, State state) {
             super(context);
@@ -283,6 +533,11 @@ public final class TranslationRegionEditor {
             outline.setStrokeWidth(dp(context, 2.0f));
             touchPadding = dp(context, 12.0f);
             touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
+            handleFill.setStyle(Paint.Style.FILL);
+            handleFill.setColor(Color.WHITE);
+            handleOutline.setStyle(Paint.Style.STROKE);
+            handleOutline.setStrokeWidth(dp(context, 2.0f));
+            handleOutline.setColor(0xFF00A6D6);
             setWillNotDraw(false);
             setBackgroundColor(Color.TRANSPARENT);
         }
@@ -303,26 +558,132 @@ public final class TranslationRegionEditor {
                 RectF bounds = new RectF(rect);
                 canvas.drawRoundRect(bounds, radius, radius, fill);
                 canvas.drawRoundRect(bounds, radius, radius, outline);
+                if (state.transformMode && item == state.transformTarget) {
+                    drawHandles(canvas, rect);
+                }
+            }
+        }
+
+        private void drawHandles(Canvas canvas, Rect rect) {
+            float half = dp(getContext(), 5.5f);
+            float midX = (rect.left + rect.right) / 2.0f;
+            float midY = (rect.top + rect.bottom) / 2.0f;
+            float[][] points = new float[][] {
+                    {rect.left, rect.top}, {midX, rect.top}, {rect.right, rect.top},
+                    {rect.right, midY}, {rect.right, rect.bottom}, {midX, rect.bottom},
+                    {rect.left, rect.bottom}, {rect.left, midY}
+            };
+            for (float[] point : points) {
+                RectF handle = new RectF(
+                        point[0] - half, point[1] - half,
+                        point[0] + half, point[1] + half);
+                canvas.drawRoundRect(handle, dp(getContext(), 2.0f), dp(getContext(), 2.0f), handleFill);
+                canvas.drawRoundRect(handle, dp(getContext(), 2.0f), dp(getContext(), 2.0f), handleOutline);
             }
         }
 
         @Override public boolean onTouchEvent(MotionEvent event) {
             if (!state.editing) return false;
+            float x = event.getX();
+            float y = event.getY();
+
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
-                    downX = event.getX();
-                    downY = event.getY();
+                    downX = x;
+                    downY = y;
+                    moved = false;
+                    downTarget = findTarget(x, y);
+                    pendingDoubleTap = false;
+                    exitDoubleTap = false;
+                    dragging = false;
+                    dragMode = DragMode.NONE;
+                    dragStart = null;
+                    rawStart = null;
+
+                    if (state.transformMode) {
+                        Rect activeBounds = readBounds(state.transformTarget);
+                        if (activeBounds != null && isDoubleTapCandidate(state.transformTarget, x, y)
+                                && activeBounds.contains(x, y)) {
+                            exitDoubleTap = true;
+                            return true;
+                        }
+
+                        DragMode mode = activeBounds == null
+                                ? DragMode.NONE : findDragMode(x, y, activeBounds);
+                        if (mode != DragMode.NONE) {
+                            dragMode = mode;
+                            dragStart = new Rect(activeBounds);
+                            rawStart = readRawBounds(state.transformTarget);
+                            if (rawStart == null) {
+                                dragMode = DragMode.NONE;
+                                dragStart = null;
+                            } else {
+                                dragging = true;
+                                return true;
+                            }
+                        }
+
+                        if (downTarget != state.transformTarget) {
+                            exitTransformMode(state);
+                            downTarget = findTarget(x, y);
+                            pendingDoubleTap = downTarget != null
+                                    && isDoubleTapCandidate(downTarget, x, y);
+                        } else if (activeBounds != null && activeBounds.contains(x, y)) {
+                            // The hit is inside the active rectangle but outside a visible handle.
+                            dragMode = DragMode.MOVE;
+                            dragStart = new Rect(activeBounds);
+                            rawStart = readRawBounds(state.transformTarget);
+                            dragging = rawStart != null;
+                        }
+                        return true;
+                    }
+
+                    pendingDoubleTap = downTarget != null
+                            && isDoubleTapCandidate(downTarget, x, y);
                     return true;
+
+                case MotionEvent.ACTION_MOVE:
+                    if (distanceSquared(x, y, downX, downY) > touchSlop * touchSlop) {
+                        moved = true;
+                    }
+                    if (state.transformMode && dragging && dragStart != null && rawStart != null && moved) {
+                        applyDrag(x, y);
+                    }
+                    return true;
+
                 case MotionEvent.ACTION_UP:
-                    float dx = event.getX() - downX;
-                    float dy = event.getY() - downY;
-                    if ((dx * dx) + (dy * dy) <= touchSlop * touchSlop) {
-                        toggleAt(event.getX(), event.getY());
+                    if (state.transformMode && exitDoubleTap) {
+                        exitTransformMode(state);
+                    } else if (state.transformMode && dragging) {
+                        if (moved) {
+                            applyDrag(x, y);
+                            Log.i(TAG, "Translated region geometry changed");
+                        } else {
+                            recordTap(state.transformTarget, x, y);
+                        }
+                        clearDrag();
+                    } else if (!state.transformMode) {
+                        if (!moved && downTarget != null && pendingDoubleTap) {
+                            enterTransformMode(state, downTarget);
+                        } else if (!moved && downTarget != null) {
+                            toggleAt(downTarget);
+                            recordTap(downTarget, x, y);
+                        } else if (!moved) {
+                            clearTap();
+                        } else {
+                            clearTap();
+                        }
                     }
                     performClick();
                     return true;
+
                 case MotionEvent.ACTION_CANCEL:
+                    clearDrag();
+                    moved = false;
+                    pendingDoubleTap = false;
+                    exitDoubleTap = false;
                     return true;
+
                 default:
                     return true;
             }
@@ -333,10 +694,90 @@ public final class TranslationRegionEditor {
             return true;
         }
 
-        private void toggleAt(float x, float y) {
-            List<?> regions = readList(state.root);
-            if (regions == null || regions.isEmpty()) return;
+        private void applyDrag(float x, float y) {
+            if (state.transformTarget == null || dragStart == null || rawStart == null) return;
+            int dx = Math.round(x - downX);
+            int dy = Math.round(y - downY);
+            Rect updated = new Rect(dragStart);
+            int maxX = Math.max(getWidth(), dragStart.right);
+            int maxY = Math.max(getHeight(), dragStart.bottom);
+            int minWidth = Math.max(1, Math.round(dp(getContext(), 36.0f)));
+            int minHeight = Math.max(1, Math.round(dp(getContext(), 28.0f)));
 
+            switch (dragMode) {
+                case MOVE: {
+                    int left = dragStart.left + dx;
+                    int top = dragStart.top + dy;
+                    left = clamp(left, 0, Math.max(0, maxX - dragStart.width()));
+                    top = clamp(top, 0, Math.max(0, maxY - dragStart.height()));
+                    updated.set(left, top, left + dragStart.width(), top + dragStart.height());
+                    break;
+                }
+                case NW:
+                    updated.left = clamp(dragStart.left + dx, 0, dragStart.right - minWidth);
+                    updated.top = clamp(dragStart.top + dy, 0, dragStart.bottom - minHeight);
+                    break;
+                case N:
+                    updated.top = clamp(dragStart.top + dy, 0, dragStart.bottom - minHeight);
+                    break;
+                case NE:
+                    updated.right = clamp(dragStart.right + dx, dragStart.left + minWidth, maxX);
+                    updated.top = clamp(dragStart.top + dy, 0, dragStart.bottom - minHeight);
+                    break;
+                case E:
+                    updated.right = clamp(dragStart.right + dx, dragStart.left + minWidth, maxX);
+                    break;
+                case SE:
+                    updated.right = clamp(dragStart.right + dx, dragStart.left + minWidth, maxX);
+                    updated.bottom = clamp(dragStart.bottom + dy, dragStart.top + minHeight, maxY);
+                    break;
+                case S:
+                    updated.bottom = clamp(dragStart.bottom + dy, dragStart.top + minHeight, maxY);
+                    break;
+                case SW:
+                    updated.left = clamp(dragStart.left + dx, 0, dragStart.right - minWidth);
+                    updated.bottom = clamp(dragStart.bottom + dy, dragStart.top + minHeight, maxY);
+                    break;
+                case W:
+                    updated.left = clamp(dragStart.left + dx, 0, dragStart.right - minWidth);
+                    break;
+                default:
+                    return;
+            }
+
+            writeGeometry(state.transformTarget, dragStart, rawStart, updated);
+            refreshRenderers(state);
+        }
+
+        private DragMode findDragMode(float x, float y, Rect bounds) {
+            float hitRadius = dp(getContext(), 20.0f);
+            float midX = (bounds.left + bounds.right) / 2.0f;
+            float midY = (bounds.top + bounds.bottom) / 2.0f;
+            float[][] points = new float[][] {
+                    {bounds.left, bounds.top}, {midX, bounds.top}, {bounds.right, bounds.top},
+                    {bounds.right, midY}, {bounds.right, bounds.bottom}, {midX, bounds.bottom},
+                    {bounds.left, bounds.bottom}, {bounds.left, midY}
+            };
+            DragMode[] modes = new DragMode[] {
+                    DragMode.NW, DragMode.N, DragMode.NE, DragMode.E,
+                    DragMode.SE, DragMode.S, DragMode.SW, DragMode.W
+            };
+            float best = hitRadius * hitRadius;
+            DragMode bestMode = DragMode.NONE;
+            for (int i = 0; i < points.length; i++) {
+                float distance = distanceSquared(x, y, points[i][0], points[i][1]);
+                if (distance <= best) {
+                    best = distance;
+                    bestMode = modes[i];
+                }
+            }
+            if (bestMode != DragMode.NONE) return bestMode;
+            return bounds.contains(x, y) ? DragMode.MOVE : DragMode.NONE;
+        }
+
+        private Object findTarget(float x, float y) {
+            List<?> regions = readList(state.root);
+            if (regions == null || regions.isEmpty()) return null;
             Object best = null;
             long bestArea = Long.MAX_VALUE;
             for (int i = regions.size() - 1; i >= 0; i--) {
@@ -353,20 +794,49 @@ public final class TranslationRegionEditor {
                     bestArea = area;
                 }
             }
-            if (best == null) return;
+            return best;
+        }
 
-            if (state.selected.containsKey(best)) state.selected.remove(best);
-            else state.selected.put(best, Boolean.TRUE);
-
-            updateDeleteButton(state);
+        private void toggleAt(Object item) {
+            if (item == null) return;
+            if (state.selected.containsKey(item)) state.selected.remove(item);
+            else state.selected.put(item, Boolean.TRUE);
+            updateSelectionButtons(state);
             invalidate();
         }
-    }
 
-    private static float dp(Context context, float value) {
-        return TypedValue.applyDimension(
-                TypedValue.COMPLEX_UNIT_DIP,
-                value,
-                context.getResources().getDisplayMetrics());
+        private boolean isDoubleTapCandidate(Object item, float x, float y) {
+            if (item == null || item != lastTapTarget || lastTapTime == 0L) return false;
+            long elapsed = SystemClock.uptimeMillis() - lastTapTime;
+            float distance = dp(getContext(), 48.0f);
+            return elapsed >= 0L && elapsed <= ViewConfiguration.getDoubleTapTimeout()
+                    && distanceSquared(x, y, lastTapX, lastTapY) <= distance * distance;
+        }
+
+        private void recordTap(Object item, float x, float y) {
+            lastTapTarget = item;
+            lastTapX = x;
+            lastTapY = y;
+            lastTapTime = SystemClock.uptimeMillis();
+        }
+
+        private void clearTap() {
+            lastTapTarget = null;
+            lastTapTime = 0L;
+        }
+
+        private void clearDrag() {
+            dragging = false;
+            dragMode = DragMode.NONE;
+            dragStart = null;
+            rawStart = null;
+            exitDoubleTap = false;
+        }
+
+        private static float distanceSquared(float x1, float y1, float x2, float y2) {
+            float dx = x1 - x2;
+            float dy = y1 - y2;
+            return dx * dx + dy * dy;
+        }
     }
 }
