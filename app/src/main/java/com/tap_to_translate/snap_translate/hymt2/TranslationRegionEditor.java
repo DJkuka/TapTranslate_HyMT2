@@ -144,8 +144,9 @@ public final class TranslationRegionEditor {
     }
 
     private static void enterTransformMode(State state, Object item) {
+        if (item == null) return;
         Rect initialBounds = readBounds(item);
-        if (item == null || initialBounds == null) return;
+        if (initialBounds == null) return;
         state.selected.clear();
         state.selected.put(item, Boolean.TRUE);
         state.transformTarget = item;
