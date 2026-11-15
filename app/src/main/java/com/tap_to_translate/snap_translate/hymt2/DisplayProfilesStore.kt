@@ -182,6 +182,103 @@ object DisplayProfilesStore {
         return id
     }
 
+    /**
+     * Portable, versioned JSON format. Export deliberately contains only display
+     * appearance settings, never OCR models, translation credentials or runtime tuning.
+     */
+    @Synchronized
+    fun exportProfiles(context: Context, profileIds: List<String>): String {
+        ensureInitialized(context)
+        require(profileIds.isNotEmpty()) { "Не выбраны профили для экспорта" }
+        val source = readProfiles(context)
+        val exported = JSONArray()
+        for (id in profileIds.distinct()) {
+            val profile = findProfile(source, id) ?: continue
+            exported.put(
+                JSONObject()
+                    .put("name", profile.optString("name"))
+                    .put("values", JSONObject(profile.optJSONObject("values")?.toString() ?: "{}"))
+            )
+        }
+        require(exported.length() > 0) { "Профили для экспорта не найдены" }
+        return JSONObject()
+            .put("format", "TapTranslateDisplayProfiles")
+            .put("version", 1)
+            .put("profiles", exported)
+            .toString(2)
+    }
+
+    @Synchronized
+    fun importProfiles(context: Context, json: String): List<String> {
+        ensureInitialized(context)
+        require(json.length <= 1_000_000) { "Файл профилей слишком большой" }
+        val root = JSONObject(json)
+        require(root.optString("format") == "TapTranslateDisplayProfiles") {
+            "Это не файл профилей TapTranslate"
+        }
+        require(root.optInt("version", -1) == 1) { "Неподдерживаемая версия файла профилей" }
+        val incoming = root.optJSONArray("profiles")
+            ?: throw IllegalArgumentException("В файле нет списка профилей")
+        require(incoming.length() in 1..50) { "Файл должен содержать от 1 до 50 профилей" }
+
+        val existing = readProfiles(context)
+        val usedNames = listProfiles(context).map { it.name.lowercase() }.toMutableSet()
+        val importedIds = ArrayList<String>()
+        for (index in 0 until incoming.length()) {
+            val item = incoming.optJSONObject(index)
+                ?: throw IllegalArgumentException("Некорректная запись профиля №" + (index + 1))
+            val originalName = item.optString("name").trim()
+            require(originalName.isNotEmpty() && originalName.length <= 40) {
+                "Некорректное название профиля №" + (index + 1)
+            }
+            val values = item.optJSONObject("values")
+                ?: throw IllegalArgumentException("У профиля «" + originalName + "» нет настроек")
+            validatePortableValues(values, originalName)
+
+            var name = originalName
+            var suffix = 2
+            while (!usedNames.add(name.lowercase())) {
+                val tail = " (импорт $suffix)"
+                name = originalName.take(40 - tail.length) + tail
+                suffix++
+            }
+            val id = "user_" + UUID.randomUUID().toString()
+            existing.put(profileJson(id, name, false, values))
+            importedIds.add(id)
+        }
+        writeProfiles(context, existing)
+        return importedIds
+    }
+
+    private fun validatePortableValues(values: JSONObject, profileName: String) {
+        val host = values.optJSONObject("host")
+            ?: throw IllegalArgumentException("В профиле «" + profileName + "» нет параметров оформления")
+        for ((key, defaultValue) in hawkDefaults) {
+            val value = host.opt(key)
+            val valid = when (defaultValue) {
+                is Boolean -> value is Boolean
+                is Int -> value is Number
+                is String -> value is String
+                else -> false
+            }
+            require(valid) { "Некорректный параметр «" + key + "» в профиле «" + profileName + "»" }
+            if (key == "HAWK_FONT_SIZE") {
+                require((value as Number).toInt() in 4..200) { "Недопустимый размер шрифта" }
+            }
+            if (key == "HAWK_BG_TRANS") {
+                require((value as Number).toInt() in 0..255) { "Недопустимая прозрачность фона" }
+            }
+            if (key == "text_style") {
+                require((value as Number).toInt() in 0..32) { "Неизвестный стиль текста" }
+            }
+        }
+        val ocr = values.optJSONObject("ocr")
+            ?: throw IllegalArgumentException("В профиле «" + profileName + "» нет настроек фона OCR")
+        require(ocr.opt(KEY_FREE_ALPHA_ENABLED) is Boolean) { "Некорректный режим прозрачности свободного текста" }
+        val alpha = ocr.opt(KEY_FREE_ALPHA_PERCENT)
+        require(alpha is Number && alpha.toInt() in 0..100) { "Некорректная прозрачность свободного текста" }
+    }
+
     @Synchronized
     fun delete(context: Context, profileId: String) {
         ensureInitialized(context)
