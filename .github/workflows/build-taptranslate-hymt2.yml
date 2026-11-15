@@ -3,7 +3,7 @@ name: Build Tap Translate 1.125 FontFit AutoFill + Hy-MT2 Vulkan
 on:
   workflow_dispatch:
   push:
-    branches: [ main, vulkan-v12-integration, ocr-hybrid-prototype, ocr-paddle-prototype, ocr-region-editing ]
+    branches: [ main, vulkan-v12-integration, ocr-hybrid-prototype, ocr-paddle-prototype, ocr-region-editing, ocr-region-geometry ]
 
 permissions:
   contents: write
@@ -89,7 +89,7 @@ jobs:
           test "$(stat -c%s "$model")" -eq 11120765
 
       - name: Fetch pinned PP-OCRv6 small ONNX models and verify hashes
-        if: github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing'
+        if: github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing' || github.ref == 'refs/heads/ocr-region-geometry'
         shell: bash
         run: |
           set -euo pipefail
@@ -144,7 +144,7 @@ jobs:
           test -d "$decoded"
           for root in "$decoded"/smali*; do
             [ -d "$root" ] || continue
-            for package in vh xh loh rh nf gi gf mh qh; do
+            for package in vh xh loh Loh rh nf gi gf mh qh; do
               if [ -d "$root/$package" ]; then
                 mkdir -p "$trace/smali/$(basename "$root")"
                 cp -R "$root/$package" "$trace/smali/$(basename "$root")/"
@@ -205,7 +205,7 @@ jobs:
           ls -lh build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
 
       - name: Verify hybrid OCR contracts were merged into classes5.dex
-        if: github.ref == 'refs/heads/ocr-hybrid-prototype' || github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing'
+        if: github.ref == 'refs/heads/ocr-hybrid-prototype' || github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing' || github.ref == 'refs/heads/ocr-region-geometry'
         shell: bash
         run: |
           set -euo pipefail
