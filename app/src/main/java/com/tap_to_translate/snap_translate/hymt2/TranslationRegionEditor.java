@@ -196,21 +196,19 @@ public final class TranslationRegionEditor {
     private static void addRegion(State state) {
         if (!state.editing) return;
         try {
-            Class<?> modelClass = Class.forName("oh.m");
-            Object item = modelClass.getDeclaredConstructor().newInstance();
             int width = Math.max(1, Math.round(dp(state.root.getContext(), 120.0f)));
             int height = Math.max(1, Math.round(dp(state.root.getContext(), 56.0f)));
             int left = Math.max(0, (state.overlay.getWidth() - width) / 2);
             int top = Math.max(0, (state.overlay.getHeight() - height) / 2);
-            Class<?> offsets = Class.forName("ca.g2");
-            int offsetX = offsets.getField("c").getInt(null);
-            int offsetY = offsets.getField("d").getInt(null);
-            modelClass.getField("a").set(item, "");
-            modelClass.getField("b").set(item, "");
-            modelClass.getField("c").setInt(item, left + offsetX);
-            modelClass.getField("d").setInt(item, left + width + offsetX);
-            modelClass.getField("e").setInt(item, top + offsetY);
-            modelClass.getField("f").setInt(item, top + height + offsetY);
+
+            // Loh.m has no zero-argument constructor. Use its real Rect/String
+            // constructor so text, coordinates and the internal list are initialized.
+            Class<?> modelClass = Class.forName("oh.m");
+            android.graphics.Rect bounds = new android.graphics.Rect(
+                    left, top, left + width, top + height);
+            Object item = modelClass
+                    .getConstructor(android.graphics.Rect.class, String.class)
+                    .newInstance(bounds, "");
             List<?> current = readList(state.root);
             ArrayList<Object> updated = current == null ? new ArrayList<>() : new ArrayList<Object>(current);
             updated.add(item);
