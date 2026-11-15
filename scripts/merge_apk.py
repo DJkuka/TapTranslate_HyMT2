@@ -988,9 +988,22 @@ def patch_translation_region_editor(base: Path) -> None:
         xml = xml[:end + 2] + button + xml[end + 2:]
         layout.write_text(xml, encoding="utf-8")
 
+    if 'android:id="@id/container_widget_iv_edit_text_regions"' not in xml:
+        marker = 'android:id="@id/container_widget_iv_delete_regions"'
+        pos = xml.find(marker)
+        end = xml.find("/>", pos)
+        if pos < 0 or end < 0:
+            raise RuntimeError("Could not isolate delete-regions toolbar button")
+        button = '''
+            <ImageView android:id="@id/container_widget_iv_edit_text_regions" android:contentDescription="Редактировать текст перевода" android:background="@drawable/bg_circle_black" android:padding="6.0dip" android:layout_width="32.0dip" android:layout_height="32.0dip" android:layout_marginRight="10.0dip" android:src="@drawable/ic_edit_text_region" android:visibility="gone" />
+'''
+        xml = xml[:end + 2] + button + xml[end + 2:]
+        layout.write_text(xml, encoding="utf-8")
+
     ids = base / "res/values/ids.xml"
     ids_text = ids.read_text(encoding="utf-8")
-    for name in ("container_widget_iv_edit_regions", "container_widget_iv_delete_regions"):
+    for name in ("container_widget_iv_edit_regions", "container_widget_iv_delete_regions",
+                 "container_widget_iv_edit_text_regions"):
         if name not in ids_text:
             ids_text = ids_text.replace("</resources>",
                 f'    <item type="id" name="{name}" />\n</resources>', 1)
@@ -1001,6 +1014,7 @@ def patch_translation_region_editor(base: Path) -> None:
     allocations = (
         ("container_widget_iv_edit_regions", "0x7f0a04f5"),
         ("container_widget_iv_delete_regions", "0x7f0a04f6"),
+        ("container_widget_iv_edit_text_regions", "0x7f0a04f7"),
     )
     for name, value in allocations:
         if name not in pub_text:
@@ -1013,6 +1027,7 @@ def patch_translation_region_editor(base: Path) -> None:
     for name, path_data in (
         ("ic_edit_regions", "M3 17.25 V21 H6.75 L17.81 9.94 L14.06 6.19 Z M20.71 7.04 C21.1 6.65 21.1 6.02 20.71 5.63 L18.37 3.29 C17.98 2.9 17.35 2.9 16.96 3.29 L15.13 5.12 L18.88 8.87 Z"),
         ("ic_delete_regions", "M6 19 C6 20.1 6.9 21 8 21 H16 C17.1 21 18 20.1 18 19 V7 H6 Z M19 4 H15.5 L14.5 3 H9.5 L8.5 4 H5 V6 H19 Z"),
+        ("ic_edit_text_region", "M3 4 H15 V6 H5 V18 H19 V11 H21 V20 H3 Z M20.1 2.2 L21.8 3.9 L13 12.7 L10 13.5 L10.8 10.5 Z"),
     ):
         icon = base / f"res/drawable/{name}.xml"
         icon.write_text(f'''<?xml version="1.0" encoding="utf-8"?>
@@ -1057,7 +1072,7 @@ def patch_translation_region_editor(base: Path) -> None:
 
     if "TranslationRegionEditor;->bind" not in service.read_text(encoding="utf-8"):
         raise RuntimeError("Region editor was not bound to the translation toolbar")
-    print("Added translation-region edit mode and multi-delete toolbar controls")
+    print("Added region selection, move/resize handles, text editing and multi-delete controls")
 
 
 def patch_floating_icon_z_order(base: Path) -> None:
