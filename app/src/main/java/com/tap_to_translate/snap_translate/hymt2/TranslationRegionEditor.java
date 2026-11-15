@@ -45,6 +45,7 @@ public final class TranslationRegionEditor {
     private static final int EDIT_BUTTON_ID = 0x7f0a04f5;
     private static final int DELETE_BUTTON_ID = 0x7f0a04f6;
     private static final int EDIT_TEXT_BUTTON_ID = 0x7f0a04f7;
+    private static final int ADD_REGION_BUTTON_ID = 0x7f0a04f8;
     private static final int CONTENT_ID = 0x7f0a00d3;
     private static final Map<View, State> STATES =
             Collections.synchronizedMap(new WeakHashMap<View, State>());
@@ -59,6 +60,7 @@ public final class TranslationRegionEditor {
             View edit = root.findViewById(EDIT_BUTTON_ID);
             View delete = root.findViewById(DELETE_BUTTON_ID);
             View editText = root.findViewById(EDIT_TEXT_BUTTON_ID);
+            View addRegion = root.findViewById(ADD_REGION_BUTTON_ID);
             if (!(content instanceof ViewGroup) || edit == null || delete == null) {
                 Log.w(TAG, "Cannot bind region editor: toolbar or content view is missing");
                 return;
@@ -89,6 +91,11 @@ public final class TranslationRegionEditor {
                 editText.setOnClickListener(v -> editSelectedText(state));
                 editText.setVisibility(View.GONE);
             }
+            if (addRegion != null) {
+                addRegion.setOnClickListener(v -> addRegion(state));
+                addRegion.setVisibility(View.GONE);
+            }
+            state.addRegionButton = addRegion;
             state.deleteButton.setVisibility(View.GONE);
             state.editButton.setAlpha(0.55f);
             STATES.put(root, state);
@@ -122,6 +129,7 @@ public final class TranslationRegionEditor {
         state.transformMode = false;
         state.editing = true;
         state.overlay.setVisibility(View.VISIBLE);
+        if (state.addRegionButton != null) state.addRegionButton.setVisibility(View.VISIBLE);
         state.overlay.bringToFront();
         state.overlay.invalidate();
         state.editButton.setAlpha(1.0f);
@@ -138,6 +146,7 @@ public final class TranslationRegionEditor {
         state.overlay.setVisibility(View.GONE);
         state.deleteButton.setVisibility(View.GONE);
         if (state.editTextButton != null) state.editTextButton.setVisibility(View.GONE);
+        if (state.addRegionButton != null) state.addRegionButton.setVisibility(View.GONE);
         state.editButton.setAlpha(0.55f);
         state.overlay.invalidate();
         Log.i(TAG, "Edit mode exited");
@@ -182,6 +191,49 @@ public final class TranslationRegionEditor {
         updateSelectionButtons(state);
         state.overlay.invalidate();
         toast(state.root, "Режим изменения рамки завершён");
+    }
+
+    private static void addRegion(State state) {
+        if (!state.editing) return;
+        try {
+            Class<?> modelClass = Class.forName("oh.m");
+            Object item = modelClass.getDeclaredConstructor().newInstance();
+            int width = Math.max(1, Math.round(dp(state.root.getContext(), 120.0f)));
+            int height = Math.max(1, Math.round(dp(state.root.getContext(), 56.0f)));
+            int left = Math.max(0, (state.overlay.getWidth() - width) / 2);
+            int top = Math.max(0, (state.overlay.getHeight() - height) / 2);
+            Class<?> offsets = Class.forName("ca.g2");
+            int offsetX = offsets.getField("c").getInt(null);
+            int offsetY = offsets.getField("d").getInt(null);
+            modelClass.getField("a").set(item, "");
+            modelClass.getField("b").set(item, "");
+            modelClass.getField("c").setInt(item, left + offsetX);
+            modelClass.getField("d").setInt(item, left + width + offsetX);
+            modelClass.getField("e").setInt(item, top + offsetY);
+            modelClass.getField("f").setInt(item, top + height + offsetY);
+            List<?> current = readList(state.root);
+            ArrayList<Object> updated = current == null ? new ArrayList<>() : new ArrayList<Object>(current);
+            updated.add(item);
+            state.selected.clear();
+            state.selected.put(item, Boolean.TRUE);
+            state.originalTexts.put(item, "");
+            state.minimumResizeSizes.put(item, new int[] { Math.max(1, Math.round(dp(state.root.getContext(), 16.0f))), Math.max(1, Math.round(dp(state.root.getContext(), 16.0f))) });
+            state.transformTarget = item;
+            state.transformMode = true;
+            state.root.getClass().getMethod("setList", List.class).invoke(state.root, updated);
+            Field rendererField = state.root.getClass().getField("m");
+            Object renderer = rendererField.get(state.root);
+            if (renderer != null) renderer.getClass().getMethod("setList", List.class).invoke(renderer, updated);
+            updateSecondaryRenderer(state.root, updated);
+            state.overlay.lastTapTarget = null;
+            updateSelectionButtons(state);
+            refreshRenderers(state);
+            toast(state.root, "Добавлена пустая панель. Нажми карандаш, чтобы ввести текст");
+            Log.i(TAG, "Added empty translated region at " + left + "," + top);
+        } catch (Throwable error) {
+            Log.e(TAG, "Could not add translated region", error);
+            toast(state.root, "Не удалось добавить панель");
+        }
     }
 
     private static void deleteSelected(State state) {
@@ -498,6 +550,7 @@ public final class TranslationRegionEditor {
         final View editButton;
         final View deleteButton;
         final View editTextButton;
+        View addRegionButton;
         final IdentityHashMap<Object, Boolean> selected = new IdentityHashMap<>();
         final IdentityHashMap<Object, String> originalTexts = new IdentityHashMap<>();
         final IdentityHashMap<Object, int[]> minimumResizeSizes = new IdentityHashMap<>();
