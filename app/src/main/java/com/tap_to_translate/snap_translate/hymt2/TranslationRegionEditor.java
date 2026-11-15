@@ -103,6 +103,7 @@ public final class TranslationRegionEditor {
         if (state != null) {
             exitEditing(state);
             state.originalTexts.clear();
+            state.minimumResizeSizes.clear();
         }
     }
 
@@ -143,11 +144,23 @@ public final class TranslationRegionEditor {
     }
 
     private static void enterTransformMode(State state, Object item) {
-        if (item == null || readBounds(item) == null) return;
+        Rect initialBounds = readBounds(item);
+        if (item == null || initialBounds == null) return;
         state.selected.clear();
         state.selected.put(item, Boolean.TRUE);
         state.transformTarget = item;
         state.transformMode = true;
+        // Remember a safe minimum for the lifetime of this overlay. For narrow
+        // source regions the normal minimum (36x28 dp) would be larger than the
+        // original, making it impossible to shrink an expanded region back.
+        if (!state.minimumResizeSizes.containsKey(item)) {
+            int minWidth = Math.max(1, Math.round(dp(state.root.getContext(), 36.0f)));
+            int minHeight = Math.max(1, Math.round(dp(state.root.getContext(), 28.0f)));
+            state.minimumResizeSizes.put(item, new int[] {
+                    Math.min(minWidth, initialBounds.width()),
+                    Math.min(minHeight, initialBounds.height())
+            });
+        }
         state.overlay.lastTapTarget = null;
         state.overlay.lastTapTime = 0L;
         updateSelectionButtons(state);
@@ -184,6 +197,7 @@ public final class TranslationRegionEditor {
             if (state.selected.containsKey(item)) {
                 removed++;
                 state.originalTexts.remove(item);
+                state.minimumResizeSizes.remove(item);
             } else {
                 remaining.add(item);
             }
@@ -482,6 +496,7 @@ public final class TranslationRegionEditor {
         final View editTextButton;
         final IdentityHashMap<Object, Boolean> selected = new IdentityHashMap<>();
         final IdentityHashMap<Object, String> originalTexts = new IdentityHashMap<>();
+        final IdentityHashMap<Object, int[]> minimumResizeSizes = new IdentityHashMap<>();
         SelectionOverlay overlay;
         boolean editing;
         boolean transformMode;
@@ -577,9 +592,11 @@ public final class TranslationRegionEditor {
         }
 
         private void drawHandles(Canvas canvas, Rect rect) {
-            // Only four corner handles remain. Mid-edge touch zones made small
-            // comic balloons impossible to drag reliably.
-            float half = dp(getContext(), 5.5f);
+            // Scale the visible handles down for unusually thin balloons so the
+            // four corner markers do not visually merge into a single strip.
+            float half = Math.min(dp(getContext(), 5.5f),
+                    Math.max(dp(getContext(), 1.5f),
+                            Math.min(rect.width(), rect.height()) * 0.20f));
             float[][] points = new float[][] {
                     {rect.left, rect.top}, {rect.right, rect.top},
                     {rect.right, rect.bottom}, {rect.left, rect.bottom}
@@ -818,8 +835,11 @@ public final class TranslationRegionEditor {
             Rect updated = new Rect(dragStart);
             int maxX = Math.max(getWidth(), dragStart.right);
             int maxY = Math.max(getHeight(), dragStart.bottom);
-            int minWidth = Math.max(1, Math.round(dp(getContext(), 36.0f)));
-            int minHeight = Math.max(1, Math.round(dp(getContext(), 28.0f)));
+            int[] minimum = state.minimumResizeSizes.get(state.transformTarget);
+            int minWidth = minimum != null ? minimum[0]
+                    : Math.max(1, Math.round(dp(getContext(), 36.0f)));
+            int minHeight = minimum != null ? minimum[1]
+                    : Math.max(1, Math.round(dp(getContext(), 28.0f)));
 
             switch (dragMode) {
                 case NW:
@@ -846,26 +866,26 @@ public final class TranslationRegionEditor {
         }
 
         private DragMode findDragMode(float x, float y, Rect bounds) {
-            float shortestSide = Math.min(bounds.width(), bounds.height());
-            float hitRadius = Math.min(dp(getContext(), 16.0f),
-                    Math.max(dp(getContext(), 7.0f), shortestSide * 0.30f));
-            float[][] points = new float[][] {
-                    {bounds.left, bounds.top}, {bounds.right, bounds.top},
-                    {bounds.right, bounds.bottom}, {bounds.left, bounds.bottom}
-            };
-            DragMode[] modes = new DragMode[] {
-                    DragMode.NW, DragMode.NE, DragMode.SE, DragMode.SW
-            };
-            float best = hitRadius * hitRadius;
-            DragMode bestMode = DragMode.NONE;
-            for (int i = 0; i < points.length; i++) {
-                float distance = distanceSquared(x, y, points[i][0], points[i][1]);
-                if (distance <= best) {
-                    best = distance;
-                    bestMode = modes[i];
-                }
-            }
-            return bestMode;
+            // Pick the nearest horizontal and vertical edge first. This assigns
+            // every touch to one corner quadrant and prevents the top/bottom
+            // targets from collapsing into each other on very short panels.
+            boolean left = Math.abs(x - bounds.left) <= Math.abs(x - bounds.right);
+            boolean top = Math.abs(y - bounds.top) <= Math.abs(y - bounds.bottom);
+            float cornerX = left ? bounds.left : bounds.right;
+            float cornerY = top ? bounds.top : bounds.bottom;
+
+            // Keep each target within its half of the panel. The previous fixed
+            // 7 dp minimum could make opposite handles overlap on thin balloons.
+            float radiusX = Math.max(1.0f, Math.min(dp(getContext(), 16.0f), bounds.width() * 0.49f));
+            float radiusY = Math.max(1.0f, Math.min(dp(getContext(), 16.0f), bounds.height() * 0.49f));
+            float dx = (x - cornerX) / radiusX;
+            float dy = (y - cornerY) / radiusY;
+            if (dx * dx + dy * dy > 1.0f) return DragMode.NONE;
+
+            if (left && top) return DragMode.NW;
+            if (!left && top) return DragMode.NE;
+            if (!left) return DragMode.SE;
+            return DragMode.SW;
         }
 
         private Object findTarget(float x, float y) {
