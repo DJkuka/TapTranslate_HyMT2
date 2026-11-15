@@ -1010,7 +1010,7 @@ def patch_translation_region_editor(base: Path) -> None:
                 f'    <public type="id" name="{name}" id="{value}" />\\n</resources>', 1)
     public.write_text(pub_text, encoding="utf-8")
 
-    for name, icon_path, path_data in (
+    for name, path_data in (
         ("ic_edit_regions", "M3 17.25 V21 H6.75 L17.81 9.94 L14.06 6.19 Z M20.71 7.04 C21.1 6.65 21.1 6.02 20.71 5.63 L18.37 3.29 C17.98 2.9 17.35 2.9 16.96 3.29 L15.13 5.12 L18.88 8.87 Z"),
         ("ic_delete_regions", "M6 19 C6 20.1 6.9 21 8 21 H16 C17.1 21 18 20.1 18 19 V7 H6 Z M19 4 H15.5 L14.5 3 H9.5 L8.5 4 H5 V6 H19 Z"),
     ):
