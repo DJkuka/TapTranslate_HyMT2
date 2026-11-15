@@ -628,7 +628,7 @@ public final class TranslationRegionEditor {
                             downTarget = findTarget(x, y);
                             pendingDoubleTap = downTarget != null
                                     && isDoubleTapCandidate(downTarget, x, y);
-                        } else if (activeBounds != null && activeBounds.contains(x, y)) {
+                        } else if (activeBounds != null && activeBounds.contains(Math.round(x), Math.round(y))) {
                             // The hit is inside the active rectangle but outside a visible handle.
                             dragMode = DragMode.MOVE;
                             dragStart = new Rect(activeBounds);
