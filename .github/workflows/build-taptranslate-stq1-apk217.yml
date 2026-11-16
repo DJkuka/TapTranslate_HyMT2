@@ -3,7 +3,7 @@ name: Build TapTranslate STQ1_0 on verified APK 217
 on:
   workflow_dispatch:
   push:
-    branches: [ stq1_0-apk217-port ]
+    branches: [ stq1_0-apk217-diagnostics ]
 
 permissions:
   contents: read
