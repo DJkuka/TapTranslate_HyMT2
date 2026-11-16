@@ -1,9 +1,9 @@
-name: Build TapTranslate STQ1_0 on verified APK 217
+name: Build TapTranslate STQ1_0 on verified APK 219
 
 on:
   workflow_dispatch:
   push:
-    branches: [ stq1_0-apk217-diagnostics ]
+    branches: [ stq1_0-apk219-final ]
 
 permissions:
   contents: read
@@ -168,24 +168,24 @@ jobs:
           echo "VULKAN_AAR_NATIVE_DIR=$GITHUB_WORKSPACE/build/stq-aar/jni/arm64-v8a" >> "$GITHUB_ENV"
           sha256sum "$GITHUB_WORKSPACE/app/libs/llama-android-vulkan.aar"
 
-      - name: Download the verified unsigned APK 217 artifact
+      - name: Download the verified unsigned APK 219 artifact
         uses: actions/download-artifact@v4
         with:
           name: TapTranslate-1.125-FontFit-AutoFill-HyMT2-Vulkan-unsigned
-          run-id: 43734696344
+          run-id: 43736943007
           repository: ${{ github.repository }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: input/run217
 
-      - name: Verify APK 217 SHA-256 and preserved base
+      - name: Verify APK 219 SHA-256 and preserved base
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p input
           base="input/run217/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk"
           test -s "$base"
-          echo "c35ba5505e17f0cf11ecfd4672d5f3f0f33a0b662988a0a46d5c08da73d2c1b3  $base" | sha256sum -c -
-          echo "Verified exact APK 217 SHA-256."
+          echo "0e0d30f30a98fa427a62d23c6fe670e9bd9781287da2515b1b8139f9332e82eb  $base" | sha256sum -c -
+          echo "Verified exact APK 219 SHA-256."
 
       - name: Build Tap Translate helper against the new native runtime
         run: |
@@ -194,30 +194,30 @@ jobs:
             -PvulkanAarNativeDir="$VULKAN_AAR_NATIVE_DIR" \
             :app:assembleDebug
 
-      - name: Merge only the STQ runtime into APK 217
+      - name: Merge only the STQ runtime into APK 219
         run: |
           python3 -m py_compile scripts/merge_runtime_into_existing_apk.py
           python3 scripts/merge_runtime_into_existing_apk.py \
             --base-apk input/run217/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk \
             --helper-apk app/build/outputs/apk/debug/app-debug.apk \
             --apktool tools/apktool.jar \
-            --work build/merge-apk217 \
-            --output build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK217_unsigned.apk \
+            --work build/merge-apk219 \
+            --output build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_unsigned.apk \
             --zipalign "$ANDROID_HOME/build-tools/35.0.0/zipalign"
 
       - name: Validate unsigned APK and native backend payload
         run: |
           set -euo pipefail
-          unzip -t build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK217_unsigned.apk | tail -n 2
-          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -p 4 build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK217_unsigned.apk
-          sha256sum build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK217_unsigned.apk
-          ls -lh build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK217_unsigned.apk
+          unzip -t build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_unsigned.apk | tail -n 2
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -p 4 build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_unsigned.apk
+          sha256sum build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_unsigned.apk
+          ls -lh build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_unsigned.apk
 
       - name: Upload experimental unsigned APK
         uses: actions/upload-artifact@v4
         with:
-          name: TapTranslate-STQ1_0-APK217-unsigned
-          path: build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK217_unsigned.apk
+          name: TapTranslate-STQ1_0-APK219-unsigned
+          path: build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_unsigned.apk
           if-no-files-found: error
           retention-days: 14
 
