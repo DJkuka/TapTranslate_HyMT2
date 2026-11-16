@@ -9,6 +9,7 @@
 
 #define LOG_TAG "HyMT2PenaltyJNI"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
 // Must match the private handle structure created by the pinned
 // llama-android commit 9f5469fd9fa7ea7bc7b01801923af95dc3b41d52.
@@ -175,27 +176,74 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
     if (!sampler) return env->NewStringUTF("{\"text\":\"\",\"error\":\"sampler initialization failed\"}");
 
     const int64_t start_us = llama_time_us();
+    LOGI("NATIVE_ENTER max_tokens=%d prompt_tokens=%zu prompt_bytes=%zu ctx=%u temp=%.3f top_p=%.3f top_k=%d rep_penalty=%.3f seed=%d",
+         max_tokens, tokens.size(), full_prompt.size(), llama_n_ctx(context->ctx),
+         temperature, top_p, top_k, repetition_penalty, seed);
+
     llama_batch batch = llama_batch_get_one(
         const_cast<llama_token *>(tokens.data()), static_cast<int32_t>(tokens.size()));
-    if (llama_decode(context->ctx, batch) != 0) {
-        llama_sampler_free(sampler);
-        return env->NewStringUTF("{\"text\":\"\",\"error\":\"prompt decode failed; prompt may exceed context\"}");
-    }
+    const int64_t prompt_decode_start_us = llama_time_us();
+    LOGI("PROMPT_DECODE_START tokens=%zu", tokens.size());
+    const int prompt_decode_result = llama_decode(context->ctx, batch);
     const int64_t prompt_end_us = llama_time_us();
+    if (prompt_decode_result != 0) {
+        LOGE("PROMPT_DECODE_FAILED rc=%d elapsed_ms=%lld",
+             prompt_decode_result,
+             static_cast<long long>((prompt_end_us - prompt_decode_start_us) / 1000));
+        llama_sampler_free(sampler);
+        return env->NewStringUTF("{\\"text\\":\\"\\",\\"error\\":\\"prompt decode failed; prompt may exceed context\\"}");
+    }
+    LOGI("PROMPT_DECODE_DONE elapsed_ms=%lld",
+         static_cast<long long>((prompt_end_us - prompt_decode_start_us) / 1000));
 
     std::string output;
     int generated = 0;
+    bool stopped_on_eog = false;
     for (; generated < max_tokens; ++generated) {
+        const bool trace_token = generated < 4 || ((generated + 1) % 8 == 0);
+        const int64_t sample_start_us = llama_time_us();
+        if (trace_token) LOGI("SAMPLE_START index=%d", generated + 1);
         const llama_token token = llama_sampler_sample(sampler, context->ctx, -1);
-        if (llama_vocab_is_eog(vocab, token)) break;
+        const int64_t sample_end_us = llama_time_us();
+        if (trace_token) {
+            LOGI("SAMPLE_DONE index=%d token=%d elapsed_ms=%lld",
+                 generated + 1, token,
+                 static_cast<long long>((sample_end_us - sample_start_us) / 1000));
+        }
+        if (llama_vocab_is_eog(vocab, token)) {
+            stopped_on_eog = true;
+            LOGI("GENERATION_EOG index=%d", generated + 1);
+            break;
+        }
+
         llama_sampler_accept(sampler, token);
-        output += token_piece(vocab, token);
+        const std::string piece = token_piece(vocab, token);
+        output += piece;
+
         llama_batch next = llama_batch_get_one(
             const_cast<llama_token *>(&token), 1);
-        if (llama_decode(context->ctx, next) != 0) break;
+        const int64_t token_decode_start_us = llama_time_us();
+        if (trace_token) LOGI("TOKEN_DECODE_START index=%d token=%d", generated + 1, token);
+        const int token_decode_result = llama_decode(context->ctx, next);
+        const int64_t token_decode_end_us = llama_time_us();
+        if (trace_token) {
+            LOGI("TOKEN_DECODE_DONE index=%d rc=%d elapsed_ms=%lld piece_bytes=%zu output_bytes=%zu",
+                 generated + 1, token_decode_result,
+                 static_cast<long long>((token_decode_end_us - token_decode_start_us) / 1000),
+                 piece.size(), output.size());
+        }
+        if (token_decode_result != 0) {
+            LOGE("TOKEN_DECODE_FAILED index=%d rc=%d", generated + 1, token_decode_result);
+            ++generated; // Count the token already sampled and appended.
+            break;
+        }
     }
     const int64_t end_us = llama_time_us();
     llama_sampler_free(sampler);
+    LOGI("GENERATION_DONE generated=%d max_tokens=%d eog=%d output_bytes=%zu prompt_ms=%lld generation_ms=%lld",
+         generated, max_tokens, stopped_on_eog ? 1 : 0, output.size(),
+         static_cast<long long>((prompt_end_us - start_us) / 1000),
+         static_cast<long long>((end_us - prompt_end_us) / 1000));
 
     const long prompt_ms = static_cast<long>((prompt_end_us - start_us) / 1000);
     const long generation_ms = static_cast<long>((end_us - prompt_end_us) / 1000);
