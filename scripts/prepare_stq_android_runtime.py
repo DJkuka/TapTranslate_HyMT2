@@ -88,45 +88,19 @@ def main() -> int:
         raise SystemExit("Optimized ARM NEON STQ1_0 kernel missing")
     arm_path = llama / "ggml/src/ggml-cpu/arch/arm/quants.c"
 
-    # The optimized STQ1_0 ARM NEON path is bypassed on Android while its
-    # numerical parity is being checked against the reference implementation.
-    stq_kernel_anchor = """    const block_stq1_0 * GGML_RESTRICT x = vx;
-    const block_q8_K  * GGML_RESTRICT y = vy;
-
-    const int nb = n / QK_K;
-
-#if defined(__ARM_NEON)
-    float sumf = 0.0f;
-
-    const uint8x16_t m3 = vdupq_n_u8(3);"""
-    stq_kernel_replacement = """    const block_stq1_0 * GGML_RESTRICT x = vx;
-    const block_q8_K  * GGML_RESTRICT y = vy;
-
-    const int nb = n / QK_K;
-
-#if 0 /* Android diagnostic: use the reference C STQ1_0 kernel until ARM NEON parity is verified. */
-    float sumf = 0.0f;
-
-    const uint8x16_t m3 = vdupq_n_u8(3);"""
-    replace_once(
-        arm_path,
-        stq_kernel_anchor,
-        stq_kernel_replacement,
-        "route ARM STQ1_0 through the reference C kernel for correctness testing",
-    )
-    arm_after_fallback = arm_path.read_text(encoding="utf-8")
-    if (
-        arm_after_fallback.count(
-            "ggml_vec_dot_stq1_0_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);"
-        ) != 1
-        or arm_after_fallback.count(
-            "Android diagnostic: use the reference C STQ1_0 kernel"
-        ) != 1
-    ):
-        raise SystemExit("ARM STQ1_0 generic fallback verification failed")
+    # Keep the optimized ARM NEON STQ1_0 kernel enabled on Android.
+    # The tablet-tested standalone path uses CPU/NEON; forcing the generic C
+    # reference kernel made STQ inference several times slower on Snapdragon.
+    arm_after = arm_path.read_text(encoding="utf-8")
+    stq_function = arm_after[arm_after.index("void ggml_vec_dot_stq1_0_q8_K"):arm_after.index("void ggml_vec_dot_q2_K_q8_K")]
+    if "#if defined(__ARM_NEON)" not in stq_function or "STQ1_0_DOT_HALF" not in stq_function:
+        raise SystemExit("Optimized ARM NEON STQ1_0 kernel is not available")
+    if "Android diagnostic: use the reference C STQ1_0 kernel" in stq_function:
+        raise SystemExit("Obsolete generic-only STQ1_0 fallback is still present")
     generic = (llama / "ggml/src/ggml-cpu/quants.c").read_text(encoding="utf-8")
     if "ggml_vec_dot_stq1_0_q8_K_generic" not in generic:
-        raise SystemExit("STQ1_0 generic fallback missing")
+        raise SystemExit("STQ1_0 reference fallback missing")
+    print("Verified optimized ARM NEON STQ1_0 kernel remains enabled; generic C fallback retained for non-NEON CPUs.")
 
     gradle = wrapper / "library/build.gradle.kts"
     replace_once(
