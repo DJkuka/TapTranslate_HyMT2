@@ -207,6 +207,8 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
 
     std::string output;
     int generated = 0;
+    int skipped_bos = 0;
+    int consecutive_bos = 0;
     bool stopped_on_eog = false;
     bool stopped_on_bos = false;
     for (; generated < max_tokens; ++generated) {
@@ -226,18 +228,26 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
             LOGI("GENERATION_EOG index=%d token=%d", generated + 1, token);
             break;
         }
-        // BOS is valid only in the input prefix. If the model emits it while
-        // generating an answer, treat it as a malformed end marker and stop
-        // instead of appending the literal token and looping on it forever.
+        // A generated BOS is not user-visible text and is not an end marker.
+        // Feed it back into the context, but omit its printable special-token
+        // spelling. Stop only if the model emits a run of four BOS tokens.
         if (token == bos_token) {
-            stopped_on_bos = true;
-            LOGW("GENERATION_BOS_ABORT index=%d token=%d output_bytes=%zu",
-                 generated + 1, token, output.size());
-            break;
+            ++skipped_bos;
+            ++consecutive_bos;
+            LOGW("GENERATION_BOS_SKIP index=%d token=%d consecutive=%d output_bytes=%zu",
+                 generated + 1, token, consecutive_bos, output.size());
+            if (consecutive_bos >= 4) {
+                stopped_on_bos = true;
+                LOGW("GENERATION_BOS_STREAK_ABORT index=%d consecutive=%d",
+                     generated + 1, consecutive_bos);
+                break;
+            }
+        } else {
+            consecutive_bos = 0;
         }
 
         llama_sampler_accept(sampler, token);
-        const std::string piece = token_piece(vocab, token);
+        const std::string piece = token == bos_token ? std::string() : token_piece(vocab, token);
         output += piece;
 
         llama_batch next = llama_batch_get_one(
@@ -260,8 +270,8 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
     }
     const int64_t end_us = llama_time_us();
     llama_sampler_free(sampler);
-    LOGI("GENERATION_DONE generated=%d max_tokens=%d eog=%d bos_abort=%d output_bytes=%zu prompt_ms=%lld generation_ms=%lld",
-         generated, max_tokens, stopped_on_eog ? 1 : 0, stopped_on_bos ? 1 : 0, output.size(),
+    LOGI("GENERATION_DONE generated=%d max_tokens=%d eog=%d bos_skipped=%d bos_streak_abort=%d output_bytes=%zu prompt_ms=%lld generation_ms=%lld",
+         generated, max_tokens, stopped_on_eog ? 1 : 0, skipped_bos, stopped_on_bos ? 1 : 0, output.size(),
          static_cast<long long>((prompt_end_us - start_us) / 1000),
          static_cast<long long>((end_us - prompt_end_us) / 1000));
 
