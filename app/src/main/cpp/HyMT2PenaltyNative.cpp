@@ -66,39 +66,21 @@ std::string token_piece(const llama_vocab *vocab, llama_token token) {
     return std::string(buffer, static_cast<size_t>(size));
 }
 
-struct FormattedPrompt {
-    std::string text;
-    bool template_applied = false;
-};
-
-// Match the original APK 217 request structure: optional system instruction
-// followed by the translation request as a user message. The GGUF template
-// supplies BOS and the assistant-generation prefix when available.
-FormattedPrompt make_prompt(
-        const llama_model *model,
-        const std::string &system,
-        const std::string &user) {
-    const char *chat_template = llama_model_chat_template(model, nullptr);
-    if (!chat_template) {
-        if (system.empty()) return {user, false};
-        return {system + "\n\n" + user, false};
+// Hy-MT2 uses its own role markers, not the generic system/user chat
+// template exposed by llama_model_chat_template(). The working standalone
+// test uses exactly one user turn:
+// hy_begin_of_sentence -> hy_User -> task/source text -> hy_Assistant.
+std::string make_prompt(const std::string &system, const std::string &user) {
+    std::string body;
+    if (!system.empty()) {
+        body.reserve(system.size() + user.size() + 2);
+        body = system;
+        body += "\n\n";
+        body += user;
+    } else {
+        body = user;
     }
-
-    std::vector<llama_chat_message> messages;
-    if (!system.empty()) messages.push_back({"system", system.c_str()});
-    messages.push_back({"user", user.c_str()});
-    std::vector<char> buffer(user.size() + system.size() + 2048);
-    int32_t size = llama_chat_apply_template(
-        chat_template, messages.data(), messages.size(), true,
-        buffer.data(), static_cast<int32_t>(buffer.size()));
-    if (size > static_cast<int32_t>(buffer.size())) {
-        buffer.resize(static_cast<size_t>(size));
-        size = llama_chat_apply_template(
-            chat_template, messages.data(), messages.size(), true,
-            buffer.data(), static_cast<int32_t>(buffer.size()));
-    }
-    if (size < 0) return {system.empty() ? user : system + "\n\n" + user, false};
-    return {std::string(buffer.data(), static_cast<size_t>(size)), true};
+    return "<|hy_begin_of_sentence|><|hy_User|>" + body + "<|hy_Assistant|>";
 }
 
 llama_sampler *make_sampler(
@@ -143,13 +125,11 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCount
         JNIEnv *env, jobject, jlong handle, jstring prompt, jstring system) {
     LlamaCtx *context = get_context(handle);
     if (!context) return -1;
-    const FormattedPrompt full_prompt = make_prompt(
-        context->model, from_jstring(env, system), from_jstring(env, prompt));
+    const std::string full_prompt = make_prompt(
+        from_jstring(env, system), from_jstring(env, prompt));
     const llama_vocab *vocab = llama_model_get_vocab(context->model);
-    // The official Hy-MT2 chat template already emits its BOS token. Adding
-    // special tokens again would prepend a second BOS. Only add BOS when we
-    // had to fall back to the plain, non-template prompt.
-    const auto tokens = tokenize(vocab, full_prompt.text, !full_prompt.template_applied);
+    // The explicit Hy-MT2 prefix includes BOS; do not prepend a second BOS.
+    const auto tokens = tokenize(vocab, full_prompt, false);
     if (tokens.empty()) return -1;
     return static_cast<jint>(tokens.size());
 }
@@ -164,11 +144,10 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
     if (max_tokens <= 0) return env->NewStringUTF("{\"text\":\"\",\"error\":\"max_tokens must be positive\"}");
 
     const llama_vocab *vocab = llama_model_get_vocab(context->model);
-    const FormattedPrompt full_prompt = make_prompt(
-        context->model, from_jstring(env, system), from_jstring(env, prompt));
-    // The official Hy-MT2 template already contains BOS. Do not add it twice.
-    // Plain-text fallback prompts still need llama.cpp to insert BOS.
-    const auto tokens = tokenize(vocab, full_prompt.text, !full_prompt.template_applied);
+    const std::string full_prompt = make_prompt(
+        from_jstring(env, system), from_jstring(env, prompt));
+    // The explicit Hy-MT2 prefix includes BOS; do not prepend a second BOS.
+    const auto tokens = tokenize(vocab, full_prompt, false);
     if (tokens.empty()) return env->NewStringUTF("{\"text\":\"\",\"error\":\"prompt tokenization failed\"}");
 
     llama_memory_clear(llama_get_memory(context->ctx), true);
