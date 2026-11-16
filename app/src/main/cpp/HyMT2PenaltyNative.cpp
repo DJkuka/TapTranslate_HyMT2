@@ -10,6 +10,7 @@
 #define LOG_TAG "HyMT2PenaltyJNI"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 
 // Must match the private handle structure created by the pinned
 // llama-android commit 9f5469fd9fa7ea7bc7b01801923af95dc3b41d52.
