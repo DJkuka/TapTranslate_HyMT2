@@ -107,17 +107,6 @@ llama_sampler *make_sampler(
     llama_sampler *sampler =
         llama_sampler_chain_init(llama_sampler_chain_default_params());
 
-    if (temperature <= 0.0f) {
-        llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
-        return sampler;
-    }
-
-    // Apply top-k/top-p first: llama.cpp warns that running penalties on the
-    // full vocabulary for every token is expensive. Narrowing candidates first
-    // keeps the penalty operation bounded by the filtered set.
-    llama_sampler_chain_add(sampler, llama_sampler_init_top_k(std::max(1, top_k)));
-    llama_sampler_chain_add(sampler, llama_sampler_init_top_p(top_p, 1));
-
     if (repetition_penalty > 1.0f) {
         const int32_t n_vocab = llama_vocab_n_tokens(vocab);
         const int32_t penalty_last_n = std::max(1, context_size);
@@ -126,10 +115,16 @@ llama_sampler *make_sampler(
                 n_vocab, penalty_last_n, repetition_penalty, 0.0f, 0.0f));
     }
 
-    llama_sampler_chain_add(sampler, llama_sampler_init_temp(temperature));
-    llama_sampler_chain_add(
-        sampler, llama_sampler_init_dist(
-            seed < 0 ? LLAMA_DEFAULT_SEED : static_cast<uint32_t>(seed)));
+    if (temperature <= 0.0f) {
+        llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
+    } else {
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(std::max(1, top_k)));
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(top_p, 1));
+        llama_sampler_chain_add(sampler, llama_sampler_init_temp(temperature));
+        llama_sampler_chain_add(
+            sampler, llama_sampler_init_dist(
+                seed < 0 ? LLAMA_DEFAULT_SEED : static_cast<uint32_t>(seed)));
+    }
     return sampler;
 }
 
