@@ -222,9 +222,7 @@ object HyMT2Runtime {
                         val sourceLanguage = languageName(sourceCode)
                         val sourceLanguageKey = sourceLanguage ?: "auto"
                         val targetLanguage = languageName(targetCode) ?: "Russian"
-                        // Hy-MT2 uses a single user turn and no system prompt; the GGUF template
-                        // supplies the BOS and assistant-generation prefix.
-                        val systemPrompt = ""
+                        val systemPrompt = buildTranslationSystemPrompt(sourceLanguage, targetLanguage)
                         Log.i(TAG, "Hy-MT2 request: sourceCode=$sourceCode source=${sourceLanguage ?: "auto"} targetCode=$targetCode target=$targetLanguage sourceChars=${sourceText.length} sourcePreview=${if (sourceText.length <= 64) sourceText.replace("\\n", "\\\\n") else "<omitted>"} background=${options.backgroundContext.isNotBlank()} glossary=${options.glossary.isNotBlank()} style=${options.stylePreset}; context=${options.contextSize} maxTokens=${options.maxTokens} temperature=${options.temperature} topP=${options.topP} topK=${options.topK} threads=${options.threads} Vulkan=${options.useVulkan} gpuLayers=${if (options.useVulkan) options.gpuLayers else 0}; generation=Llama.complete")
                         val contextPairs = if (options.useRecentContext && options.recentContextPairs > 0) {
                             recentContextFor(host, sourceLanguageKey, targetLanguage, options.recentContextPairs)
@@ -368,9 +366,9 @@ object HyMT2Runtime {
         sourceText: String,
         targetLanguage: String,
     ): String {
-        // Prompt form previously validated by the user with Hy-MT2 in PocketPal.
-        // Send it as one user message; the GGUF template handles role framing and BOS.
-        return """Translate the following segment into $targetLanguage, without additional explanation.
+        // Exact prompt text from the verified APK 217 source.
+        // Keep this wording unchanged for the diagnostic comparison.
+        return """Translate the following text into $targetLanguage. Output only the translated result without explanations:
 
 $sourceText"""
     }
