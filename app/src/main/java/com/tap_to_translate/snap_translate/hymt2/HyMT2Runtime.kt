@@ -55,6 +55,7 @@ object HyMT2Runtime {
 
     @Volatile private var loadedModel: LlamaModel? = null
     @Volatile private var loadedSource: String? = null
+    @Volatile private var loadedModelKind: String? = null
     // Keep the SAF descriptor alive while llama.cpp has the model open/mapped.
     @Volatile private var loadedDescriptor: ParcelFileDescriptor? = null
 
@@ -94,7 +95,10 @@ object HyMT2Runtime {
         // A stale string in SharedPreferences must not suppress the document picker.
         val app = context.applicationContext
         val uri = selectedModelUri(app) ?: return false
-        if (loadedModel != null && loadedSource == uri.toString()) return true
+        if (loadedModel != null &&
+            loadedSource == uri.toString() &&
+            loadedModelKind == selectedModelKind(app)
+        ) return true
 
         val hasPersistedReadGrant = try {
             app.contentResolver.persistedUriPermissions.any {
@@ -175,6 +179,7 @@ object HyMT2Runtime {
                             loadedModel?.let { Llama.releaseModel(it) }
                             loadedModel = null
                             loadedSource = null
+                            loadedModelKind = null
                             loadedDescriptor?.close()
                             loadedDescriptor = null
                         }
@@ -217,11 +222,16 @@ object HyMT2Runtime {
                     val result = inferenceMutex.withLock {
                         val model = ensureLoaded(appContext)
                         val options = HyMT2Settings.load(appContext)
+                        val modelKind = selectedModelKind(appContext)
+                        val isStqModel = modelKind == MODEL_KIND_STQ1
+                        val appliedRepetitionPenalty = if (isStqModel) 1.0f else options.repetitionPenalty
+                        val activeVulkan = !isStqModel && options.useVulkan
+                        val activeGpuLayers = if (activeVulkan) options.gpuLayers else 0
                         val sourceLanguage = languageName(sourceCode)
                         val sourceLanguageKey = sourceLanguage ?: "auto"
                         val targetLanguage = languageName(targetCode) ?: "Russian"
                         val systemPrompt = buildTranslationSystemPrompt(sourceLanguage, targetLanguage)
-                        Log.i(TAG, "Hy-MT2 request: sourceCode=$sourceCode source=${sourceLanguage ?: "auto"} targetCode=$targetCode target=$targetLanguage sourceChars=${sourceText.length} sourcePreview=${if (sourceText.length <= 64) sourceText.replace("\\n", "\\\\n") else "<omitted>"} background=${options.backgroundContext.isNotBlank()} glossary=${options.glossary.isNotBlank()} style=${options.stylePreset}; context=${options.contextSize} maxTokens=${options.maxTokens} temperature=${options.temperature} topP=${options.topP} topK=${options.topK} threads=${options.threads} Vulkan=${options.useVulkan} gpuLayers=${if (options.useVulkan) options.gpuLayers else 0}; generation=Llama.complete")
+                        Log.i(TAG, "Hy-MT2 request: modelKind=$modelKind sourceCode=$sourceCode source=${sourceLanguage ?: "auto"} targetCode=$targetCode target=$targetLanguage sourceChars=${sourceText.length} sourcePreview=${if (sourceText.length <= 64) sourceText.replace("\\n", "\\\\n") else "<omitted>"} background=${options.backgroundContext.isNotBlank()} glossary=${options.glossary.isNotBlank()} style=${options.stylePreset}; context=${options.contextSize} maxTokens=${options.maxTokens} temperature=${options.temperature} topP=${options.topP} topK=${options.topK} threads=${options.threads} Vulkan=$activeVulkan gpuLayers=$activeGpuLayers; generation=HyMT2PenaltyNative")
                         val contextPairs = if (options.useRecentContext && options.recentContextPairs > 0) {
                             recentContextFor(host, sourceLanguageKey, targetLanguage, options.recentContextPairs)
                         } else emptyList()
@@ -260,7 +270,7 @@ object HyMT2Runtime {
                                         "contextSize=${options.contextSize} reservedTokens=32 availableOutputTokens=$availableOutputTokens " +
                                         "configuredMaxTokens=${options.maxTokens} effectiveMaxTokens=$effectiveMaxTokens " +
                                         "temperature=${options.temperature} " +
-                                        "topP=${options.topP} topK=${options.topK} repetitionPenalty=${options.repetitionPenalty}"
+                                        "topP=${options.topP} topK=${options.topK} repetitionPenalty=$appliedRepetitionPenalty modelKind=$modelKind"
                                 )
                                 val generationStartedAt = SystemClock.elapsedRealtime()
                                 val completion = try {
@@ -269,9 +279,9 @@ object HyMT2Runtime {
                                         prompt = prompt,
                                         systemPrompt = systemPrompt,
                                         maxTokens = effectiveMaxTokens,
-                                        // The verified STQ1_0 standalone path uses no repetition penalty.
-                                        // Keep the configured penalty for Q4_K_M only.
-                                        repetitionPenalty = options.repetitionPenalty,
+                                        // Match the verified STQ1_0 standalone sampler: no repetition penalty.
+                                        // Q4_K_M retains the configured setting.
+                                        repetitionPenalty = appliedRepetitionPenalty,
                                     )
                                 } catch (t: Throwable) {
                                     Log.e(
@@ -419,11 +429,15 @@ $sourceText"""
         val isStqModel = modelKind == MODEL_KIND_STQ1
 
         val existing = loadedModel
-        if (existing != null && loadedSource == sourceKey) return@withLock existing
+        if (existing != null &&
+            loadedSource == sourceKey &&
+            loadedModelKind == modelKind
+        ) return@withLock existing
         if (existing != null) {
             Llama.releaseModel(existing)
             loadedModel = null
             loadedSource = null
+            loadedModelKind = null
             loadedDescriptor?.close()
             loadedDescriptor = null
         }
@@ -462,6 +476,7 @@ $sourceText"""
                 ),
             )
             loadedSource = sourceKey
+            loadedModelKind = modelKind
             loadedModel = created
             loadedDescriptor = descriptor
             descriptor = null // Ownership moved to loadedDescriptor.
