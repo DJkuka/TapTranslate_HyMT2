@@ -43,15 +43,16 @@ std::string json_escape(const std::string &input) {
     return output;
 }
 
-std::vector<llama_token> tokenize(const llama_vocab *vocab, const std::string &text) {
+std::vector<llama_token> tokenize(
+        const llama_vocab *vocab, const std::string &text, bool add_bos) {
     int count = -llama_tokenize(
         vocab, text.c_str(), static_cast<int32_t>(text.size()),
-        nullptr, 0, true, true);
+        nullptr, 0, add_bos, true);
     if (count <= 0) return {};
     std::vector<llama_token> tokens(static_cast<size_t>(count));
     int written = llama_tokenize(
         vocab, text.c_str(), static_cast<int32_t>(text.size()),
-        tokens.data(), static_cast<int32_t>(tokens.size()), true, true);
+        tokens.data(), static_cast<int32_t>(tokens.size()), add_bos, true);
     if (written < 0) return {};
     tokens.resize(static_cast<size_t>(written));
     return tokens;
@@ -64,21 +65,23 @@ std::string token_piece(const llama_vocab *vocab, llama_token token) {
     return std::string(buffer, static_cast<size_t>(size));
 }
 
-// Match the template path used by upstream Llama.complete(). The official
-// Tencent instruction is passed as a single user message; no system message
-// is added for Hy-MT2.
-std::string make_prompt(
+struct FormattedPrompt {
+    std::string text;
+    bool template_applied = false;
+};
+
+// Hy-MT2 uses a single user message. The GGUF template already inserts BOS.
+FormattedPrompt make_prompt(
         const llama_model *model,
         const std::string &system,
         const std::string &user) {
+    (void) system; // Official Hy-MT2 prompt has no system role.
     const char *chat_template = llama_model_chat_template(model, nullptr);
-    if (!chat_template) return system.empty() ? user : system + "\n\n" + user;
+    if (!chat_template) return {user, false};
 
     std::vector<llama_chat_message> messages;
-    if (!system.empty()) messages.push_back({"system", system.c_str()});
     messages.push_back({"user", user.c_str()});
-
-    std::vector<char> buffer(user.size() + system.size() + 2048);
+    std::vector<char> buffer(user.size() + 2048);
     int32_t size = llama_chat_apply_template(
         chat_template, messages.data(), messages.size(), true,
         buffer.data(), static_cast<int32_t>(buffer.size()));
@@ -88,8 +91,8 @@ std::string make_prompt(
             chat_template, messages.data(), messages.size(), true,
             buffer.data(), static_cast<int32_t>(buffer.size()));
     }
-    if (size < 0) return system.empty() ? user : system + "\n\n" + user;
-    return std::string(buffer.data(), static_cast<size_t>(size));
+    if (size < 0) return {user, false};
+    return {std::string(buffer.data(), static_cast<size_t>(size)), true};
 }
 
 llama_sampler *make_sampler(
@@ -137,10 +140,10 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCount
         JNIEnv *env, jobject, jlong handle, jstring prompt, jstring system) {
     LlamaCtx *context = get_context(handle);
     if (!context) return -1;
-    const std::string full_prompt = make_prompt(
+    const FormattedPrompt full_prompt = make_prompt(
         context->model, from_jstring(env, system), from_jstring(env, prompt));
     const llama_vocab *vocab = llama_model_get_vocab(context->model);
-    const auto tokens = tokenize(vocab, full_prompt);
+    const auto tokens = tokenize(vocab, full_prompt.text, !full_prompt.template_applied);
     if (tokens.empty()) return -1;
     return static_cast<jint>(tokens.size());
 }
@@ -155,9 +158,9 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
     if (max_tokens <= 0) return env->NewStringUTF("{\"text\":\"\",\"error\":\"max_tokens must be positive\"}");
 
     const llama_vocab *vocab = llama_model_get_vocab(context->model);
-    const std::string full_prompt = make_prompt(
+    const FormattedPrompt full_prompt = make_prompt(
         context->model, from_jstring(env, system), from_jstring(env, prompt));
-    const auto tokens = tokenize(vocab, full_prompt);
+    const auto tokens = tokenize(vocab, full_prompt.text, !full_prompt.template_applied);
     if (tokens.empty()) return env->NewStringUTF("{\"text\":\"\",\"error\":\"prompt tokenization failed\"}");
 
     llama_memory_clear(llama_get_memory(context->ctx), true);
