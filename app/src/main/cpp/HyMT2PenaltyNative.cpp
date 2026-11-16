@@ -60,7 +60,8 @@ std::vector<llama_token> tokenize(
 
 std::string token_piece(const llama_vocab *vocab, llama_token token) {
     char buffer[512];
-    int size = llama_token_to_piece(vocab, token, buffer, sizeof(buffer), 0, true);
+    // Match the reference decoder's skip_special_tokens=true behavior.
+    int size = llama_token_to_piece(vocab, token, buffer, sizeof(buffer), 0, false);
     if (size <= 0) return {};
     return std::string(buffer, static_cast<size_t>(size));
 }
@@ -145,9 +146,10 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCount
     const FormattedPrompt full_prompt = make_prompt(
         context->model, from_jstring(env, system), from_jstring(env, prompt));
     const llama_vocab *vocab = llama_model_get_vocab(context->model);
-    // Match the known-good standalone app JNI path exactly: add BOS after
-    // applying the model chat template as well.
-    const auto tokens = tokenize(vocab, full_prompt.text, true);
+    // The official Hy-MT2 chat template already emits its BOS token. Adding
+    // special tokens again would prepend a second BOS. Only add BOS when we
+    // had to fall back to the plain, non-template prompt.
+    const auto tokens = tokenize(vocab, full_prompt.text, !full_prompt.template_applied);
     if (tokens.empty()) return -1;
     return static_cast<jint>(tokens.size());
 }
@@ -164,8 +166,9 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
     const llama_vocab *vocab = llama_model_get_vocab(context->model);
     const FormattedPrompt full_prompt = make_prompt(
         context->model, from_jstring(env, system), from_jstring(env, prompt));
-    // Keep BOS insertion identical to the working standalone test app.
-    const auto tokens = tokenize(vocab, full_prompt.text, true);
+    // The official Hy-MT2 template already contains BOS. Do not add it twice.
+    // Plain-text fallback prompts still need llama.cpp to insert BOS.
+    const auto tokens = tokenize(vocab, full_prompt.text, !full_prompt.template_applied);
     if (tokens.empty()) return env->NewStringUTF("{\"text\":\"\",\"error\":\"prompt tokenization failed\"}");
 
     llama_memory_clear(llama_get_memory(context->ctx), true);
@@ -187,8 +190,9 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
     int generated = 0;
     for (; generated < max_tokens; ++generated) {
         const llama_token token = llama_sampler_sample(sampler, context->ctx, -1);
-        // Match the working standalone JNI runtime: stop on EOG only.
-        if (llama_vocab_is_eog(vocab, token)) break;
+        // EOG terminates the answer. A newly generated BOS is a control
+        // token, not translation text, so do not leak it into the result.
+        if (llama_vocab_is_eog(vocab, token) || token == llama_vocab_bos(vocab)) break;
         llama_sampler_accept(sampler, token);
         output += token_piece(vocab, token);
         llama_batch next = llama_batch_get_one(
