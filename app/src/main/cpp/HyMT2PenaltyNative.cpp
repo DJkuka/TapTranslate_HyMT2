@@ -48,16 +48,27 @@ std::string json_escape(const std::string &input) {
 std::vector<llama_token> tokenize(
         const llama_vocab *vocab, const std::string &text, bool add_special) {
     // Match the verified standalone llama-android JNI path exactly.
+    // The official Hy-MT2 template can include its own BOS marker. Never
+    // auto-prepend a second one; tokenize template markers first, then add
+    // exactly one BOS only when the rendered prompt did not contain it.
+    const llama_token bos = llama_vocab_bos(vocab);
+    char bos_buffer[128];
+    const int bos_size = llama_token_to_piece(vocab, bos, bos_buffer, sizeof(bos_buffer), 0, true);
+    const bool prompt_has_bos = bos_size > 0 &&
+        text.compare(0, static_cast<size_t>(bos_size), bos_buffer, static_cast<size_t>(bos_size)) == 0;
     int count = -llama_tokenize(
         vocab, text.c_str(), static_cast<int32_t>(text.size()),
-        nullptr, 0, add_special, true);
+        nullptr, 0, false, true);
     if (count <= 0) return {};
     std::vector<llama_token> tokens(static_cast<size_t>(count));
     int written = llama_tokenize(
         vocab, text.c_str(), static_cast<int32_t>(text.size()),
-        tokens.data(), static_cast<int32_t>(tokens.size()), add_special, true);
+        tokens.data(), static_cast<int32_t>(tokens.size()), false, true);
     if (written < 0) return {};
     tokens.resize(static_cast<size_t>(written));
+    if (add_special && !prompt_has_bos && llama_vocab_get_add_bos(vocab) && bos >= 0) {
+        tokens.insert(tokens.begin(), bos);
+    }
     return tokens;
 }
 
