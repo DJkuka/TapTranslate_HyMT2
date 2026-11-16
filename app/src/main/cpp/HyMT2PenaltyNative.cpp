@@ -59,7 +59,7 @@ std::vector<llama_token> tokenize(const llama_vocab *vocab, const std::string &t
 
 std::string token_piece(const llama_vocab *vocab, llama_token token) {
     char buffer[512];
-    int size = llama_token_to_piece(vocab, token, buffer, sizeof(buffer), 0, true);
+    int size = llama_token_to_piece(vocab, token, buffer, sizeof(buffer), 0, false);
     if (size <= 0) return {};
     return std::string(buffer, static_cast<size_t>(size));
 }
@@ -93,16 +93,21 @@ std::string make_prompt(
 }
 
 llama_sampler *make_sampler(
+        const llama_vocab *vocab, int32_t context_size,
         float temperature, float top_p, int top_k,
         float repetition_penalty, int seed) {
     llama_sampler *sampler =
         llama_sampler_chain_init(llama_sampler_chain_default_params());
 
     // Tencent's Hy-MT2 1.8B recommendation: repetition_penalty=1.05.
-    // -1 applies the penalty to the current context window.
+    // This llama.cpp API disables penalties when penalty_last_n is negative.
+    // Pass the actual vocabulary and active context window instead.
     if (repetition_penalty > 1.0f) {
+        const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+        const int32_t penalty_last_n = std::max(1, context_size);
         llama_sampler_chain_add(
-            sampler, llama_sampler_init_penalties(-1, repetition_penalty, 0.0f, 0.0f));
+            sampler, llama_sampler_init_penalties(
+                n_vocab, penalty_last_n, repetition_penalty, 0.0f, 0.0f));
     }
 
     if (temperature <= 0.0f) {
@@ -157,6 +162,7 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
 
     llama_memory_clear(llama_get_memory(context->ctx), true);
     llama_sampler *sampler = make_sampler(
+        vocab, static_cast<int32_t>(llama_n_ctx(context->ctx)),
         temperature, top_p, top_k, repetition_penalty, seed);
     if (!sampler) return env->NewStringUTF("{\"text\":\"\",\"error\":\"sampler initialization failed\"}");
 
@@ -173,7 +179,9 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
     int generated = 0;
     for (; generated < max_tokens; ++generated) {
         const llama_token token = llama_sampler_sample(sampler, context->ctx, -1);
-        if (llama_vocab_is_eog(vocab, token)) break;
+        // Hy-MT2's BOS token is only valid at the beginning of the prompt.
+        // Treat an unexpected BOS during generation as a stop marker.
+        if (llama_vocab_is_eog(vocab, token) || token == llama_vocab_bos(vocab)) break;
         llama_sampler_accept(sampler, token);
         output += token_piece(vocab, token);
         llama_batch next = llama_batch_get_one(
