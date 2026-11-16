@@ -44,15 +44,16 @@ std::string json_escape(const std::string &input) {
 }
 
 std::vector<llama_token> tokenize(
-        const llama_vocab *vocab, const std::string &text, bool add_bos) {
+        const llama_vocab *vocab, const std::string &text, bool add_special) {
+    // Match the verified standalone llama-android JNI path exactly.
     int count = -llama_tokenize(
         vocab, text.c_str(), static_cast<int32_t>(text.size()),
-        nullptr, 0, add_bos, true);
+        nullptr, 0, add_special, true);
     if (count <= 0) return {};
     std::vector<llama_token> tokens(static_cast<size_t>(count));
     int written = llama_tokenize(
         vocab, text.c_str(), static_cast<int32_t>(text.size()),
-        tokens.data(), static_cast<int32_t>(tokens.size()), add_bos, true);
+        tokens.data(), static_cast<int32_t>(tokens.size()), add_special, true);
     if (written < 0) return {};
     tokens.resize(static_cast<size_t>(written));
     return tokens;
@@ -60,27 +61,44 @@ std::vector<llama_token> tokenize(
 
 std::string token_piece(const llama_vocab *vocab, llama_token token) {
     char buffer[512];
-    // Match the reference decoder's skip_special_tokens=true behavior.
-    int size = llama_token_to_piece(vocab, token, buffer, sizeof(buffer), 0, false);
+    // The standalone test uses special=true; keep this identical so token
+    // pieces are decoded by llama.cpp in the same way as the known-good path.
+    int size = llama_token_to_piece(vocab, token, buffer, sizeof(buffer), 0, true);
     if (size <= 0) return {};
     return std::string(buffer, static_cast<size_t>(size));
 }
 
-// Hy-MT2 uses its own role markers, not the generic system/user chat
-// template exposed by llama_model_chat_template(). The working standalone
-// test uses exactly one user turn:
-// hy_begin_of_sentence -> hy_User -> task/source text -> hy_Assistant.
-std::string make_prompt(const std::string &system, const std::string &user) {
-    std::string body;
-    if (!system.empty()) {
-        body.reserve(system.size() + user.size() + 2);
-        body = system;
-        body += "\n\n";
-        body += user;
-    } else {
-        body = user;
+// Apply the model's GGUF-embedded chat template exactly as Llama.complete()
+// does in the standalone test. Do not hand-assemble Hy-MT2 role markers.
+std::string build_prompt(
+        const llama_model *model,
+        const std::string &system,
+        const std::string &user) {
+    const char *tmpl = llama_model_chat_template(model, nullptr);
+    if (!tmpl) {
+        return system.empty() ? user : (system + "\n\n" + user);
     }
-    return "<|hy_begin_of_sentence|><|hy_User|>" + body + "<|hy_Assistant|>";
+
+    std::vector<llama_chat_message> messages;
+    if (!system.empty()) {
+        messages.push_back({"system", system.c_str()});
+    }
+    messages.push_back({"user", user.c_str()});
+
+    std::vector<char> buffer(user.size() + system.size() + 2048);
+    int32_t written = llama_chat_apply_template(
+        tmpl, messages.data(), messages.size(), true,
+        buffer.data(), static_cast<int32_t>(buffer.size()));
+    if (written > static_cast<int32_t>(buffer.size())) {
+        buffer.resize(static_cast<size_t>(written));
+        written = llama_chat_apply_template(
+            tmpl, messages.data(), messages.size(), true,
+            buffer.data(), static_cast<int32_t>(buffer.size()));
+    }
+    if (written < 0) {
+        return system.empty() ? user : (system + "\n\n" + user);
+    }
+    return std::string(buffer.data(), static_cast<size_t>(written));
 }
 
 llama_sampler *make_sampler(
@@ -125,11 +143,11 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCount
         JNIEnv *env, jobject, jlong handle, jstring prompt, jstring system) {
     LlamaCtx *context = get_context(handle);
     if (!context) return -1;
-    const std::string full_prompt = make_prompt(
-        from_jstring(env, system), from_jstring(env, prompt));
+    const std::string full_prompt = build_prompt(
+        context->model, from_jstring(env, system), from_jstring(env, prompt));
     const llama_vocab *vocab = llama_model_get_vocab(context->model);
-    // The explicit Hy-MT2 prefix includes BOS; do not prepend a second BOS.
-    const auto tokens = tokenize(vocab, full_prompt, false);
+    // Match standalone LlamaJNI::nativeComplete: apply template, then add BOS.
+    const auto tokens = tokenize(vocab, full_prompt, true);
     if (tokens.empty()) return -1;
     return static_cast<jint>(tokens.size());
 }
@@ -144,10 +162,10 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
     if (max_tokens <= 0) return env->NewStringUTF("{\"text\":\"\",\"error\":\"max_tokens must be positive\"}");
 
     const llama_vocab *vocab = llama_model_get_vocab(context->model);
-    const std::string full_prompt = make_prompt(
-        from_jstring(env, system), from_jstring(env, prompt));
-    // The explicit Hy-MT2 prefix includes BOS; do not prepend a second BOS.
-    const auto tokens = tokenize(vocab, full_prompt, false);
+    const std::string full_prompt = build_prompt(
+        context->model, from_jstring(env, system), from_jstring(env, prompt));
+    // Match standalone LlamaJNI::nativeComplete: apply template, then add BOS.
+    const auto tokens = tokenize(vocab, full_prompt, true);
     if (tokens.empty()) return env->NewStringUTF("{\"text\":\"\",\"error\":\"prompt tokenization failed\"}");
 
     llama_memory_clear(llama_get_memory(context->ctx), true);
@@ -169,9 +187,7 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
     int generated = 0;
     for (; generated < max_tokens; ++generated) {
         const llama_token token = llama_sampler_sample(sampler, context->ctx, -1);
-        // EOG terminates the answer. A newly generated BOS is a control
-        // token, not translation text, so do not leak it into the result.
-        if (llama_vocab_is_eog(vocab, token) || token == llama_vocab_bos(vocab)) break;
+        if (llama_vocab_is_eog(vocab, token)) break;
         llama_sampler_accept(sampler, token);
         output += token_piece(vocab, token);
         llama_batch next = llama_batch_get_one(
