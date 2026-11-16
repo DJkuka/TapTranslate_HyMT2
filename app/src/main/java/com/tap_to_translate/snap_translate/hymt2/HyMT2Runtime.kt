@@ -368,9 +368,9 @@ object HyMT2Runtime {
         sourceText: String,
         targetLanguage: String,
     ): String {
-        // Official Hy-MT2 default translation instruction, sent as one user message.
-        // The GGUF chat template, not this text, handles BOS and role framing.
-        return """Translate the following text into $targetLanguage. Note that you should only output the translated result without any additional explanation:
+        // Prompt form previously validated by the user with Hy-MT2 in PocketPal.
+        // Send it as one user message; the GGUF template handles role framing and BOS.
+        return """Translate the following segment into $targetLanguage, without additional explanation.
 
 $sourceText"""
     }
