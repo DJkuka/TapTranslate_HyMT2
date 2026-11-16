@@ -271,7 +271,7 @@ object HyMT2Runtime {
                                         maxTokens = effectiveMaxTokens,
                                         // The verified STQ1_0 standalone path uses no repetition penalty.
                                         // Keep the configured penalty for Q4_K_M only.
-                                        repetitionPenalty = if (modelKind == MODEL_KIND_STQ1) 1.0f else options.repetitionPenalty,
+                                        repetitionPenalty = options.repetitionPenalty,
                                     )
                                 } catch (t: Throwable) {
                                     Log.e(
