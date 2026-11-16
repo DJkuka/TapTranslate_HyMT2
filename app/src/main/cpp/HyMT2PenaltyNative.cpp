@@ -163,6 +163,9 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
     if (max_tokens <= 0) return env->NewStringUTF("{\"text\":\"\",\"error\":\"max_tokens must be positive\"}");
 
     const llama_vocab *vocab = llama_model_get_vocab(context->model);
+    const llama_token bos_token = llama_vocab_bos(vocab);
+    const llama_token eos_token = llama_vocab_eos(vocab);
+    const llama_token eot_token = llama_vocab_eot(vocab);
     const std::string full_prompt = build_prompt(
         context->model, from_jstring(env, system), from_jstring(env, prompt));
     // Match standalone LlamaJNI::nativeComplete: apply template, then add BOS.
@@ -179,6 +182,11 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
     LOGI("NATIVE_ENTER max_tokens=%d prompt_tokens=%zu prompt_bytes=%zu ctx=%u temp=%.3f top_p=%.3f top_k=%d rep_penalty=%.3f seed=%d",
          max_tokens, tokens.size(), full_prompt.size(), llama_n_ctx(context->ctx),
          temperature, top_p, top_k, repetition_penalty, seed);
+    LOGI("VOCAB_SPECIALS bos=%d eos=%d eot=%d; is_eog(bos)=%d is_eog(eos)=%d is_eog(eot)=%d",
+         bos_token, eos_token, eot_token,
+         llama_vocab_is_eog(vocab, bos_token) ? 1 : 0,
+         llama_vocab_is_eog(vocab, eos_token) ? 1 : 0,
+         llama_vocab_is_eog(vocab, eot_token) ? 1 : 0);
 
     llama_batch batch = llama_batch_get_one(
         const_cast<llama_token *>(tokens.data()), static_cast<int32_t>(tokens.size()));
@@ -199,6 +207,7 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
     std::string output;
     int generated = 0;
     bool stopped_on_eog = false;
+    bool stopped_on_bos = false;
     for (; generated < max_tokens; ++generated) {
         const bool trace_token = generated < 4 || ((generated + 1) % 8 == 0);
         const int64_t sample_start_us = llama_time_us();
@@ -210,9 +219,19 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
                  generated + 1, token,
                  static_cast<long long>((sample_end_us - sample_start_us) / 1000));
         }
-        if (llama_vocab_is_eog(vocab, token)) {
+        if (llama_vocab_is_eog(vocab, token) ||
+            token == eos_token || token == eot_token) {
             stopped_on_eog = true;
-            LOGI("GENERATION_EOG index=%d", generated + 1);
+            LOGI("GENERATION_EOG index=%d token=%d", generated + 1, token);
+            break;
+        }
+        // BOS is valid only in the input prefix. If the model emits it while
+        // generating an answer, treat it as a malformed end marker and stop
+        // instead of appending the literal token and looping on it forever.
+        if (token == bos_token) {
+            stopped_on_bos = true;
+            LOGW("GENERATION_BOS_ABORT index=%d token=%d output_bytes=%zu",
+                 generated + 1, token, output.size());
             break;
         }
 
@@ -240,8 +259,8 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
     }
     const int64_t end_us = llama_time_us();
     llama_sampler_free(sampler);
-    LOGI("GENERATION_DONE generated=%d max_tokens=%d eog=%d output_bytes=%zu prompt_ms=%lld generation_ms=%lld",
-         generated, max_tokens, stopped_on_eog ? 1 : 0, output.size(),
+    LOGI("GENERATION_DONE generated=%d max_tokens=%d eog=%d bos_abort=%d output_bytes=%zu prompt_ms=%lld generation_ms=%lld",
+         generated, max_tokens, stopped_on_eog ? 1 : 0, stopped_on_bos ? 1 : 0, output.size(),
          static_cast<long long>((prompt_end_us - start_us) / 1000),
          static_cast<long long>((end_us - prompt_end_us) / 1000));
 
