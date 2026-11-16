@@ -118,8 +118,19 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
                     if any(path.read_bytes() == source.read_bytes() for path in existing):
                         skipped_identical += 1
                         continue
-                    # Host Kotlin/coroutines may be in a different dex; never add
-                    # a second copy of a class descriptor with different bytecode.
+                    # Keep the Kotlin stdlib, coroutines and annotations already shipped
+                    # by the original host APK. The helper's copy may differ by compiler
+                    # version, but these packages are host-provided dependencies and
+                    # must not be duplicated across DEX files.
+                    if rel.as_posix().startswith((
+                        "kotlin/",
+                        "kotlinx/",
+                        "org/jetbrains/annotations/",
+                    )):
+                        skipped_identical += 1
+                        continue
+                    # For actual app/runtime classes, a differing definition outside
+                    # classes5.dex is unsafe: fail instead of creating duplicate classes.
                     raise RuntimeError(
                         f"Runtime class collision outside classes5.dex: {rel.as_posix()}"
                     )
