@@ -9,7 +9,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-BASE_SHA256 = "c35ba5505e17f0cf11ecfd4672d5f3f0f33a0b662988a0a46d5c08da73d2c1b3"
+BASE_SHA256 = "0e0d30f30a98fa427a62d23c6fe670e9bd9781287da2515b1b8139f9332e82eb"
 
 RUNTIME_PREFIXES = (
     "com/tap_to_translate/snap_translate/hymt2",
@@ -80,7 +80,7 @@ def locate_smali(root: Path, rel: str) -> Path | None:
 def verify_base_features(base: Path) -> None:
     missing = [rel for rel in PRESERVED_CLASSES if locate_smali(base, rel) is None]
     if missing:
-        raise RuntimeError("APK 217 feature classes are missing: " + ", ".join(missing))
+        raise RuntimeError("APK 219 feature classes are missing: " + ", ".join(missing))
     manifest = (base / "AndroidManifest.xml").read_text(encoding="utf-8")
     for marker in (
         "HyMT2SettingsActivity",
@@ -88,8 +88,14 @@ def verify_base_features(base: Path) -> None:
         "OcrSettingsActivity",
     ):
         if marker not in manifest:
-            raise RuntimeError("APK 217 manifest is missing " + marker)
-    print("Verified APK 217 editor, display profiles, selection gesture and settings classes.")
+            raise RuntimeError("APK 219 manifest is missing " + marker)
+    ids = base / "res/values/ids.xml"
+    if not ids.is_file() or 'name="container_widget_iv_add_region"' not in ids.read_text(encoding="utf-8"):
+        raise RuntimeError("APK 219 is missing the Добавить панель resource ID")
+    layouts = list((base / "res").rglob("*.xml"))
+    if not any("container_widget_iv_add_region" in p.read_text(encoding="utf-8", errors="ignore") for p in layouts):
+        raise RuntimeError("APK 219 is missing the Добавить панель editor control in its resources")
+    print("Verified APK 219 editor, add-panel control, display profiles, selection gesture and settings classes.")
 
 def copy_runtime_smali(helper: Path, base: Path) -> None:
     target_root = base / "smali_classes5"
@@ -179,7 +185,7 @@ def copy_new_assets_and_services(helper: Path, base: Path) -> None:
             destination.parent.mkdir(parents=True, exist_ok=True)
             if destination.exists():
                 if destination.read_bytes() != source.read_bytes():
-                    raise RuntimeError("Helper asset conflicts with APK 217: " + rel.as_posix())
+                    raise RuntimeError("Helper asset conflicts with APK 219: " + rel.as_posix())
                 continue
             shutil.copy2(source, destination)
             added_assets += 1
@@ -205,19 +211,19 @@ def copy_new_assets_and_services(helper: Path, base: Path) -> None:
             else:
                 shutil.copy2(source, destination)
             merged_services += 1
-    print(f"Preserved APK 217 assets; added {added_assets} new helper assets and merged {merged_services} service files.")
+    print(f"Preserved APK 219 assets; added {added_assets} new helper assets and merged {merged_services} service files.")
 
 def verify_preserved_payload(base_apk: Path, output_apk: Path) -> None:
     with zipfile.ZipFile(base_apk) as original, zipfile.ZipFile(output_apk) as built:
         old_names = set(original.namelist())
         new_names = set(built.namelist())
 
-        # APK 217's original assets (OCR models, dictionaries, and other resources)
+        # APK 219's original assets (OCR models, dictionaries, and other resources)
         # must survive byte-for-byte.
         for name in old_names:
             if name.startswith("assets/"):
                 if name not in new_names or original.read(name) != built.read(name):
-                    raise RuntimeError("APK 217 asset changed or disappeared: " + name)
+                    raise RuntimeError("APK 219 asset changed or disappeared: " + name)
 
         # Preserve every pre-existing native library except the explicitly replaced
         # llama.cpp runtime and shared C++/OpenCV compatibility libraries.
@@ -228,7 +234,7 @@ def verify_preserved_payload(base_apk: Path, output_apk: Path) -> None:
             if basename in REPLACEABLE_NATIVE:
                 continue
             if name not in new_names or original.read(name) != built.read(name):
-                raise RuntimeError("Unrelated APK 217 native library changed: " + name)
+                raise RuntimeError("Unrelated APK 219 native library changed: " + name)
 
         # DEX files other than classes5.dex must be byte-identical.
         for name in old_names:
@@ -246,7 +252,7 @@ def verify_preserved_payload(base_apk: Path, output_apk: Path) -> None:
         if signatures:
             raise RuntimeError("Final APK unexpectedly contains signing files: " + ", ".join(signatures))
 
-    print("Verified original APK 217 OCR assets, dictionaries and unrelated native/DEX payloads.")
+    print("Verified original APK 219 OCR assets, dictionaries and unrelated native/DEX payloads.")
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -262,7 +268,7 @@ def main() -> int:
         raise FileNotFoundError(args.base_apk)
     actual_sha = sha256(args.base_apk)
     if actual_sha != BASE_SHA256:
-        raise RuntimeError(f"Wrong base APK 217 SHA-256: {actual_sha}")
+        raise RuntimeError(f"Wrong base APK 219 SHA-256: {actual_sha}")
 
     args.work.mkdir(parents=True, exist_ok=True)
     base = args.work / "base_decoded"
@@ -281,7 +287,7 @@ def main() -> int:
     copy_new_assets_and_services(helper, base)
 
     # Runtime-only merge: do not reapply the old OCR, panel editor, profile or
-    # settings patches because all those features are already present in APK 217.
+    # settings patches because all those features are already present in APK 219.
     unaligned = args.work / "TapTranslate_STQ1_0_APK217_unsigned_unaligned.apk"
     run(["java", "-jar", str(args.apktool), "b", str(base), "-o", str(unaligned)])
 
