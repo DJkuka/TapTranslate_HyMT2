@@ -251,7 +251,10 @@ object HyMT2Runtime {
                                 if (availableOutputTokens < 8) {
                                     error("OCR-блок ${index + 1}/${sourceBlocks.size} не помещается в контекст ${options.contextSize}. Выбери больший контекст.")
                                 }
-                                val effectiveMaxTokens = min(options.maxTokens, availableOutputTokens)
+                                // Bound STQ output to a comic-sized response. This also prevents
+                                // an EOS-missing run from looking like an endless spinner.
+                                val modelOutputLimit = if (modelKind == MODEL_KIND_STQ1) 256 else options.maxTokens
+                                val effectiveMaxTokens = min(modelOutputLimit, availableOutputTokens)
                                 Log.i(
                                     TAG,
                                     "GENERATION_START block=${index + 1}/${sourceBlocks.size} " +
@@ -268,7 +271,9 @@ object HyMT2Runtime {
                                         prompt = prompt,
                                         systemPrompt = systemPrompt,
                                         maxTokens = effectiveMaxTokens,
-                                        repetitionPenalty = options.repetitionPenalty,
+                                        // The verified STQ1_0 standalone path uses no repetition penalty.
+                                        // Keep the configured penalty for Q4_K_M only.
+                                        repetitionPenalty = if (modelKind == MODEL_KIND_STQ1) 1.0f else options.repetitionPenalty,
                                     )
                                 } catch (t: Throwable) {
                                     Log.e(
