@@ -1,0 +1,230 @@
+name: Build TapTranslate STQ1_0 on verified APK 217
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ stq1_0-apk217-port ]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: stq1-experimental-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout Tap Translate integration
+        uses: actions/checkout@v4
+
+      - name: Install host build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake python3 curl
+
+      - name: Prepare pinned Android wrapper and STQ-enabled llama.cpp source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p upstream
+          git clone https://github.com/ffmpegkit-maintained/llama-android.git upstream/llama-android
+          git -C upstream/llama-android checkout 9f5469fd9fa7ea7bc7b01801923af95dc3b41d52
+          rm -rf upstream/llama-android/llama.cpp
+          git clone https://github.com/sjl623/llama.cpp.git upstream/llama-android/llama.cpp
+          git -C upstream/llama-android/llama.cpp checkout 1e411d8f5a1e23525fa3265dfb4bd76265465397
+          echo "LLAMA_ROOT=$GITHUB_WORKSPACE/upstream/llama-android/llama.cpp" >> "$GITHUB_ENV"
+
+      - name: Enable Vulkan and verify Tencent STQ1_0 type mapping
+        run: |
+          python3 -m py_compile scripts/prepare_stq_android_runtime.py
+          python3 scripts/prepare_stq_android_runtime.py \
+            --llama-root "$LLAMA_ROOT" \
+            --android-wrapper-root "$GITHUB_WORKSPACE/upstream/llama-android"
+
+      - name: Build host llama-server with STQ1_0 support
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S "$LLAMA_ROOT" -B build/host-stq \
+            -DGGML_VULKAN=OFF \
+            -DGGML_CPU=ON \
+            -DGGML_OPENMP=OFF \
+            -DGGML_BACKEND_DL=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TOOLS=ON
+          cmake --build build/host-stq --target llama-server -j2
+
+      - name: Download and verify the exact Tencent STQ1_0 GGUF
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p test-model build
+          curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 --max-time 1200 \
+            "https://huggingface.co/tencent/Hy-MT2-1.8B-1.25Bit-GGUF/resolve/main/Hy-MT2-1.8B-1.25Bit.gguf?download=true" \
+            -o test-model/Hy-MT2-1.8B-1.25Bit.gguf
+          echo "cc497fe8f033b52b3b8b00a7669e9661435432f9d4cd43f7ed24400c01507a93  test-model/Hy-MT2-1.8B-1.25Bit.gguf" | sha256sum -c -
+
+      - name: Load Tencent STQ1_0 model on host without slow x86 inference
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          log=build/stq-host-smoke.log
+          rm -f "$log"
+          stdbuf -oL -eL build/host-stq/bin/llama-server \
+            -m test-model/Hy-MT2-1.8B-1.25Bit.gguf \
+            -c 128 -t 4 --no-warmup --host 127.0.0.1 --port 18080 \
+            > >(tee "$log") 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          for _ in $(seq 1 900); do
+            if grep -q "model loaded" "$log"; then
+              echo "STQ_HOST_MODEL_LOAD_OK"
+              exit 0
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              wait "$server_pid" || true
+              echo "llama-server exited before loading the model"
+              tail -n 200 "$log"
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "Timed out waiting for STQ1_0 model load"
+          tail -n 200 "$log"
+          exit 124
+
+      - name: Upload host STQ smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stq-host-smoke-log-${{ github.run_number }}
+          path: build/stq-host-smoke.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: '15859902'
+          packages: 'platform-tools'
+          accept-android-sdk-licenses: true
+
+      - name: Install Android platform, NDK, CMake and Vulkan shader compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslc
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Install pinned Vulkan and SPIR-V headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/KhronosGroup/Vulkan-Headers.git upstream/Vulkan-Headers
+          git -C upstream/Vulkan-Headers checkout b379292b2ab6df5771ba9870d53cf8b2c9295daf
+          git clone https://github.com/KhronosGroup/SPIRV-Headers.git upstream/SPIRV-Headers
+          git -C upstream/SPIRV-Headers checkout 2acb319af38d43be3ea76bfabf3998e5281d8d12
+          cmake -S upstream/SPIRV-Headers -B build/spirv-headers \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/build/spirv-headers-install"
+          cmake --build build/spirv-headers --target install
+          echo "VULKAN_HEADERS_INCLUDE_DIR=$GITHUB_WORKSPACE/upstream/Vulkan-Headers/include" >> "$GITHUB_ENV"
+          echo "SPIRV_HEADERS_INCLUDE_DIR=$GITHUB_WORKSPACE/build/spirv-headers-install/include" >> "$GITHUB_ENV"
+          echo "SPIRV_HEADERS_CMAKE_DIR=$GITHUB_WORKSPACE/build/spirv-headers-install/share/cmake/SPIRV-Headers" >> "$GITHUB_ENV"
+
+      - name: Build Android native runtime AAR with STQ1_0 and Vulkan
+        run: |
+          set -euo pipefail
+          cd upstream/llama-android
+          gradle --no-daemon -PVERSION=0.1.0 :library:assembleRelease
+          mkdir -p "$GITHUB_WORKSPACE/app/libs"
+          cp library/build/outputs/aar/library-release.aar \
+            "$GITHUB_WORKSPACE/app/libs/llama-android-vulkan.aar"
+          unzip -l "$GITHUB_WORKSPACE/app/libs/llama-android-vulkan.aar"
+          mkdir -p "$GITHUB_WORKSPACE/build/stq-aar"
+          unzip -q "$GITHUB_WORKSPACE/app/libs/llama-android-vulkan.aar" -d "$GITHUB_WORKSPACE/build/stq-aar"
+          for so in libllama_jni.so libllama.so libggml.so libggml-base.so libggml-cpu.so libggml-vulkan.so; do
+            test -s "$GITHUB_WORKSPACE/build/stq-aar/jni/arm64-v8a/$so"
+          done
+          echo "VULKAN_AAR_NATIVE_DIR=$GITHUB_WORKSPACE/build/stq-aar/jni/arm64-v8a" >> "$GITHUB_ENV"
+          sha256sum "$GITHUB_WORKSPACE/app/libs/llama-android-vulkan.aar"
+
+      - name: Download the verified unsigned APK 217 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: TapTranslate-1.125-FontFit-AutoFill-HyMT2-Vulkan-unsigned
+          run-id: 43734696344
+          repository: ${{ github.repository }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/run217
+
+      - name: Verify APK 217 SHA-256 and preserved base
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p input
+          base="input/run217/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk"
+          test -s "$base"
+          echo "c35ba5505e17f0cf11ecfd4672d5f3f0f33a0b662988a0a46d5c08da73d2c1b3  $base" | sha256sum -c -
+          echo "Verified exact APK 217 SHA-256."
+
+      - name: Build Tap Translate helper against the new native runtime
+        run: |
+          gradle --no-daemon \
+            -PllamaRoot="$LLAMA_ROOT" \
+            -PvulkanAarNativeDir="$VULKAN_AAR_NATIVE_DIR" \
+            :app:assembleDebug
+
+      - name: Merge only the STQ runtime into APK 217
+        run: |
+          python3 -m py_compile scripts/merge_runtime_into_existing_apk.py
+          python3 scripts/merge_runtime_into_existing_apk.py \
+            --base-apk input/run217/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk \
+            --helper-apk app/build/outputs/apk/debug/app-debug.apk \
+            --apktool tools/apktool.jar \
+            --work build/merge-apk217 \
+            --output build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK217_unsigned.apk \
+            --zipalign "$ANDROID_HOME/build-tools/35.0.0/zipalign"
+
+      - name: Validate unsigned APK and native backend payload
+        run: |
+          set -euo pipefail
+          unzip -t build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK217_unsigned.apk | tail -n 2
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -p 4 build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK217_unsigned.apk
+          sha256sum build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK217_unsigned.apk
+          ls -lh build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK217_unsigned.apk
+
+      - name: Upload experimental unsigned APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TapTranslate-STQ1_0-APK217-unsigned
+          path: build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK217_unsigned.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload native runtime AAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-android-STQ1_0-Vulkan-AAR
+          path: app/libs/llama-android-vulkan.aar
+          if-no-files-found: error
+          retention-days: 14
