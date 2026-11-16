@@ -1,4 +1,5 @@
 name: Build TapTranslate STQ1_0 on verified APK 219
+# Final trigger after all APK 219 integration files have been committed.
 
 on:
   workflow_dispatch:
@@ -175,14 +176,14 @@ jobs:
           run-id: 43736943007
           repository: ${{ github.repository }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: input/run217
+          path: input/run219
 
       - name: Verify APK 219 SHA-256 and preserved base
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p input
-          base="input/run217/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk"
+          base="input/run219/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk"
           test -s "$base"
           echo "0e0d30f30a98fa427a62d23c6fe670e9bd9781287da2515b1b8139f9332e82eb  $base" | sha256sum -c -
           echo "Verified exact APK 219 SHA-256."
@@ -198,7 +199,7 @@ jobs:
         run: |
           python3 -m py_compile scripts/merge_runtime_into_existing_apk.py
           python3 scripts/merge_runtime_into_existing_apk.py \
-            --base-apk input/run217/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk \
+            --base-apk input/run219/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk \
             --helper-apk app/build/outputs/apk/debug/app-debug.apk \
             --apktool tools/apktool.jar \
             --work build/merge-apk219 \
