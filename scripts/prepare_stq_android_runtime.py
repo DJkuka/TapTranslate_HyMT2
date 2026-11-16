@@ -155,6 +155,74 @@ def main() -> int:
         'set(GGML_OPENMP          OFF CACHE BOOL "" FORCE)\nset(GGML_BACKEND_DL      OFF CACHE BOOL "" FORCE)',
         "disable dynamic backend loading in native CMake",
     )
+
+    # Hy-MT2's official chat template contains an explicit BOS marker. The
+    # wrapper's old tokenize(..., add_special=true) can prepend a second BOS
+    # when the GGUF tokenizer metadata also requests one. Tokenize special
+    # markers from the rendered template, then add metadata BOS only if absent.
+    # Also log token IDs and stop safely if BOS is sampled as generated content.
+    jni_cpp = wrapper / "library/src/main/jni/llama_jni.cpp"
+    replace_once(
+        jni_cpp,
+        '#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)',
+        '#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)\\n#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)\\n#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)',
+        "add tokenizer/generation diagnostic log levels",
+    )
+    replace_once(
+        jni_cpp,
+        """    std::vector<llama_token> tokens = tokenize(vocab, text, true);
+    const int n_prompt = (int) tokens.size();""",
+        """    const llama_token bos_token = llama_vocab_bos(vocab);
+    const llama_token eos_token = llama_vocab_eos(vocab);
+    const llama_token eot_token = llama_vocab_eot(vocab);
+    const char * chat_template = llama_model_chat_template(h->model, nullptr);
+    const std::string bos_piece = token_to_piece(vocab, bos_token);
+    const bool prompt_has_bos = !bos_piece.empty() &&
+        text.compare(0, bos_piece.size(), bos_piece) == 0;
+
+    // Parse special markers embedded in the rendered chat template without
+    // automatically adding BOS/EOS. Add exactly one metadata BOS if the
+    // template did not already provide it.
+    std::vector<llama_token> tokens = tokenize(vocab, text, false);
+    const bool add_metadata_bos = llama_vocab_get_add_bos(vocab);
+    if (!prompt_has_bos && add_metadata_bos && bos_token >= 0) {
+        tokens.insert(tokens.begin(), bos_token);
+    }
+    const int n_prompt = (int) tokens.size();
+    LOGI("HYMT2_PROMPT template_present=%d prompt_has_bos=%d metadata_add_bos=%d metadata_add_eos=%d bos=%d eos=%d eot=%d prompt_tokens=%d prompt_bytes=%zu",
+         chat_template ? 1 : 0, prompt_has_bos ? 1 : 0,
+         add_metadata_bos ? 1 : 0, llama_vocab_get_add_eos(vocab) ? 1 : 0,
+         bos_token, eos_token, eot_token, n_prompt, text.size());
+    for (int i = 0; i < n_prompt && i < 24; ++i) {
+        LOGI("HYMT2_PROMPT_TOKEN index=%d id=%d is_bos=%d", i, tokens[i],
+             tokens[i] == bos_token ? 1 : 0);
+    }""",
+        "avoid duplicate BOS in rendered Hy-MT2 chat prompt",
+    )
+    replace_once(
+        jni_cpp,
+        """        llama_token id = llama_sampler_sample(smpl, h->ctx, -1);
+        if (llama_vocab_is_eog(vocab, id)) break;""",
+        """        llama_token id = llama_sampler_sample(smpl, h->ctx, -1);
+        if (n_gen < 32) {
+            const std::string piece = token_to_piece(vocab, id);
+            LOGI("HYMT2_SAMPLE index=%d token=%d is_bos=%d is_eog=%d piece=%s",
+                 n_gen + 1, id, id == bos_token ? 1 : 0,
+                 llama_vocab_is_eog(vocab, id) ? 1 : 0, piece.c_str());
+        }
+        if (id == bos_token) {
+            LOGW("HYMT2_STOP unexpected generated BOS at index=%d; suppressing special-token flood",
+                 n_gen + 1);
+            break;
+        }
+        if (llama_vocab_is_eog(vocab, id)) {
+            LOGI("HYMT2_STOP EOG token=%d index=%d", id, n_gen + 1);
+            break;
+        }""",
+        "trace initial sampled tokens and guard generated BOS",
+    )
+    print("Hy-MT2 JNI prompt tokenization now avoids duplicate BOS, logs rendered-template/token IDs, and safely stops if BOS is sampled.")
+
     print("Tencent STQ1_0 tensor type mapping verified; optimized ARM NEON remains enabled for CPU inference; Vulkan and SPIR-V paths verified.")
     return 0
 
