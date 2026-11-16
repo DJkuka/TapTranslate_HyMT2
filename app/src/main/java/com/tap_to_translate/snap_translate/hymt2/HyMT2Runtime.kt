@@ -31,8 +31,6 @@ import kotlin.math.min
 object HyMT2Runtime {
     private const val TAG = "TapTranslateHyMT2"
     private const val MODEL_NAME = "Hy-MT2-1.8B-Q4_K_M.gguf"
-    // Temporary cap for the diagnostic APK only. Remove after isolating the STQ generation hang.
-    private const val DIAGNOSTIC_MAX_TOKENS = 64
     private const val MIN_MODEL_BYTES = 100L * 1024L * 1024L
     const val MODEL_KIND_Q4 = "Q4_K_M"
     const val MODEL_KIND_STQ1 = "STQ1_0"
@@ -254,16 +252,13 @@ object HyMT2Runtime {
                                     error("OCR-блок ${index + 1}/${sourceBlocks.size} не помещается в контекст ${options.contextSize}. Выбери больший контекст.")
                                 }
                                 val effectiveMaxTokens = min(options.maxTokens, availableOutputTokens)
-                                // Diagnostic build: cap the native completion at 64 tokens to test
-                                // whether the wrapper returns when a finite, small generation ends.
-                                val diagnosticMaxTokens = min(DIAGNOSTIC_MAX_TOKENS, effectiveMaxTokens)
                                 Log.i(
                                     TAG,
                                     "GENERATION_START block=${index + 1}/${sourceBlocks.size} " +
                                         "sourceChars=${cleanSourceBlock.length} promptTokens=$promptTokens " +
                                         "contextSize=${options.contextSize} reservedTokens=32 availableOutputTokens=$availableOutputTokens " +
                                         "configuredMaxTokens=${options.maxTokens} effectiveMaxTokens=$effectiveMaxTokens " +
-                                        "diagnosticLimit=$diagnosticMaxTokens temperature=${options.temperature} " +
+                                        "temperature=${options.temperature} " +
                                         "topP=${options.topP} topK=${options.topK} repetitionPenalty=${options.repetitionPenalty}"
                                 )
                                 val generationStartedAt = SystemClock.elapsedRealtime()
@@ -272,7 +267,7 @@ object HyMT2Runtime {
                                         model = model,
                                         prompt = prompt,
                                         systemPrompt = systemPrompt,
-                                        maxTokens = diagnosticMaxTokens,
+                                        maxTokens = effectiveMaxTokens,
                                         repetitionPenalty = options.repetitionPenalty,
                                     )
                                 } catch (t: Throwable) {
@@ -288,7 +283,7 @@ object HyMT2Runtime {
                                 Log.i(
                                     TAG,
                                     "GENERATION_RETURN block=${index + 1}/${sourceBlocks.size} " +
-                                        "elapsedMs=$generationElapsedMs tokensGenerated=${completion.tokensGenerated}/$diagnosticMaxTokens " +
+                                        "elapsedMs=$generationElapsedMs tokensGenerated=${completion.tokensGenerated}/$effectiveMaxTokens " +
                                         "outputChars=${completion.text.length} promptEvalMs=${completion.promptEvalTimeMs} " +
                                         "generateMs=${completion.generateTimeMs} tps=${"%.2f".format(Locale.US, completion.tokensPerSecond)}"
                                 )
