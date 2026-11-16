@@ -70,18 +70,23 @@ struct FormattedPrompt {
     bool template_applied = false;
 };
 
-// Hy-MT2 uses a single user message. The GGUF template already inserts BOS.
+// Match the original APK 217 request structure: optional system instruction
+// followed by the translation request as a user message. The GGUF template
+// supplies BOS and the assistant-generation prefix when available.
 FormattedPrompt make_prompt(
         const llama_model *model,
         const std::string &system,
         const std::string &user) {
-    (void) system; // Official Hy-MT2 prompt has no system role.
     const char *chat_template = llama_model_chat_template(model, nullptr);
-    if (!chat_template) return {user, false};
+    if (!chat_template) {
+        if (system.empty()) return {user, false};
+        return {system + "\n\n" + user, false};
+    }
 
     std::vector<llama_chat_message> messages;
+    if (!system.empty()) messages.push_back({"system", system.c_str()});
     messages.push_back({"user", user.c_str()});
-    std::vector<char> buffer(user.size() + 2048);
+    std::vector<char> buffer(user.size() + system.size() + 2048);
     int32_t size = llama_chat_apply_template(
         chat_template, messages.data(), messages.size(), true,
         buffer.data(), static_cast<int32_t>(buffer.size()));
@@ -91,7 +96,7 @@ FormattedPrompt make_prompt(
             chat_template, messages.data(), messages.size(), true,
             buffer.data(), static_cast<int32_t>(buffer.size()));
     }
-    if (size < 0) return {user, false};
+    if (size < 0) return {system.empty() ? user : system + "\n\n" + user, false};
     return {std::string(buffer.data(), static_cast<size_t>(size)), true};
 }
 
@@ -102,9 +107,17 @@ llama_sampler *make_sampler(
     llama_sampler *sampler =
         llama_sampler_chain_init(llama_sampler_chain_default_params());
 
-    // Tencent's Hy-MT2 1.8B recommendation: repetition_penalty=1.05.
-    // This llama.cpp API disables penalties when penalty_last_n is negative.
-    // Pass the actual vocabulary and active context window instead.
+    if (temperature <= 0.0f) {
+        llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
+        return sampler;
+    }
+
+    // Apply top-k/top-p first: llama.cpp warns that running penalties on the
+    // full vocabulary for every token is expensive. Narrowing candidates first
+    // keeps the penalty operation bounded by the filtered set.
+    llama_sampler_chain_add(sampler, llama_sampler_init_top_k(std::max(1, top_k)));
+    llama_sampler_chain_add(sampler, llama_sampler_init_top_p(top_p, 1));
+
     if (repetition_penalty > 1.0f) {
         const int32_t n_vocab = llama_vocab_n_tokens(vocab);
         const int32_t penalty_last_n = std::max(1, context_size);
@@ -113,16 +126,10 @@ llama_sampler *make_sampler(
                 n_vocab, penalty_last_n, repetition_penalty, 0.0f, 0.0f));
     }
 
-    if (temperature <= 0.0f) {
-        llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
-    } else {
-        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(std::max(1, top_k)));
-        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(top_p, 1));
-        llama_sampler_chain_add(sampler, llama_sampler_init_temp(temperature));
-        llama_sampler_chain_add(
-            sampler, llama_sampler_init_dist(
-                seed < 0 ? LLAMA_DEFAULT_SEED : static_cast<uint32_t>(seed)));
-    }
+    llama_sampler_chain_add(sampler, llama_sampler_init_temp(temperature));
+    llama_sampler_chain_add(
+        sampler, llama_sampler_init_dist(
+            seed < 0 ? LLAMA_DEFAULT_SEED : static_cast<uint32_t>(seed)));
     return sampler;
 }
 
