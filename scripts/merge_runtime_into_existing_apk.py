@@ -115,6 +115,15 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
                 existing = [directory / rel for directory in smali_dirs(base)
                             if (directory / rel).is_file() and directory != target_root]
 
+                # APK 219 contains newer host-side implementations of these
+                # editor/UI classes. Never overwrite them with copies from the
+                # older helper APK: doing so reintroduces the broken no-arg
+                # region-model constructor from APK 217.
+                if rel.as_posix() in PRESERVED_CLASSES and existing:
+                    skipped_identical += 1
+                    print("Preserving APK 219 host class:", rel.as_posix())
+                    continue
+
                 if target.is_file():
                     shutil.copy2(source, target)
                     replaced += 1
