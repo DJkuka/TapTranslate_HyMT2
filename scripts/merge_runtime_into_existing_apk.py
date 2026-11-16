@@ -108,7 +108,7 @@ def verify_region_editor_fix(root: Path) -> None:
         raise RuntimeError("TranslationRegionEditor is missing from the APK")
     source = editor.read_text(encoding="utf-8")
     import re
-    match = re.search(r"^\\.method [^\\n]* addRegion\\([^\\n]*$", source, re.MULTILINE)
+    match = re.search(r"^\.method [^\n]* addRegion\([^\n]*$", source, re.MULTILINE)
     if match is None:
         raise RuntimeError("TranslationRegionEditor.addRegion() is missing")
     end = source.find(".end method", match.start())
