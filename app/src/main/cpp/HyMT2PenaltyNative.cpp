@@ -191,7 +191,7 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
              prompt_decode_result,
              static_cast<long long>((prompt_end_us - prompt_decode_start_us) / 1000));
         llama_sampler_free(sampler);
-        return env->NewStringUTF("{\\"text\\":\\"\\",\\"error\\":\\"prompt decode failed; prompt may exceed context\\"}");
+        return env->NewStringUTF(R"json({"text":"","error":"prompt decode failed; prompt may exceed context"})json");
     }
     LOGI("PROMPT_DECODE_DONE elapsed_ms=%lld",
          static_cast<long long>((prompt_end_us - prompt_decode_start_us) / 1000));
