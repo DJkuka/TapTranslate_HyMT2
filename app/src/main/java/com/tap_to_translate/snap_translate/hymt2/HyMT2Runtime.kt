@@ -396,7 +396,7 @@ object HyMT2Runtime {
         targetLanguage: String,
     ): String {
         // Exact prompt verified in the standalone STQ1_0 CPU test application.
-        return "Translate the following segment into $targetLanguage, without additional explanation:\\n\\n$sourceText"
+        return "Translate the following segment into $targetLanguage, without additional explanation:\n\n$sourceText"
     }
 
     private fun buildTranslationPrompt(
