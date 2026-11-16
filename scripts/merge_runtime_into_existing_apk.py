@@ -56,6 +56,10 @@ PRESERVED_CLASSES = (
     "com/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager.smali",
 )
 
+PRESERVED_CLASS_FAMILIES = (
+    "com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor",
+)
+
 def run(cmd: list[str]) -> None:
     print("+", " ".join(map(str, cmd)), flush=True)
     subprocess.run(cmd, check=True)
@@ -97,6 +101,35 @@ def verify_base_features(base: Path) -> None:
         raise RuntimeError("APK 219 is missing the Добавить панель editor control in its resources")
     print("Verified APK 219 editor, add-panel control, display profiles, selection gesture and settings classes.")
 
+def verify_region_editor_fix(root: Path) -> None:
+    rel = "com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor.smali"
+    editor = locate_smali(root, rel)
+    if editor is None:
+        raise RuntimeError("TranslationRegionEditor is missing from the APK")
+    source = editor.read_text(encoding="utf-8")
+    import re
+    match = re.search(r"^\\.method [^\\n]* addRegion\\([^\\n]*$", source, re.MULTILINE)
+    if match is None:
+        raise RuntimeError("TranslationRegionEditor.addRegion() is missing")
+    end = source.find(".end method", match.start())
+    if end < 0:
+        raise RuntimeError("TranslationRegionEditor.addRegion() is unterminated")
+    method = source[match.start():end]
+    required = (
+        "Landroid/graphics/Rect;",
+        "Ljava/lang/Class;->getConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;",
+    )
+    missing = [item for item in required if item not in method]
+    if missing:
+        raise RuntimeError(
+            "APK 219 add-panel constructor fix is missing from final DEX: "
+            + ", ".join(missing)
+        )
+    if "Ljava/lang/Class;->getDeclaredConstructor()Ljava/lang/reflect/Constructor;" in method:
+        raise RuntimeError("Broken zero-argument region-model constructor detected")
+    print("Verified APK 219 Rect/String constructor in TranslationRegionEditor.addRegion().")
+
+
 def copy_runtime_smali(helper: Path, base: Path) -> None:
     target_root = base / "smali_classes5"
     target_root.mkdir(parents=True, exist_ok=True)
@@ -117,11 +150,17 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
 
                 # APK 219 contains newer host-side implementations of these
                 # editor/UI classes. Never overwrite them with copies from the
-                # older helper APK: doing so reintroduces the broken no-arg
-                # region-model constructor from APK 217.
-                if rel.as_posix() in PRESERVED_CLASSES and existing:
+                # helper APK. Some preserved classes live in classes5.dex itself,
+                # so checking only for a copy in another DEX is insufficient.
+                rel_name = rel.as_posix()
+                preserve_exact = rel_name in PRESERVED_CLASSES
+                preserve_family = any(
+                    rel_name == prefix + ".smali" or rel_name.startswith(prefix + "$")
+                    for prefix in PRESERVED_CLASS_FAMILIES
+                )
+                if (preserve_exact or preserve_family) and (target.is_file() or existing):
                     skipped_identical += 1
-                    print("Preserving APK 219 host class:", rel.as_posix())
+                    print("Preserving APK 219 host class:", rel_name)
                     continue
 
                 if target.is_file():
@@ -291,19 +330,28 @@ def main() -> int:
     run(["java", "-jar", str(args.apktool), "d", "-f", "-o", str(helper), str(args.helper_apk)])
 
     verify_base_features(base)
+    verify_region_editor_fix(base)
     copy_runtime_smali(helper, base)
+    verify_region_editor_fix(base)
     copy_native_libraries(helper, base)
     copy_new_assets_and_services(helper, base)
 
     # Runtime-only merge: do not reapply the old OCR, panel editor, profile or
     # settings patches because all those features are already present in APK 219.
-    unaligned = args.work / "TapTranslate_STQ1_0_APK217_unsigned_unaligned.apk"
+    unaligned = args.work / "TapTranslate_STQ1_0_APK219_unsigned_unaligned.apk"
     run(["java", "-jar", str(args.apktool), "b", str(base), "-o", str(unaligned)])
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     run([args.zipalign, "-f", "-p", "4", str(unaligned), str(args.output)])
     run([args.zipalign, "-c", "-p", "4", str(args.output)])
     verify_preserved_payload(args.base_apk, args.output)
+
+    # Decode the actual output again and inspect the class that Android will run.
+    final_decoded = args.work / "final_decoded"
+    if final_decoded.exists():
+        shutil.rmtree(final_decoded)
+    run(["java", "-jar", str(args.apktool), "d", "-f", "-o", str(final_decoded), str(args.output)])
+    verify_region_editor_fix(final_decoded)
     print("Base APK SHA-256:", actual_sha)
     print("Unsigned output SHA-256:", sha256(args.output))
     print(f"Unsigned APK created: {args.output} ({args.output.stat().st_size} bytes)")
