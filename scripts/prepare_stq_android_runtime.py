@@ -195,9 +195,11 @@ def main() -> int:
          chat_template ? 1 : 0, prompt_has_bos ? 1 : 0,
          add_metadata_bos ? 1 : 0, llama_vocab_get_add_eos(vocab) ? 1 : 0,
          bos_token, eos_token, eot_token, n_prompt, text.size());
-    for (int i = 0; i < n_prompt && i < 24; ++i) {
-        LOGI("HYMT2_PROMPT_TOKEN index=%d id=%d is_bos=%d", i, tokens[i],
-             tokens[i] == bos_token ? 1 : 0);
+    LOGI("HYMT2_RENDERED_PROMPT=%s", json_escape(text).c_str());
+    for (int i = 0; i < n_prompt && i < 32; ++i) {
+        const std::string piece = json_escape(token_to_piece(vocab, tokens[i]));
+        LOGI("HYMT2_PROMPT_TOKEN index=%d id=%d is_bos=%d piece=%s", i, tokens[i],
+             tokens[i] == bos_token ? 1 : 0, piece.c_str());
     }""",
         "avoid duplicate BOS in rendered Hy-MT2 chat prompt",
     )
