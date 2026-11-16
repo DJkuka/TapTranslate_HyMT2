@@ -251,10 +251,8 @@ object HyMT2Runtime {
                                 if (availableOutputTokens < 8) {
                                     error("OCR-блок ${index + 1}/${sourceBlocks.size} не помещается в контекст ${options.contextSize}. Выбери больший контекст.")
                                 }
-                                // Bound STQ output to a comic-sized response. This also prevents
-                                // an EOS-missing run from looking like an endless spinner.
-                                val modelOutputLimit = if (modelKind == MODEL_KIND_STQ1) 256 else options.maxTokens
-                                val effectiveMaxTokens = min(modelOutputLimit, availableOutputTokens)
+                                // Respect the user's configured output limit for both model formats.
+                                val effectiveMaxTokens = min(options.maxTokens, availableOutputTokens)
                                 Log.i(
                                     TAG,
                                     "GENERATION_START block=${index + 1}/${sourceBlocks.size} " +
