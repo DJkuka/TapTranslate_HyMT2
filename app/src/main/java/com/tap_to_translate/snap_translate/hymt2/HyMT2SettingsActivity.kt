@@ -26,6 +26,7 @@ import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import java.util.Locale
+import java.security.MessageDigest
 
 /** Model manager and independent settings panel for the Hy-MT2 translation engine. */
 class HyMT2SettingsActivity : Activity() {
@@ -148,11 +149,11 @@ class HyMT2SettingsActivity : Activity() {
         customStyleInput.maxLines = 5
 
         addSection(root, "УСКОРЕНИЕ GPU")
-        vulkanSwitch = addSwitch(root, "Использовать Vulkan на Adreno 610", true)
+        vulkanSwitch = addSwitch(root, "Использовать Vulkan для Q4_K_M на Adreno 610", true)
         vulkanSwitch.isEnabled = HyMT2Settings.VULKAN_BACKEND_COMPILED
         addText(
             root,
-            "Проверенный профиль для Lenovo Xiaoxin Pad 2022: Vulkan · 8 GPU layers + 6 CPU threads. Отключение Vulkan использует CPU/NEON; число GPU-слоёв при этом не применяется.",
+            "Проверенный профиль Q4_K_M для Lenovo Xiaoxin Pad 2022: Vulkan · 8 GPU layers + 6 CPU threads. Для STQ1_0 Vulkan отключается автоматически: используется CPU/NEON.",
             12f,
         )
 
@@ -340,9 +341,20 @@ class HyMT2SettingsActivity : Activity() {
                 if (grantedFlags == 0) error("DocumentsUI не выдал разрешение на чтение файла")
                 contentResolver.takePersistableUriPermission(uri, grantedFlags)
                 val size = validateSeekableGguf(uri)
-                HyMT2Runtime.setSelectedModelUri(applicationContext, uri)
                 val name = queryDisplayName(uri) ?: uri.lastPathSegment ?: "GGUF"
-                Log.i(TAG, "Model URI stored without copying: name=$name size=$size uri=$uri")
+                val lowerName = name.lowercase(Locale.ROOT)
+                val isStqSize = size in STQ_MIN_FILE_BYTES..STQ_MAX_FILE_BYTES
+                val hasStqFilename = lowerName.contains("1.25bit") || lowerName.contains("stq43")
+                // The original Tencent file is identified by SHA-256. Also accept the
+                // user's STQ43 compatibility copy, whose bytes/hash differ after remapping
+                // tensor type 42 to 43.
+                val sha256 = if (isStqSize && !hasStqFilename) sha256Uri(uri) else ""
+                val isStqModel = isStqSize && (
+                    hasStqFilename || sha256.equals(STQ_MODEL_SHA256, ignoreCase = true)
+                )
+                val modelKind = if (isStqModel) HyMT2Runtime.MODEL_KIND_STQ1 else HyMT2Runtime.MODEL_KIND_Q4
+                HyMT2Runtime.setSelectedModelUri(applicationContext, uri, modelKind)
+                Log.i(TAG, "Model URI stored without copying: name=$name size=$size kind=$modelKind sha256=$sha256 uri=$uri")
 
                 if (autoPicker) {
                     runOnUiThread {
@@ -419,6 +431,21 @@ class HyMT2SettingsActivity : Activity() {
         }
     }
 
+    private fun sha256Uri(uri: Uri): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val input = contentResolver.openInputStream(uri)
+            ?: error("Не удалось прочитать GGUF для определения модели")
+        input.use { stream ->
+            val buffer = ByteArray(1024 * 1024)
+            while (true) {
+                val count = stream.read(buffer)
+                if (count < 0) break
+                if (count > 0) digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
     private fun queryDisplayName(uri: Uri): String? {
         var cursor: Cursor? = null
         return try {
@@ -479,12 +506,14 @@ class HyMT2SettingsActivity : Activity() {
         modelInfo.text = when {
             uri != null -> {
                 val name = queryDisplayName(uri) ?: uri.lastPathSegment ?: "GGUF"
-                "Модель: $name\nИсточник: SAF URI (SD/внешний носитель)\nКопирование: отключено\nСостояние: ${if (HyMT2Runtime.isLoaded()) "загружена в RAM" else "выбрана, готова к загрузке"}"
+                val kind = HyMT2Runtime.selectedModelKind(this)
+                val backend = if (kind == HyMT2Runtime.MODEL_KIND_STQ1) "CPU/NEON (STQ1_0)" else "Vulkan/CPU (Q4_K_M)"
+                "Модель: $name\nТип: $kind\nРежим: $backend\nИсточник: SAF URI (SD/внешний носитель)\nКопирование: отключено\nСостояние: ${if (HyMT2Runtime.isLoaded()) "загружена в RAM" else "выбрана, готова к загрузке"}"
             }
             legacy.isFile && legacy.length() >= MIN_MODEL_BYTES -> {
                 "Найдена старая копия модели: ${legacy.name}\nРазмер: ${formatBytes(legacy.length())}\nЭта версия не использует старые копии. Выбери исходный GGUF через проводник."
             }
-            else -> "Модель ещё не выбрана. Нужен GGUF-файл Hy-MT2-1.8B-Q4_K_M.gguf."
+            else -> "Модель ещё не выбрана. Поддерживаются Hy-MT2 Q4_K_M и Tencent Hy-MT2 1.25-bit STQ1_0."
         }
         chooseButton.isEnabled = !importing && !HyMT2Runtime.isLoaded()
         loadButton.isEnabled = !importing && hasModel && !HyMT2Runtime.isLoaded()
@@ -614,5 +643,8 @@ class HyMT2SettingsActivity : Activity() {
         private const val REQUEST_MODEL = 7412
         private const val EXTRA_AUTO_PICK = "hymt2_auto_pick"
         private const val MIN_MODEL_BYTES = 100L * 1024L * 1024L
+        private const val STQ_MODEL_SHA256 = "cc497fe8f033b52b3b8b00a7669e9661435432f9d4cd43f7ed24400c01507a93"
+        private const val STQ_MIN_FILE_BYTES = 430L * 1024L * 1024L
+        private const val STQ_MAX_FILE_BYTES = 450L * 1024L * 1024L
     }
 }
