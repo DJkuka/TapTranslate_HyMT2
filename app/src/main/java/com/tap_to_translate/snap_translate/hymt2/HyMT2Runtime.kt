@@ -225,13 +225,24 @@ object HyMT2Runtime {
                         val modelKind = selectedModelKind(appContext)
                         val isStqModel = modelKind == MODEL_KIND_STQ1
                         val appliedRepetitionPenalty = if (isStqModel) 1.0f else options.repetitionPenalty
+                        // Match the known-good standalone STQ1_0 CPU benchmark exactly.
+                        // Keep this as a temporary parity profile until on-device A/B tests
+                        // establish which individual setting can safely be relaxed.
+                        val appliedContextSize = if (isStqModel) maxOf(options.contextSize, 2048) else options.contextSize
+                        val appliedMaxTokens = if (isStqModel) maxOf(options.maxTokens, 768) else options.maxTokens
+                        val appliedTemperature = if (isStqModel) 0.7f else options.temperature
+                        val appliedTopP = if (isStqModel) 0.6f else options.topP
+                        val appliedTopK = if (isStqModel) 20 else options.topK
+                        val appliedSeed = if (isStqModel) 42 else -1
                         val activeVulkan = !isStqModel && options.useVulkan
                         val activeGpuLayers = if (activeVulkan) options.gpuLayers else 0
                         val sourceLanguage = languageName(sourceCode)
                         val sourceLanguageKey = sourceLanguage ?: "auto"
                         val targetLanguage = languageName(targetCode) ?: "Russian"
-                        val systemPrompt = buildTranslationSystemPrompt(sourceLanguage, targetLanguage)
-                        Log.i(TAG, "Hy-MT2 request: modelKind=$modelKind sourceCode=$sourceCode source=${sourceLanguage ?: "auto"} targetCode=$targetCode target=$targetLanguage sourceChars=${sourceText.length} sourcePreview=${if (sourceText.length <= 64) sourceText.replace("\\n", "\\\\n") else "<omitted>"} background=${options.backgroundContext.isNotBlank()} glossary=${options.glossary.isNotBlank()} style=${options.stylePreset}; context=${options.contextSize} maxTokens=${options.maxTokens} temperature=${options.temperature} topP=${options.topP} topK=${options.topK} threads=${options.threads} Vulkan=$activeVulkan gpuLayers=$activeGpuLayers; generation=HyMT2PenaltyNative")
+                        // Hy-MT2's known-good STQ1_0 standalone test uses the simple
+                        // translation instruction with no system message.
+                        val systemPrompt = if (isStqModel) "" else buildTranslationSystemPrompt(sourceLanguage, targetLanguage)
+                        Log.i(TAG, "Hy-MT2 request: modelKind=$modelKind sourceCode=$sourceCode source=${sourceLanguage ?: "auto"} targetCode=$targetCode target=$targetLanguage sourceChars=${sourceText.length} sourcePreview=${if (sourceText.length <= 64) sourceText.replace("\\n", "\\\\n") else "<omitted>"} background=${options.backgroundContext.isNotBlank()} glossary=${options.glossary.isNotBlank()} style=${options.stylePreset}; effectiveContext=$appliedContextSize effectiveMaxTokens=$appliedMaxTokens temperature=$appliedTemperature topP=$appliedTopP topK=$appliedTopK seed=$appliedSeed threads=${options.threads} Vulkan=$activeVulkan gpuLayers=$activeGpuLayers; generation=${if (isStqModel) "Llama.complete (standalone parity)" else "HyMT2PenaltyNative"}")
                         val contextPairs = if (options.useRecentContext && options.recentContextPairs > 0) {
                             recentContextFor(host, sourceLanguageKey, targetLanguage, options.recentContextPairs)
                         } else emptyList()
@@ -252,37 +263,47 @@ object HyMT2Runtime {
                                 translatedBlocks += ""
                             } else {
                                 val cleanSourceBlock = sourceBlock.trim()
-                                val prompt = buildTranslationPrompt(
-                                    sourceText = cleanSourceBlock,
-                                    targetLanguage = targetLanguage,
-                                )
-                                val promptTokens = HyMT2PenaltyNative.countPromptTokens(model, prompt, systemPrompt)
-                                val availableOutputTokens = (options.contextSize - promptTokens - 32).coerceAtLeast(0)
-                                if (availableOutputTokens < 8) {
-                                    error("OCR-блок ${index + 1}/${sourceBlocks.size} не помещается в контекст ${options.contextSize}. Выбери больший контекст.")
+                                val prompt = if (isStqModel) {
+                                    buildStq1TranslationPrompt(cleanSourceBlock, targetLanguage)
+                                } else {
+                                    buildTranslationPrompt(cleanSourceBlock, targetLanguage)
                                 }
-                                // Respect the user's configured output limit for both model formats.
-                                val effectiveMaxTokens = min(options.maxTokens, availableOutputTokens)
+                                val promptTokens = HyMT2PenaltyNative.countPromptTokens(model, prompt, systemPrompt)
+                                val availableOutputTokens = (appliedContextSize - promptTokens - 32).coerceAtLeast(0)
+                                if (availableOutputTokens < 8) {
+                                    error("OCR-блок ${index + 1}/${sourceBlocks.size} не помещается в эффективный контекст $appliedContextSize.")
+                                }
+                                val effectiveMaxTokens = min(appliedMaxTokens, availableOutputTokens)
                                 Log.i(
                                     TAG,
                                     "GENERATION_START block=${index + 1}/${sourceBlocks.size} " +
                                         "sourceChars=${cleanSourceBlock.length} promptTokens=$promptTokens " +
-                                        "contextSize=${options.contextSize} reservedTokens=32 availableOutputTokens=$availableOutputTokens " +
-                                        "configuredMaxTokens=${options.maxTokens} effectiveMaxTokens=$effectiveMaxTokens " +
-                                        "temperature=${options.temperature} " +
-                                        "topP=${options.topP} topK=${options.topK} repetitionPenalty=$appliedRepetitionPenalty modelKind=$modelKind"
+                                        "contextSize=$appliedContextSize reservedTokens=32 availableOutputTokens=$availableOutputTokens " +
+                                        "configuredMaxTokens=$appliedMaxTokens effectiveMaxTokens=$effectiveMaxTokens " +
+                                        "temperature=$appliedTemperature topP=$appliedTopP topK=$appliedTopK seed=$appliedSeed " +
+                                        "repetitionPenalty=$appliedRepetitionPenalty modelKind=$modelKind"
                                 )
                                 val generationStartedAt = SystemClock.elapsedRealtime()
                                 val completion = try {
-                                    HyMT2PenaltyNative.complete(
-                                        model = model,
-                                        prompt = prompt,
-                                        systemPrompt = systemPrompt,
-                                        maxTokens = effectiveMaxTokens,
-                                        // Match the verified STQ1_0 standalone sampler: no repetition penalty.
-                                        // Q4_K_M retains the configured setting.
-                                        repetitionPenalty = appliedRepetitionPenalty,
-                                    )
+                                    if (isStqModel) {
+                                        // Use the original llama-android completion entry point, not
+                                        // the reimplemented JNI loop. This is exactly what the working
+                                        // standalone STQ1_0 test app calls.
+                                        Llama.complete(
+                                            model = model,
+                                            prompt = prompt,
+                                            systemPrompt = "",
+                                            maxTokens = effectiveMaxTokens,
+                                        )
+                                    } else {
+                                        HyMT2PenaltyNative.complete(
+                                            model = model,
+                                            prompt = prompt,
+                                            systemPrompt = systemPrompt,
+                                            maxTokens = effectiveMaxTokens,
+                                            repetitionPenalty = appliedRepetitionPenalty,
+                                        )
+                                    }
                                 } catch (t: Throwable) {
                                     Log.e(
                                         TAG,
@@ -370,12 +391,20 @@ object HyMT2Runtime {
         }
     }
 
+    private fun buildStq1TranslationPrompt(
+        sourceText: String,
+        targetLanguage: String,
+    ): String {
+        // Exact prompt verified in the standalone STQ1_0 CPU test application.
+        return "Translate the following segment into $targetLanguage, without additional explanation:\\n\\n$sourceText"
+    }
+
     private fun buildTranslationPrompt(
         sourceText: String,
         targetLanguage: String,
     ): String {
         // Exact prompt text from the verified APK 217 source.
-        // Keep this wording unchanged for the diagnostic comparison.
+        // Keep this wording unchanged for Q4_K_M.
         return """Translate the following text into $targetLanguage. Output only the translated result without explanations:
 
 $sourceText"""
@@ -465,14 +494,15 @@ $sourceText"""
             val created = Llama.loadModel(
                 modelPath = modelPath,
                 config = LlamaConfig(
-                    contextSize = options.contextSize,
+                    contextSize = if (isStqModel) maxOf(options.contextSize, 2048) else options.contextSize,
                     threads = threads,
                     // Tencent's STQ1_0 format is supported by the native CPU backend,
                     // but the current Vulkan backend has no STQ1_0 tensor kernel.
                     gpuLayers = if (isStqModel) 0 else if (options.useVulkan) options.gpuLayers else 0,
-                    temperature = options.temperature,
-                    topP = options.topP,
-                    topK = options.topK,
+                    temperature = if (isStqModel) 0.7f else options.temperature,
+                    topP = if (isStqModel) 0.6f else options.topP,
+                    topK = if (isStqModel) 20 else options.topK,
+                    seed = if (isStqModel) 42 else -1,
                 ),
             )
             loadedSource = sourceKey
@@ -480,7 +510,7 @@ $sourceText"""
             loadedModel = created
             loadedDescriptor = descriptor
             descriptor = null // Ownership moved to loadedDescriptor.
-            Log.i(TAG, "Hy-MT2 loaded from $sourceKey; kind=$modelKind, CPU threads=$threads, context=${options.contextSize}, Vulkan=${!isStqModel && options.useVulkan}, GPU layers=${if (!isStqModel && options.useVulkan) options.gpuLayers else 0}")
+            Log.i(TAG, "Hy-MT2 loaded from $sourceKey; kind=$modelKind, CPU threads=$threads, context=${if (isStqModel) maxOf(options.contextSize, 2048) else options.contextSize}, temperature=${if (isStqModel) 0.7f else options.temperature}, topP=${if (isStqModel) 0.6f else options.topP}, topK=${if (isStqModel) 20 else options.topK}, seed=${if (isStqModel) 42 else -1}, Vulkan=${!isStqModel && options.useVulkan}, GPU layers=${if (!isStqModel && options.useVulkan) options.gpuLayers else 0}")
             Log.i(TAG, "llama.cpp system info: ${Llama.getSystemInfo()}")
             created
         } finally {
