@@ -126,7 +126,10 @@ def integrate_language_pack_manager(base: Path) -> None:
     start = source.find(signature)
     if start < 0:
         raise RuntimeError("Could not locate ca/b2.l(String) Tesseract availability method")
-    body_start = source.find("\\n", start) + 1
+    locals_start = source.find(".locals", start)
+    if locals_start < 0:
+        raise RuntimeError("ca/b2.l(String) has no local-register declaration")
+    body_start = source.find("\\n", locals_start) + 1
     if "TesseractLanguagePackStore;->beforeLanguageCheck" not in source[start:]:
         source = source[:body_start] + (
             "    invoke-static {p0}, Lcom/tap_to_translate/snap_translate/hymt2/TesseractLanguagePackStore;->beforeLanguageCheck(Ljava/lang/String;)V\\n\\n"
