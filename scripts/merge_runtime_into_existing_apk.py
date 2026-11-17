@@ -147,7 +147,8 @@ def integrate_language_pack_manager(base: Path) -> None:
         if marker not in source:
             raise RuntimeError("Could not locate successful Tesseract download completion in vh/a.smali")
         hook = (
-            "    invoke-virtual {v16}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;\n"
+            "    move-object/from16 v0, v16\n"
+            "    invoke-virtual {v0}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;\n"
             "    move-result-object v0\n"
             "    invoke-static {v3, v0}, Lcom/tap_to_translate/snap_translate/hymt2/TesseractLanguagePackStore;->persistDownloadedPack(Ljava/lang/String;Ljava/lang/String;)V\n\n"
         )
