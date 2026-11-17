@@ -101,6 +101,67 @@ def verify_base_features(base: Path) -> None:
         raise RuntimeError("APK 219 is missing the Добавить панель editor control in its resources")
     print("Verified APK 219 editor, add-panel control, display profiles, selection gesture and settings classes.")
 
+def integrate_language_pack_manager(base: Path) -> None:
+    # The helper manifest is intentionally not merged wholesale. Register only
+    # the new manager Activity in the verified APK 219 manifest.
+    manifest_path = base / "AndroidManifest.xml"
+    manifest = manifest_path.read_text(encoding="utf-8")
+    activity = (
+        '        <activity android:name="com.tap_to_translate.snap_translate.hymt2.LanguagePackManagerActivity" '
+        'android:exported="false" android:configChanges="orientation|screenSize|keyboardHidden" />\\n'
+    )
+    if "LanguagePackManagerActivity" not in manifest:
+        if "</application>" not in manifest:
+            raise RuntimeError("APK 219 manifest has no application closing tag")
+        manifest = manifest.replace("</application>", activity + "    </application>", 1)
+        manifest_path.write_text(manifest, encoding="utf-8")
+
+    # Restore a saved traineddata file before the original host decides to
+    # start another network download.
+    availability = locate_smali(base, "ca/b2.smali")
+    if availability is None:
+        raise RuntimeError("APK 219 Tesseract availability check ca/b2.smali is missing")
+    source = availability.read_text(encoding="utf-8")
+    signature = ".method public static l(Ljava/lang/String;)Z"
+    start = source.find(signature)
+    if start < 0:
+        raise RuntimeError("Could not locate ca/b2.l(String) Tesseract availability method")
+    body_start = source.find("\\n", start) + 1
+    if "TesseractLanguagePackStore;->beforeLanguageCheck" not in source[start:]:
+        source = source[:body_start] + (
+            "    invoke-static {p0}, Lcom/tap_to_translate/snap_translate/hymt2/TesseractLanguagePackStore;->beforeLanguageCheck(Ljava/lang/String;)V\\n\\n"
+        ) + source[body_start:]
+        availability.write_text(source, encoding="utf-8")
+
+    # Persist the completed host download to the SAF folder. The hook is
+    # placed only on the successful path after Content-Length validation.
+    downloader = locate_smali(base, "vh/a.smali")
+    if downloader is None:
+        raise RuntimeError("APK 219 Tesseract downloader vh/a.smali is missing")
+    source = downloader.read_text(encoding="utf-8")
+    marker = "    :catch_3\\n"
+    if "TesseractLanguagePackStore;->persistDownloadedPack" not in source:
+        if marker not in source:
+            raise RuntimeError("Could not locate successful Tesseract download branch in vh/a.smali")
+        hook = (
+            "    invoke-virtual {v16}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;\\n"
+            "    move-result-object v0\\n"
+            "    invoke-static {v3, v0}, Lcom/tap_to_translate/snap_translate/hymt2/TesseractLanguagePackStore;->persistDownloadedPack(Ljava/lang/String;Ljava/lang/String;)V\\n\\n"
+        )
+        source = source.replace(marker, hook + marker, 1)
+        downloader.write_text(source, encoding="utf-8")
+
+    # Fail fast if either host hook or the Activity registration was not applied.
+    manifest = manifest_path.read_text(encoding="utf-8")
+    if "LanguagePackManagerActivity" not in manifest:
+        raise RuntimeError("LanguagePackManagerActivity was not registered in APK 219 manifest")
+    if "TesseractLanguagePackStore;->beforeLanguageCheck" not in availability.read_text(encoding="utf-8"):
+        raise RuntimeError("Tesseract restore hook was not installed")
+    if "TesseractLanguagePackStore;->persistDownloadedPack" not in downloader.read_text(encoding="utf-8"):
+        raise RuntimeError("Tesseract download persistence hook was not installed")
+    print("Integrated language-pack manager Activity and both Tesseract host hooks.")
+
+
 def verify_region_editor_fix(root: Path) -> None:
     rel = "com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor.smali"
     editor = locate_smali(root, rel)
@@ -332,6 +393,7 @@ def main() -> int:
     verify_base_features(base)
     verify_region_editor_fix(base)
     copy_runtime_smali(helper, base)
+    integrate_language_pack_manager(base)
     verify_region_editor_fix(base)
     copy_native_libraries(helper, base)
     copy_new_assets_and_services(helper, base)
