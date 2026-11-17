@@ -172,6 +172,47 @@ def main() -> int:
     )
     replace_once(
         jni_cpp,
+        """    const std::string text = build_prompt(h->model, jstr(env, system), jstr(env, prompt));""",
+        """    const std::string system_text = jstr(env, system);
+    const std::string user_text = jstr(env, prompt);
+    const char * template_for_override = llama_model_chat_template(h->model, nullptr);
+    std::string text = build_prompt(h->model, system_text, user_text);
+
+    // Tencent's official Hy-MT2 1.8B dense template is:
+    // BOS [system + placeholder_3] <hy_User>user<hy_Assistant>.
+    // Some converted GGUFs carry a legacy/reversed template. Keep the
+    // embedded template for other models, but render this known model format
+    // explicitly when its special-token vocabulary matches.
+    if (template_for_override) {
+        const std::string template_text(template_for_override);
+        const llama_vocab * prompt_vocab = llama_model_get_vocab(h->model);
+        const std::string bos_piece = token_to_piece(prompt_vocab, llama_vocab_bos(prompt_vocab));
+        const bool is_hy_mt2_dense =
+            template_text.find("<｜hy_User｜>") != std::string::npos &&
+            template_text.find("<｜hy_Assistant｜>") != std::string::npos &&
+            bos_piece == "<｜hy_begin▁of▁sentence｜>";
+        LOGI("HYMT2_CHAT_TEMPLATE=%s", json_escape(template_text).c_str());
+        if (is_hy_mt2_dense) {
+            text = bos_piece;
+            if (!system_text.empty()) {
+                text += system_text;
+                text += "<｜hy_place▁holder▁no▁3｜>";
+            }
+            text += "<｜hy_User｜>";
+            text += user_text;
+            text += "<｜hy_Assistant｜>";
+            LOGI("HYMT2_TEMPLATE_OVERRIDE=official_dense_1_8b systemChars=%zu userChars=%zu",
+                 system_text.size(), user_text.size());
+        } else {
+            LOGI("HYMT2_TEMPLATE_OVERRIDE=not_applied; template or BOS vocabulary did not match");
+        }
+    } else {
+        LOGI("HYMT2_CHAT_TEMPLATE=<none>");
+    }""",
+        "render the official Hy-MT2 dense chat template when its token vocabulary matches",
+    )
+    replace_once(
+        jni_cpp,
         """    std::vector<llama_token> tokens = tokenize(vocab, text, true);
     const int n_prompt = (int) tokens.size();""",
         """    const llama_token bos_token = llama_vocab_bos(vocab);
@@ -219,8 +260,9 @@ def main() -> int:
                  n_gen + 1);
             break;
         }
-        if (llama_vocab_is_eog(vocab, id)) {
-            LOGI("HYMT2_STOP EOG token=%d index=%d", id, n_gen + 1);
+        if (llama_vocab_is_eog(vocab, id) || id == eos_token) {
+            LOGI("HYMT2_STOP EOS token=%d index=%d is_eog=%d",
+                 id, n_gen + 1, llama_vocab_is_eog(vocab, id) ? 1 : 0);
             break;
         }""",
         "trace initial sampled tokens and guard generated BOS",
