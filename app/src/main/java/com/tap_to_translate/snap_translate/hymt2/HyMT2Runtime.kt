@@ -223,6 +223,8 @@ object HyMT2Runtime {
                         val model = ensureLoaded(appContext)
                         val options = HyMT2Settings.load(appContext)
                         val modelKind = selectedModelKind(appContext)
+                        val loadedConfig = model.config
+                        Log.i(TAG, "MODEL_CONFIG_ACTIVE kind=$modelKind context=${loadedConfig.contextSize} threads=${loadedConfig.threads} gpuLayers=${loadedConfig.gpuLayers} temperature=${loadedConfig.temperature} topP=${loadedConfig.topP} topK=${loadedConfig.topK} seed=${loadedConfig.seed}")
                         val isStqModel = modelKind == MODEL_KIND_STQ1
                         val appliedRepetitionPenalty = if (isStqModel) 1.0f else options.repetitionPenalty
                         // Match the known-good standalone STQ1_0 CPU benchmark exactly.
@@ -456,13 +458,29 @@ $sourceText"""
         val sourceKey = selectedUri.toString()
         val modelKind = selectedModelKind(context)
         val isStqModel = modelKind == MODEL_KIND_STQ1
+        val options = HyMT2Settings.load(context)
+        val threads = options.threads.coerceIn(1, Runtime.getRuntime().availableProcessors().coerceAtLeast(1))
+        val targetConfig = LlamaConfig(
+            contextSize = if (isStqModel) maxOf(options.contextSize, 2048) else options.contextSize,
+            threads = threads,
+            gpuLayers = if (isStqModel) 0 else if (options.useVulkan) options.gpuLayers else 0,
+            temperature = if (isStqModel) 0.7f else options.temperature,
+            topP = if (isStqModel) 0.6f else options.topP,
+            topK = if (isStqModel) 20 else options.topK,
+            seed = if (isStqModel) 42 else -1,
+        )
 
         val existing = loadedModel
         if (existing != null &&
             loadedSource == sourceKey &&
-            loadedModelKind == modelKind
-        ) return@withLock existing
+            loadedModelKind == modelKind &&
+            existing.config == targetConfig
+        ) {
+            Log.i(TAG, "Reusing loaded model; source, kind and full inference config match: $targetConfig")
+            return@withLock existing
+        }
         if (existing != null) {
+            Log.i(TAG, "Reloading model because source/kind/config changed: oldSource=$loadedSource oldKind=$loadedModelKind oldConfig=${existing.config} newSource=$sourceKey newKind=$modelKind newConfig=$targetConfig")
             Llama.releaseModel(existing)
             loadedModel = null
             loadedSource = null
@@ -489,28 +507,16 @@ $sourceText"""
             verifyProcFdPath(modelPath, stat.st_size)
             Log.i(TAG, "SAF descriptor ready and reopenable: fd=$fdNumber, size=${stat.st_size}, path=$modelPath; no model data copied")
 
-            val options = HyMT2Settings.load(context)
-            val threads = options.threads.coerceIn(1, Runtime.getRuntime().availableProcessors().coerceAtLeast(1))
             val created = Llama.loadModel(
                 modelPath = modelPath,
-                config = LlamaConfig(
-                    contextSize = if (isStqModel) maxOf(options.contextSize, 2048) else options.contextSize,
-                    threads = threads,
-                    // Tencent's STQ1_0 format is supported by the native CPU backend,
-                    // but the current Vulkan backend has no STQ1_0 tensor kernel.
-                    gpuLayers = if (isStqModel) 0 else if (options.useVulkan) options.gpuLayers else 0,
-                    temperature = if (isStqModel) 0.7f else options.temperature,
-                    topP = if (isStqModel) 0.6f else options.topP,
-                    topK = if (isStqModel) 20 else options.topK,
-                    seed = if (isStqModel) 42 else -1,
-                ),
+                config = targetConfig,
             )
             loadedSource = sourceKey
             loadedModelKind = modelKind
             loadedModel = created
             loadedDescriptor = descriptor
             descriptor = null // Ownership moved to loadedDescriptor.
-            Log.i(TAG, "Hy-MT2 loaded from $sourceKey; kind=$modelKind, CPU threads=$threads, context=${if (isStqModel) maxOf(options.contextSize, 2048) else options.contextSize}, temperature=${if (isStqModel) 0.7f else options.temperature}, topP=${if (isStqModel) 0.6f else options.topP}, topK=${if (isStqModel) 20 else options.topK}, seed=${if (isStqModel) 42 else -1}, Vulkan=${!isStqModel && options.useVulkan}, GPU layers=${if (!isStqModel && options.useVulkan) options.gpuLayers else 0}")
+            Log.i(TAG, "Hy-MT2 loaded from $sourceKey; kind=$modelKind; actualConfig=$targetConfig; Vulkan=${!isStqModel && options.useVulkan}")
             Log.i(TAG, "llama.cpp system info: ${Llama.getSystemInfo()}")
             created
         } finally {
