@@ -105,7 +105,7 @@ class OCREngine(
         val allResults = mutableListOf<OCRResult>()
         val recInputShapes = mutableListOf<List<Int>>()
         val perLineRecMs = mutableListOf<Long>()
-        val batchSize = config.recBatchSize.coerceAtLeast(1)
+        val batchSize = config.recBatchSize.coerceIn(1, ortManager.maxRecognitionBatchSize)
 
         var i = 0
         while (i < sortedBoxes.size) {
