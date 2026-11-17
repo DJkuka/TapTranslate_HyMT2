@@ -108,7 +108,7 @@ def integrate_language_pack_manager(base: Path) -> None:
     manifest = manifest_path.read_text(encoding="utf-8")
     activity = (
         '        <activity android:name="com.tap_to_translate.snap_translate.hymt2.LanguagePackManagerActivity" '
-        'android:exported="false" android:configChanges="orientation|screenSize|keyboardHidden" />\\n'
+        'android:exported="false" android:configChanges="orientation|screenSize|keyboardHidden" />\n'
     )
     if "LanguagePackManagerActivity" not in manifest:
         if "</application>" not in manifest:
@@ -129,10 +129,10 @@ def integrate_language_pack_manager(base: Path) -> None:
     locals_start = source.find(".locals", start)
     if locals_start < 0:
         raise RuntimeError("ca/b2.l(String) has no local-register declaration")
-    body_start = source.find("\\n", locals_start) + 1
+    body_start = source.find("\n", locals_start) + 1
     if "TesseractLanguagePackStore;->beforeLanguageCheck" not in source[start:]:
         source = source[:body_start] + (
-            "    invoke-static {p0}, Lcom/tap_to_translate/snap_translate/hymt2/TesseractLanguagePackStore;->beforeLanguageCheck(Ljava/lang/String;)V\\n\\n"
+            "    invoke-static {p0}, Lcom/tap_to_translate/snap_translate/hymt2/TesseractLanguagePackStore;->beforeLanguageCheck(Ljava/lang/String;)V\n\n"
         ) + source[body_start:]
         availability.write_text(source, encoding="utf-8")
 
@@ -142,16 +142,16 @@ def integrate_language_pack_manager(base: Path) -> None:
     if downloader is None:
         raise RuntimeError("APK 219 Tesseract downloader vh/a.smali is missing")
     source = downloader.read_text(encoding="utf-8")
-    marker = "    :catch_4\\n    invoke-virtual {v5}, Ljava/net/HttpURLConnection;->disconnect()V"
+    marker = "    :catch_4\n    invoke-virtual {v5}, Ljava/net/HttpURLConnection;->disconnect()V"
     if "TesseractLanguagePackStore;->persistDownloadedPack" not in source:
         if marker not in source:
             raise RuntimeError("Could not locate successful Tesseract download completion in vh/a.smali")
         hook = (
-            "    invoke-virtual {v16}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;\\n"
-            "    move-result-object v0\\n"
-            "    invoke-static {v3, v0}, Lcom/tap_to_translate/snap_translate/hymt2/TesseractLanguagePackStore;->persistDownloadedPack(Ljava/lang/String;Ljava/lang/String;)V\\n\\n"
+            "    invoke-virtual {v16}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;\n"
+            "    move-result-object v0\n"
+            "    invoke-static {v3, v0}, Lcom/tap_to_translate/snap_translate/hymt2/TesseractLanguagePackStore;->persistDownloadedPack(Ljava/lang/String;Ljava/lang/String;)V\n\n"
         )
-        source = source.replace(marker, "    :catch_4\\n" + hook + "    invoke-virtual {v5}, Ljava/net/HttpURLConnection;->disconnect()V", 1)
+        source = source.replace(marker, "    :catch_4\n" + hook + "    invoke-virtual {v5}, Ljava/net/HttpURLConnection;->disconnect()V", 1)
         downloader.write_text(source, encoding="utf-8")
 
     # Fail fast if either host hook or the Activity registration was not applied.
