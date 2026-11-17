@@ -104,6 +104,12 @@ class HyMT2SettingsActivity : Activity() {
         loadButton = addButton(root, "2. Загрузить модель в RAM") { loadModel() }
         unloadButton = addButton(root, "Освободить память") { unloadModel() }
 
+        addSection(root, "ЯЗЫКОВЫЕ ПАКЕТЫ")
+        addText(root, "Загрузка, проверка и удаление отдельных языковых пакетов Tesseract OCR и Google ML Kit Offline Translate.", 13f)
+        addButton(root, "Открыть менеджер языковых пакетов") {
+            startActivity(Intent(this, LanguagePackManagerActivity::class.java))
+        }
+
         addSection(root, "ПРОИЗВОДИТЕЛЬНОСТЬ")
         addText(root, "Эти параметры влияют на скорость, расход RAM и длину доступного контекста. Изменение параметров загрузки потребует перезагрузить модель. Для ручной настройки сначала выбери профиль «Настраиваемый».", 13f)
         profileSpinner = addSpinner(root, "Профиль производительности", HyMT2Settings.profileChoices)
