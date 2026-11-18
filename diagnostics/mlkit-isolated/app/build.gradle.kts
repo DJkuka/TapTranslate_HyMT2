@@ -10,7 +10,7 @@ android {
   minSdk = 23
   targetSdk = 35
   versionCode = 1
-  versionName = "1.0"
+  versionName = "1.1-vision-registrars"
  }
  compileOptions {
   sourceCompatibility = JavaVersion.VERSION_17
@@ -19,5 +19,7 @@ android {
  kotlinOptions { jvmTarget = "17" }
 }
 dependencies {
+ // Keep Translate and Vision Text on modern Component-based registrars.
  implementation("com.google.mlkit:translate:17.0.3")
+ implementation("com.google.mlkit:text-recognition:16.0.1")
 }
