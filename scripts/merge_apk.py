@@ -2005,9 +2005,16 @@ def copy_helper_payload(helper: Path, base: Path) -> None:
         "libggml-base.so", "libggml-cpu.so", "libggml-vulkan.so",
         "libhymt2_jni.so", "libc++_shared.so", "libopencv_java4.so",
     }
+    # The original host APK already ships ML Kit's translation JNI runtime.
+    # Keep that tested host copy: the helper's duplicate comes from the compile
+    # dependency and must not replace the runtime used by the host translator.
+    host_preserved = {"libtranslate_jni.so"}
     for source in so_files:
         destination = out_lib / source.name
         if destination.exists() and destination.read_bytes() != source.read_bytes():
+            if source.name in host_preserved:
+                print(f"Preserving original host ML Kit native library: {source.name}")
+                continue
             if source.name not in replaceable:
                 raise RuntimeError(f"Unexpected native library collision: {source.name}")
             print(f"Replacing Hy-MT2 runtime library: {source.name}")
