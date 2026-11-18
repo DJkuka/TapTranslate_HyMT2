@@ -57,7 +57,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.21.1")
     implementation("com.quickbirdstudios:opencv:4.5.3.0")
-    // Compile against ML Kit APIs already present in APK 219; do not duplicate SDK classes in helper APK.
-    compileOnly("com.google.mlkit:translate:17.0.3")
+    // Package ML Kit public model-management API classes referenced by LanguagePackManagerActivity.
+    // The host APK contains translation internals but not RemoteModelManager / model API classes.
+    implementation("com.google.mlkit:translate:17.0.3")
     testImplementation("junit:junit:4.13.2")
 }
