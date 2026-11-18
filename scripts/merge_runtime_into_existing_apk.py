@@ -307,16 +307,34 @@ def verify_region_editor_fix(root: Path) -> None:
     print("Verified APK 219 Rect/String constructor in TranslationRegionEditor.addRegion().")
 
 
-def copy_runtime_smali(helper: Path, base: Path) -> None:
-    target_root = base / "smali_classes5"
-    target_root.mkdir(parents=True, exist_ok=True)
+def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
+    # Never inject thousands of helper definitions into APK 219's original
+    # DEX files. The previous approach overwrote classes in their original
+    # DEX partitions; that pushed classes.dex beyond the 65,535 method-index
+    # limit (smali reported index 65,704). Instead append one or more new DEX
+    # partitions after the highest base DEX, preserving the helper's own
+    # multidex partitioning.
+    helper_dirs = smali_dirs(helper)
+    base_dirs = smali_dirs(base)
+    base_indices = [
+        1 if directory.name == "smali" else int(directory.name.removeprefix("smali_classes"))
+        for directory in base_dirs
+    ]
+    next_dex_index = max(base_indices, default=1) + 1
+    target_roots = {
+        helper_dir: base / f"smali_classes{next_dex_index + index}"
+        for index, helper_dir in enumerate(helper_dirs)
+    }
+
     copied = 0
     replaced = 0
     skipped_identical = 0
     bootstrap_replaced: set[str] = set()
     replaced_runtime_prefixes: set[str] = set()
+    relocated_classes: set[str] = set()
 
-    for helper_dir in smali_dirs(helper):
+    for helper_dir in helper_dirs:
+        target_root = target_roots[helper_dir]
         for prefix in RUNTIME_PREFIXES:
             package_root = helper_dir / prefix
             if not package_root.exists():
@@ -343,23 +361,22 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
                     None,
                 )
                 if rel_name in REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES or replaceable_prefix is not None:
-                    candidates = list(existing)
-                    if target.is_file():
-                        candidates.append(target)
-                    if len(candidates) > 1:
-                        raise RuntimeError(
-                            "Multiple DEX definitions found for replaceable ML Kit class: "
-                            + rel_name + " -> " + ", ".join(str(p) for p in candidates)
-                        )
-                    destination = candidates[0] if candidates else target
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(source, destination)
+                    # Relocate the matched helper definition into the appended
+                    # DEX partition. Delete any old APK 219 definitions rather
+                    # than overwriting them in classes.dex/classes2.dex, which
+                    # can overflow their 16-bit method_id tables.
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    for stale in existing:
+                        stale.unlink()
+                        print("Relocating host definition out of", stale.parent.parent.name + ":", rel_name)
+                    shutil.copy2(source, target)
                     replaced += 1
+                    relocated_classes.add(rel_name)
                     if rel_name in REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES:
                         bootstrap_replaced.add(rel_name)
                     if replaceable_prefix is not None:
                         replaced_runtime_prefixes.add(replaceable_prefix)
-                    print("Replacing matched ML Kit/GMS/AndroidX runtime class:", rel_name)
+                    print("Placed matched ML Kit/GMS/AndroidX class in", target_root.name + ":", rel_name)
                     continue
 
                 if (
@@ -444,8 +461,52 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
         )
     if copied + replaced == 0:
         raise RuntimeError("No Hy-MT2 runtime classes were found in the helper APK")
-    print("Verified replacement of all ML Kit 18.11 bootstrap classes:", ", ".join(sorted(bootstrap_replaced)))
-    print(f"Runtime DEX merge: {copied} added, {replaced} replaced, {skipped_identical} identical host classes retained.")
+    print("Verified relocation of all ML Kit bootstrap classes:", ", ".join(sorted(bootstrap_replaced)))
+    print(f"Runtime DEX merge: {copied} added, {replaced} relocated, {skipped_identical} identical host classes retained.")
+    print("Appended helper DEX partitions:", ", ".join(path.name for path in target_roots.values()))
+    return relocated_classes
+
+
+def snapshot_smali_inventory(root: Path) -> dict[tuple[str, str], str]:
+    snapshot: dict[tuple[str, str], str] = {}
+    for directory in smali_dirs(root):
+        for source in directory.rglob("*.smali"):
+            rel = source.relative_to(directory).as_posix()
+            snapshot[(directory.name, rel)] = hashlib.sha256(source.read_bytes()).hexdigest()
+    return snapshot
+
+
+def verify_original_smali_inventory(
+    snapshot: dict[tuple[str, str], str],
+    root: Path,
+    relocated_classes: set[str],
+) -> None:
+    # All original host classes must remain byte-identical in their original
+    # DEX, except classes intentionally relocated to the appended helper DEXes
+    # and the two Tesseract hooks inserted by this integration.
+    allowed_host_hooks = {"ca/b2.smali", "vh/a.smali"}
+    missing: list[str] = []
+    changed: list[str] = []
+    for (dex_name, rel), expected_hash in snapshot.items():
+        if rel in relocated_classes or rel in allowed_host_hooks:
+            continue
+        path = root / dex_name / rel
+        if not path.is_file():
+            missing.append(f"{dex_name}/{rel}")
+        elif hashlib.sha256(path.read_bytes()).hexdigest() != expected_hash:
+            changed.append(f"{dex_name}/{rel}")
+    if missing or changed:
+        raise RuntimeError(
+            "APK 219 host DEX preservation failed: "
+            + ("missing=" + ", ".join(missing[:40]) if missing else "")
+            + ("; " if missing and changed else "")
+            + ("changed=" + ", ".join(changed[:40]) if changed else "")
+        )
+    print(
+        "Verified original APK 219 smali preservation; relocated "
+        + str(len(relocated_classes))
+        + " matched runtime classes and retained the rest of the host code."
+    )
 
 
 def verify_helper_runtime_inventory(helper: Path, root: Path) -> None:
@@ -800,15 +861,15 @@ def verify_preserved_payload(base_apk: Path, output_apk: Path) -> None:
         }
         target_hook_dexes = set(hook_symbols_by_dex)
 
-        # Every original DEX other than the actual hook targets and classes5.dex
-        # must remain byte-identical.
+        # DEX bytes are expected to change when matched runtime classes are
+        # relocated out of the original DEX partitions. Their class-by-class
+        # preservation is checked from decoded smali inventories before and
+        # after packaging. Here only require every original DEX entry to survive.
         for name in old_names:
             if not (name.startswith("classes") and name.endswith(".dex")):
                 continue
-            if name == "classes5.dex" or name in target_hook_dexes:
-                continue
-            if name not in new_names or original.read(name) != built.read(name):
-                raise RuntimeError("Unrelated DEX changed during runtime merge: " + name)
+            if name not in new_names:
+                raise RuntimeError("Original APK 219 DEX disappeared during runtime merge: " + name)
 
         for dex_name, symbols in hook_symbols_by_dex.items():
             if dex_name not in old_names or dex_name not in new_names:
@@ -883,7 +944,9 @@ def main() -> int:
 
     verify_base_features(base)
     verify_region_editor_fix(base)
-    copy_runtime_smali(helper, base)
+    original_smali_inventory = snapshot_smali_inventory(base)
+    relocated_runtime_classes = copy_runtime_smali(helper, base)
+    verify_original_smali_inventory(original_smali_inventory, base, relocated_runtime_classes)
     verify_helper_runtime_inventory(helper, base)
     integrate_language_pack_manager(base)
     verify_region_editor_fix(base)
@@ -907,6 +970,7 @@ def main() -> int:
         shutil.rmtree(final_decoded)
     run(["java", "-jar", str(args.apktool), "d", "-f", "-o", str(final_decoded), str(args.output)])
     verify_region_editor_fix(final_decoded)
+    verify_original_smali_inventory(original_smali_inventory, final_decoded, relocated_runtime_classes)
     verify_helper_runtime_inventory(helper, final_decoded)
     verify_mlkit_model_manager_classes(final_decoded)
     print("Base APK SHA-256:", actual_sha)
