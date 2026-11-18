@@ -15,7 +15,6 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import com.google.mlkit.common.MlKit
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.common.model.RemoteModelManager
 import com.google.mlkit.nl.translate.TranslateLanguage
@@ -230,25 +229,13 @@ class LanguagePackManagerActivity : Activity() {
     }
 
     /**
-     * The host APK declares MlKitInitProvider, but on the patched host the provider
-     * did not initialize MlKitContext before this Activity resumed. Explicitly use
-     * ML Kit's supported manual initialization entry point. If the manifest provider
-     * already initialized it, verify that through RemoteModelManager and reuse it.
+     * APK 219 already declares MlKitInitProvider in its manifest. ML Kit initializes
+     * itself through that provider before Activities are created. Calling
+     * MlKit.initialize() here would attempt a second initialization and throw
+     * "MlKitContext is already initialized"; reuse the SDK singleton instead.
      */
     private fun mlKitRemoteModelManager(): RemoteModelManager {
-        try {
-            MlKit.initialize(applicationContext)
-            Log.i(TAG, "ML Kit initialized explicitly by LanguagePackManager")
-        } catch (initializationError: IllegalStateException) {
-            try {
-                val existing = RemoteModelManager.getInstance()
-                Log.i(TAG, "ML Kit was already initialized; reusing existing context")
-                return existing
-            } catch (verificationError: Throwable) {
-                initializationError.addSuppressed(verificationError)
-                throw initializationError
-            }
-        }
+        Log.i(TAG, "Getting ML Kit RemoteModelManager from the manifest-initialized context")
         return RemoteModelManager.getInstance()
     }
 

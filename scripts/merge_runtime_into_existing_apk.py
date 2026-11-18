@@ -104,6 +104,8 @@ def verify_base_features(base: Path) -> None:
         "HyMT2SettingsActivity",
         "DisplayProfilesActivity",
         "OcrSettingsActivity",
+        # APK 219 auto-initializes ML Kit through this ContentProvider.
+        "com.google.mlkit.common.internal.MlKitInitProvider",
     ):
         if marker not in manifest:
             raise RuntimeError("APK 219 manifest is missing " + marker)
@@ -295,6 +297,17 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
 
 
 def verify_mlkit_model_manager_classes(root: Path) -> None:
+    # The verified APK 219 manifest has MlKitInitProvider. The manager must reuse
+    # that initialized singleton, never call MlKit.initialize() a second time.
+    activity = locate_smali(
+        root,
+        "com/tap_to_translate/snap_translate/hymt2/LanguagePackManagerActivity.smali",
+    )
+    if activity is None:
+        raise RuntimeError("LanguagePackManagerActivity is missing from the APK")
+    activity_source = activity.read_text(encoding="utf-8")
+    if "Lcom/google/mlkit/common/MlKit;->initialize(Landroid/content/Context;)V" in activity_source:
+        raise RuntimeError("LanguagePackManagerActivity must not manually initialize ML Kit; APK 219 has MlKitInitProvider")
     required = (
         "com/google/mlkit/common/model/RemoteModelManager.smali",
         "com/google/mlkit/common/model/DownloadConditions.smali",
