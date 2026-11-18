@@ -415,6 +415,19 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
     if "Lcom/google/mlkit/common/MlKit;->initialize(Landroid/content/Context;)V" in activity_source:
         raise RuntimeError("LanguagePackManagerActivity must not manually initialize ML Kit; APK 219 has MlKitInitProvider")
 
+    status = locate_smali(root, "com/google/android/gms/common/api/Status.smali")
+    if status is None:
+        raise RuntimeError("Google Play Services Status class is missing")
+    status_source = status.read_text(encoding="utf-8")
+    status_signature = ".method public constructor <init>(ILjava/lang/String;)V"
+    status_start = status_source.find(status_signature)
+    status_end = status_source.find(".end method", status_start)
+    if status_start < 0 or status_end < 0:
+        raise RuntimeError("Missing Status(int, String) constructor required by play-services-base 18.5.0")
+    status_method = status_source[status_start:status_end]
+    if "Status;-><init>(ILjava/lang/String;Landroid/app/PendingIntent;Lcom/google/android/gms/common/ConnectionResult;)V" not in status_method:
+        raise RuntimeError("Status compatibility constructor does not delegate to the original APK 219 constructor")
+
     provider = locate_smali(
         root,
         "com/google/mlkit/common/internal/MlKitInitProvider.smali",
@@ -570,6 +583,56 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
         ", ".join(sorted(provider_lambda_classes)),
     )
     print("Verified ML Kit manager APIs and builder classes in the APK.")
+
+
+def patch_google_play_services_status_compat(base: Path) -> None:
+    """Add the Play Services Status constructor required by base 18.5.0.
+
+    APK 219 ships an older Status class. The new GoogleApiManager copied from
+    play-services-base 18.5.0 invokes Status(int, String), while APK 219 only
+    has Status(int, String, PendingIntent, ConnectionResult). Add the missing
+    overload as a tiny adapter and preserve all existing Status fields/methods.
+    """
+    rel = "com/google/android/gms/common/api/Status.smali"
+    path = locate_smali(base, rel)
+    if path is None:
+        raise RuntimeError("APK 219 Status class is missing: " + rel)
+    source = path.read_text(encoding="utf-8")
+    signature = ".method public constructor <init>(ILjava/lang/String;)V"
+    if signature not in source:
+        legacy_signature = (
+            ".method public constructor <init>(ILjava/lang/String;"
+            "Landroid/app/PendingIntent;Lcom/google/android/gms/common/ConnectionResult;)V"
+        )
+        if legacy_signature not in source:
+            raise RuntimeError(
+                "APK 219 Status class has no compatible four-argument constructor"
+            )
+        adapter = """
+.method public constructor <init>(ILjava/lang/String;)V
+    .locals 2
+
+    const/4 v0, 0x0
+
+    const/4 v1, 0x0
+
+    invoke-direct {p0, p1, p2, v0, v1}, Lcom/google/android/gms/common/api/Status;-><init>(ILjava/lang/String;Landroid/app/PendingIntent;Lcom/google/android/gms/common/ConnectionResult;)V
+
+    return-void
+.end method
+"""
+        source = source.rstrip() + "\n\n" + adapter
+        path.write_text(source, encoding="utf-8")
+
+    verified = path.read_text(encoding="utf-8")
+    start = verified.find(signature)
+    end = verified.find(".end method", start)
+    if start < 0 or end < 0:
+        raise RuntimeError("Status(int, String) compatibility constructor was not installed")
+    method = verified[start:end]
+    if "Lcom/google/android/gms/common/api/Status;-><init>(ILjava/lang/String;Landroid/app/PendingIntent;Lcom/google/android/gms/common/ConnectionResult;)V" not in method:
+        raise RuntimeError("Status(int, String) does not delegate to APK 219's compatible constructor")
+    print("Patched Play Services Status(int, String) without replacing APK 219 Status implementation.")
 
 
 def copy_native_libraries(helper: Path, base: Path) -> None:
@@ -752,6 +815,7 @@ def main() -> int:
     verify_base_features(base)
     verify_region_editor_fix(base)
     copy_runtime_smali(helper, base)
+    patch_google_play_services_status_compat(base)
     integrate_language_pack_manager(base)
     verify_region_editor_fix(base)
     verify_mlkit_model_manager_classes(base)
