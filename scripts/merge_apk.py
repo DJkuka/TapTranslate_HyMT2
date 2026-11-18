@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import struct
 import sys
 import xml.etree.ElementTree as ET
 import zipfile
@@ -1860,6 +1861,12 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
                     # are refreshed in classes5.dex above.
                     if rel.startswith(("kotlin/", "kotlinx/", "org/jetbrains/annotations/")):
                         continue
+                    # APK 219 already ships part of the ML Kit implementation used by
+                    # its translator. Preserve those exact host definitions and copy
+                    # only model-manager API classes absent from the base APK.
+                    if rel.startswith(("com/google/mlkit/common/", "com/google/mlkit/nl/translate/")):
+                        print(f"Preserving existing host ML Kit class: {rel}")
+                        continue
                     # Do not silently introduce duplicate app/runtime classes across DEX files.
                     other = [d for d in base.glob("smali*") if d.is_dir() and d != target_root and (d / rel).is_file()]
                     if other:
@@ -1875,10 +1882,100 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
     return copied
 
 
+def verify_mlkit_manager_api_in_smali(base: Path) -> None:
+    required = (
+        "com/google/mlkit/common/model/RemoteModelManager.smali",
+        "com/google/mlkit/common/model/DownloadConditions.smali",
+        "com/google/mlkit/common/model/DownloadConditions$Builder.smali",
+        "com/google/mlkit/common/model/RemoteModel.smali",
+        "com/google/mlkit/nl/translate/TranslateRemoteModel.smali",
+        "com/google/mlkit/nl/translate/TranslateRemoteModel$Builder.smali",
+        "com/google/mlkit/nl/translate/TranslateLanguage.smali",
+    )
+    missing = [
+        rel for rel in required
+        if not any((directory / rel).is_file()
+                   for directory in base.glob("smali*") if directory.is_dir())
+    ]
+    if missing:
+        raise RuntimeError(
+            "ML Kit language-manager API classes were not merged into APK 219: "
+            + ", ".join(missing)
+        )
+    print("Verified ML Kit model-manager API class sources in merged Smali.")
+
+
+def _read_uleb128(data: bytes, offset: int) -> tuple[int, int]:
+    value = 0
+    shift = 0
+    while True:
+        if offset >= len(data) or shift > 28:
+            raise RuntimeError("Malformed DEX ULEB128 string length")
+        byte = data[offset]
+        offset += 1
+        value |= (byte & 0x7f) << shift
+        if byte < 0x80:
+            return value, offset
+        shift += 7
+
+
+def dex_defined_classes(data: bytes) -> set[str]:
+    # A descriptor string can exist only as a reference, so inspect class_defs.
+    if len(data) < 112 or not data.startswith(b"dex\\n"):
+        raise RuntimeError("Invalid DEX payload while checking ML Kit API classes")
+    string_size, string_off = struct.unpack_from("<II", data, 56)
+    type_size, type_off = struct.unpack_from("<II", data, 64)
+    class_size, class_off = struct.unpack_from("<II", data, 96)
+    strings = []
+    for index in range(string_size):
+        off = struct.unpack_from("<I", data, string_off + index * 4)[0]
+        _, start = _read_uleb128(data, off)
+        end = data.find(b"\\0", start)
+        if end < 0:
+            raise RuntimeError("Unterminated DEX string")
+        strings.append(data[start:end].decode("utf-8", errors="replace"))
+    types = [
+        strings[struct.unpack_from("<I", data, type_off + index * 4)[0]]
+        for index in range(type_size)
+    ]
+    defined = set()
+    for index in range(class_size):
+        class_idx = struct.unpack_from("<I", data, class_off + index * 32)[0]
+        defined.add(types[class_idx])
+    return defined
+
+
+def verify_final_mlkit_manager_api(apk_path: Path) -> None:
+    required = {
+        "Lcom/google/mlkit/common/model/RemoteModelManager;",
+        "Lcom/google/mlkit/common/model/DownloadConditions;",
+        "Lcom/google/mlkit/common/model/DownloadConditions$Builder;",
+        "Lcom/google/mlkit/common/model/RemoteModel;",
+        "Lcom/google/mlkit/nl/translate/TranslateRemoteModel;",
+        "Lcom/google/mlkit/nl/translate/TranslateRemoteModel$Builder;",
+        "Lcom/google/mlkit/nl/translate/TranslateLanguage;",
+    }
+    found = set()
+    with zipfile.ZipFile(apk_path) as archive:
+        for name in archive.namelist():
+            if name == "classes.dex" or (name.startswith("classes") and name.endswith(".dex")):
+                found.update(dex_defined_classes(archive.read(name)))
+    missing = sorted(required - found)
+    if missing:
+        raise RuntimeError(
+            "Final APK is missing ML Kit model-manager class definitions: "
+            + ", ".join(missing)
+        )
+    print("Verified final DEX defines all ML Kit RemoteModelManager and translation-model API classes.")
+
+
 def copy_helper_payload(helper: Path, base: Path) -> None:
     helper_dirs = [p for p in helper.glob("smali*") if p.is_dir()]
     prefixes = (
         "com/tap_to_translate/snap_translate/hymt2",
+        # Public ML Kit model-manager API classes are not all present in APK 219.
+        "com/google/mlkit/common",
+        "com/google/mlkit/nl/translate",
         "dev/ffmpegkit/llama",
         "kotlinx",
         "kotlin",
@@ -1890,6 +1987,7 @@ def copy_helper_payload(helper: Path, base: Path) -> None:
     count = copy_package(helper_dirs, base, prefixes)
     if count == 0:
         raise RuntimeError("No Hy-MT2 runtime classes were found in the helper APK")
+    verify_mlkit_manager_api_in_smali(base)
     print(f"Copied {count} smali classes to classes5.dex")
     target_root = base / "smali_classes5"
 
@@ -2020,6 +2118,7 @@ def main() -> int:
     run([args.zipalign, "-f", "-p", "4", str(unaligned), str(args.output)])
     run([args.zipalign, "-c", "-p", "4", str(args.output)])
     verify_final_host_payload(args.base_apk, args.output)
+    verify_final_mlkit_manager_api(args.output)
     print(f"Unsigned APK created: {args.output} ({args.output.stat().st_size} bytes)")
     return 0
 
