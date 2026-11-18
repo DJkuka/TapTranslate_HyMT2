@@ -29,6 +29,11 @@ RUNTIME_PREFIXES = (
     # RemoteModelManager APIs used by the language-pack manager.
     "com/google/mlkit/common",
     "com/google/mlkit/nl/translate",
+    # ML Kit Common 18.11.0 bootstrap and telemetry transitive dependencies.
+    "com/google/firebase/components",
+    "com/google/firebase/encoders",
+    "com/google/android/datatransport",
+    "androidx",
     # TranslateLanguage references implementation classes in this internal package.
     # Transitive Google Play Services runtime required by ML Kit Common 18.11.0.
     "com/google/android/gms/common",
@@ -371,6 +376,13 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
     required = (
         "com/google/mlkit/common/internal/MlKitInitProvider.smali",
         "com/google/mlkit/common/internal/MlKitComponentDiscoveryService.smali",
+        # MlKitInitProvider calls ComponentDiscovery before it can initialize MlKitContext.
+        "com/google/firebase/components/ComponentDiscovery.smali",
+        "com/google/firebase/components/ComponentDiscoveryService.smali",
+        "com/google/firebase/components/ComponentRegistrar.smali",
+        # ML Kit Common telemetry dependencies are resolved from these namespaces.
+        "com/google/firebase/encoders/Encoder.smali",
+        "com/google/android/datatransport/TransportFactory.smali",
         "com/google/mlkit/common/internal/CommonComponentRegistrar.smali",
         "com/google/mlkit/nl/translate/NaturalLanguageTranslateRegistrar.smali",
         "com/google/mlkit/common/model/RemoteModelManager.smali",
