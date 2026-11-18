@@ -1,0 +1,148 @@
+name: Diagnose ML Kit registrar compatibility (APK 219)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  mlkit-registrar-fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout isolated diagnostic branch
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: '15859902'
+          packages: 'platform-tools'
+          accept-android-sdk-licenses: true
+
+      - name: Install Android build tools
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Download exact APK 219 build 75 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: TapTranslate-STQ1_0-APK219-unsigned
+          run-id: 44307994539
+          repository: ${{ github.repository }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/apk75
+
+      - name: Verify APK 75
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="$(find input/apk75 -name '*.apk' -type f | head -n1)"
+          test -n "$apk"
+          echo "88b121cba1bf3d8b57904db08b0f338c1fc2ee656300d337078b7753b239a4eb  $apk" | sha256sum -c -
+          echo "APK75=$apk" >> "$GITHUB_ENV"
+
+      - name: Build only the ML Kit registrar helper
+        run: gradle --no-daemon -p mlkit-registrar-helper :app:assembleDebug
+
+      - name: Replace only the two stale ML Kit registrar classes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/base build/helper
+          java -jar tools/apktool.jar d -f -o build/base "$APK75"
+          java -jar tools/apktool.jar d -f -o build/helper mlkit-registrar-helper/app/build/outputs/apk/debug/app-debug.apk
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          base = Path("build/base")
+          helper = Path("build/helper")
+          classes = [
+              "com/google/mlkit/vision/common/internal/VisionCommonRegistrar.smali",
+              "com/google/mlkit/vision/text/internal/TextRegistrar.smali",
+          ]
+
+          def roots(root):
+              return sorted(p for p in root.glob("smali*") if p.is_dir())
+
+          for rel in classes:
+              src = next((d / rel for d in roots(helper) if (d / rel).is_file()), None)
+              dsts = [d / rel for d in roots(base) if (d / rel).is_file()]
+              if src is None:
+                  raise SystemExit("Helper APK does not contain " + rel)
+              if len(dsts) != 1:
+                  raise SystemExit(f"Expected exactly one base definition for {rel}; found {dsts}")
+              dst = dsts[0]
+              shutil.copy2(src, dst)
+              print("Replaced", rel, "at", dst)
+
+          # Verify that both replacement registrar bodies refer to the current
+          # un-obfuscated Firebase Component API, never the base APK's id.a type.
+          for rel in classes:
+              dst = next(d / rel for d in roots(base) if (d / rel).is_file())
+              data = dst.read_text(encoding="utf-8")
+              if "Lcom/google/firebase/components/Component;->builder" not in data:
+                  raise SystemExit("Registrar does not use Firebase Component API: " + rel)
+              if "Lid/a;" in data:
+                  raise SystemExit("Stale obfuscated component reference remains in " + rel)
+          PY
+
+          java -jar tools/apktool.jar b build/base -o build/TapTranslate_APK219_MLKitRegistrarFix_unaligned.apk
+          mkdir -p build/out
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -f -p 4 \
+            build/TapTranslate_APK219_MLKitRegistrarFix_unaligned.apk \
+            build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_MLKitRegistrarFix_unsigned.apk
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -p 4 \
+            build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_MLKitRegistrarFix_unsigned.apk
+
+      - name: Verify limited APK changes and unsigned output
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import zipfile, hashlib
+          from pathlib import Path
+          old = zipfile.ZipFile(__import__("os").environ["APK75"])
+          out_path = Path("build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_MLKitRegistrarFix_unsigned.apk")
+          new = zipfile.ZipFile(out_path)
+          changed = []
+          for name in old.namelist():
+              if name.endswith(".dex") and old.read(name) != new.read(name):
+                  changed.append(name)
+              elif name.startswith("lib/") and old.read(name) != new.read(name):
+                  raise SystemExit("Native library unexpectedly changed: " + name)
+          if not changed:
+              raise SystemExit("No DEX changed")
+          if any(n not in ("classes2.dex", "classes5.dex") for n in changed):
+              raise SystemExit("Unexpected DEX changes: " + repr(changed))
+          signatures = [n for n in new.namelist() if n.upper().startswith("META-INF/") and n.upper().endswith((".RSA", ".DSA", ".EC", ".SF"))]
+          if signatures:
+              raise SystemExit("Output unexpectedly contains signature files: " + repr(signatures))
+          print("Changed DEX:", changed)
+          print("Unsigned APK SHA-256:", hashlib.sha256(out_path.read_bytes()).hexdigest())
+          print("Output bytes:", out_path.stat().st_size)
+          PY
+          unzip -t build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_MLKitRegistrarFix_unsigned.apk | tail -n 2
+
+      - name: Upload unsigned diagnostic APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TapTranslate-APK219-MLKit-RegistrarFix-unsigned
+          path: build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_MLKitRegistrarFix_unsigned.apk
+          if-no-files-found: error
+          retention-days: 14
