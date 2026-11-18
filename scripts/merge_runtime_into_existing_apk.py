@@ -28,9 +28,47 @@ REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES = {
 # exact newer ML Kit Vision implementation they were compiled against. Replace
 # colliding classes within these prefixes and copy the new classes into classes5.
 REPLACEABLE_MLKIT_PACKAGE_PREFIXES = (
+    # Keep the complete ML Kit public and implementation APIs on the helper's
+    # matched Translate 17.0.3 / Common 18.11.0 / Vision versions.
+    "com/google/mlkit/common/",
+    "com/google/mlkit/nl/translate/",
     "com/google/mlkit/vision/",
+    "com/google/android/gms/internal/mlkit_common/",
+    "com/google/android/gms/internal/mlkit_translate/",
     "com/google/android/gms/internal/mlkit_vision_common/",
     "com/google/android/gms/internal/mlkit_vision_text_common/",
+)
+
+# Google Play Services core is a versioned runtime family. Keep its classes
+# aligned with the helper instead of mixing old APK 219 definitions with
+# play-services-base/basement from the ML Kit dependency graph.
+REPLACEABLE_GOOGLE_PLAY_SERVICES_PREFIXES = (
+    "com/google/android/gms/common/",
+    "com/google/android/gms/dynamic/",
+    "com/google/android/gms/dynamite/",
+    "com/google/android/gms/internal/base/",
+    "com/google/android/gms/internal/common/",
+    "com/google/android/gms/internal/tasks/",
+    "com/google/android/gms/tasks/",
+)
+
+# These AndroidX APIs are part of the helper's resolved Google Play Services
+# dependency graph. Replace matching definitions as a set and copy the full
+# helper inventory for each package.
+REPLACEABLE_ANDROIDX_PREFIXES = (
+    "androidx/activity/",
+    "androidx/arch/core/",
+    "androidx/collection/",
+    "androidx/core/",
+    "androidx/fragment/",
+    "androidx/lifecycle/",
+    "androidx/savedstate/",
+)
+
+REPLACEABLE_RUNTIME_PREFIXES = (
+    REPLACEABLE_MLKIT_PACKAGE_PREFIXES
+    + REPLACEABLE_GOOGLE_PLAY_SERVICES_PREFIXES
+    + REPLACEABLE_ANDROIDX_PREFIXES
 )
 
 # APK 219 already contains Firebase/DataTransport runtime used by Crashlytics
@@ -64,11 +102,12 @@ RUNTIME_PREFIXES = (
     # Transitive Google Play Services runtime required by ML Kit Common 18.11.0.
     "com/google/android/gms/common",
     "com/google/android/gms/dynamic",
+    "com/google/android/gms/dynamite",
+    "com/google/android/gms/internal/base",
     "com/google/android/gms/internal/common",
     "com/google/android/gms/tasks",
     "com/google/android/gms/internal/tasks",
     "com/google/android/gms/internal/mlkit_common",
-
     "com/google/android/gms/internal/mlkit_translate",
     "com/google/android/gms/internal/mlkit_vision_common",
     "com/google/android/gms/internal/mlkit_vision_text_common",
@@ -83,9 +122,14 @@ RUNTIME_PREFIXES = (
     "ai/onnxruntime",
     "com/paddle/ocr",
     "org/opencv",
-    # Required by play-services-base: GoogleApiManager constructs ArraySet.
-    # The isolated dependency graph resolves androidx.collection:collection:1.1.0.
+    # AndroidX runtime dependencies resolved by the isolated ML Kit helper.
+    "androidx/activity",
+    "androidx/arch/core",
     "androidx/collection",
+    "androidx/core",
+    "androidx/fragment",
+    "androidx/lifecycle",
+    "androidx/savedstate",
 )
 
 REPLACEABLE_NATIVE = {
@@ -270,7 +314,7 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
     replaced = 0
     skipped_identical = 0
     bootstrap_replaced: set[str] = set()
-    replaced_vision_prefixes: set[str] = set()
+    replaced_runtime_prefixes: set[str] = set()
 
     for helper_dir in smali_dirs(helper):
         for prefix in RUNTIME_PREFIXES:
@@ -289,16 +333,16 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
                 # so checking only for a copy in another DEX is insufficient.
                 rel_name = rel.as_posix()
 
-                # Replace the exact six ML Kit initialization/registrar classes.
-                # Also replace every colliding class in the three Vision prefixes:
-                # the two modern OCR registrars must not bind to old internal
-                # Vision classes compiled against id.a.
-                vision_prefix = next(
-                    (prefix for prefix in REPLACEABLE_MLKIT_PACKAGE_PREFIXES
+                # Replace the exact ML Kit initialization/registrar classes and
+                # every class in the helper's matched ML Kit, Google Play Services
+                # core, and AndroidX runtime packages. This prevents old host
+                # definitions from shadowing methods/classes expected by the helper.
+                replaceable_prefix = next(
+                    (prefix for prefix in REPLACEABLE_RUNTIME_PREFIXES
                      if rel_name.startswith(prefix)),
                     None,
                 )
-                if rel_name in REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES or vision_prefix is not None:
+                if rel_name in REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES or replaceable_prefix is not None:
                     candidates = list(existing)
                     if target.is_file():
                         candidates.append(target)
@@ -313,9 +357,9 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
                     replaced += 1
                     if rel_name in REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES:
                         bootstrap_replaced.add(rel_name)
-                    if vision_prefix is not None:
-                        replaced_vision_prefixes.add(vision_prefix)
-                    print("Replacing ML Kit compatibility class with matched helper version:", rel_name)
+                    if replaceable_prefix is not None:
+                        replaced_runtime_prefixes.add(replaceable_prefix)
+                    print("Replacing matched ML Kit/GMS/AndroidX runtime class:", rel_name)
                     continue
 
                 if (
@@ -365,14 +409,6 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
                     if rel.as_posix().startswith((
                         "com/google/mlkit/common/",
                         "com/google/mlkit/nl/translate/",
-                        "com/google/android/gms/common/",
-                        "com/google/android/gms/dynamic/",
-                        "com/google/android/gms/internal/common/",
-                        "com/google/android/gms/tasks/",
-                        "com/google/android/gms/internal/tasks/",
-                        "com/google/android/gms/internal/mlkit_common/",
-
-                        "com/google/android/gms/internal/mlkit_translate/",
                     )):
                         print("Keeping APK 219 ML Kit class on duplicate:", rel.as_posix())
                         skipped_identical += 1
@@ -393,16 +429,81 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
             "Helper APK is missing matching ML Kit bootstrap implementations: "
             + ", ".join(missing_bootstrap)
         )
-    missing_vision_prefixes = sorted(set(REPLACEABLE_MLKIT_PACKAGE_PREFIXES) - replaced_vision_prefixes)
-    if missing_vision_prefixes:
+    helper_runtime_prefixes = {
+        prefix
+        for helper_dir in smali_dirs(helper)
+        for prefix in REPLACEABLE_RUNTIME_PREFIXES
+        if (helper_dir / prefix).is_dir()
+        and any((helper_dir / prefix).rglob("*.smali"))
+    }
+    missing_runtime_prefixes = sorted(helper_runtime_prefixes - replaced_runtime_prefixes)
+    if missing_runtime_prefixes:
         raise RuntimeError(
-            "Helper APK is missing matched ML Kit Vision runtime packages: "
-            + ", ".join(missing_vision_prefixes)
+            "Helper APK runtime packages were not merged: "
+            + ", ".join(missing_runtime_prefixes)
         )
     if copied + replaced == 0:
         raise RuntimeError("No Hy-MT2 runtime classes were found in the helper APK")
     print("Verified replacement of all ML Kit 18.11 bootstrap classes:", ", ".join(sorted(bootstrap_replaced)))
     print(f"Runtime DEX merge: {copied} added, {replaced} replaced, {skipped_identical} identical host classes retained.")
+
+
+def verify_helper_runtime_inventory(helper: Path, root: Path) -> None:
+    """Require every helper class in the matched ML Kit/GMS/AndroidX packages.
+
+    This is intentionally inventory-driven: adding a new class to a dependency
+    cannot silently disappear merely because its package was omitted from a
+    hand-maintained short list.
+    """
+    expected: dict[str, Path] = {}
+    for helper_dir in smali_dirs(helper):
+        for prefix in REPLACEABLE_RUNTIME_PREFIXES:
+            package_root = helper_dir / prefix
+            if not package_root.is_dir():
+                continue
+            for source in package_root.rglob("*.smali"):
+                rel = source.relative_to(helper_dir).as_posix()
+                if rel in expected and expected[rel].read_bytes() != source.read_bytes():
+                    raise RuntimeError("Helper APK defines the same runtime class more than once: " + rel)
+                expected[rel] = source
+
+    if not expected:
+        raise RuntimeError("Helper APK contains no matched ML Kit/GMS/AndroidX runtime classes")
+
+    missing: list[str] = []
+    duplicate: list[str] = []
+    mismatched: list[str] = []
+    for rel, source in sorted(expected.items()):
+        matches = [
+            directory / rel
+            for directory in smali_dirs(root)
+            if (directory / rel).is_file()
+        ]
+        if not matches:
+            missing.append(rel)
+        elif len(matches) > 1:
+            duplicate.append(rel)
+        elif matches[0].read_bytes() != source.read_bytes():
+            mismatched.append(rel)
+
+    if missing or duplicate or mismatched:
+        details = []
+        if missing:
+            details.append("missing=" + ", ".join(missing[:80]))
+        if duplicate:
+            details.append("duplicate=" + ", ".join(duplicate[:80]))
+        if mismatched:
+            details.append("not_helper_version=" + ", ".join(mismatched[:80]))
+        raise RuntimeError("Matched dependency inventory verification failed: " + "; ".join(details))
+
+    counts: dict[str, int] = {}
+    for rel in expected:
+        prefix = next(p for p in REPLACEABLE_RUNTIME_PREFIXES if rel.startswith(p))
+        counts[prefix] = counts.get(prefix, 0) + 1
+    print("Verified complete helper class inventories for matched runtime packages:")
+    for prefix, count in sorted(counts.items()):
+        print(f"  {prefix}: {count} classes")
+    print(f"Verified {len(expected)} matched ML Kit/GMS/AndroidX class definitions byte-for-byte.")
 
 
 def verify_mlkit_model_manager_classes(root: Path) -> None:
@@ -422,14 +523,8 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
     if status is None:
         raise RuntimeError("Google Play Services Status class is missing")
     status_source = status.read_text(encoding="utf-8")
-    status_signature = ".method public constructor <init>(ILjava/lang/String;)V"
-    status_start = status_source.find(status_signature)
-    status_end = status_source.find(".end method", status_start)
-    if status_start < 0 or status_end < 0:
-        raise RuntimeError("Missing Status(int, String) constructor required by play-services-base 18.5.0")
-    status_method = status_source[status_start:status_end]
-    if "Status;-><init>(ILjava/lang/String;Landroid/app/PendingIntent;Lcom/google/android/gms/common/ConnectionResult;)V" not in status_method:
-        raise RuntimeError("Status compatibility constructor does not delegate to the original APK 219 constructor")
+    if ".method public constructor <init>(ILjava/lang/String;)V" not in status_source:
+        raise RuntimeError("Matched play-services-base Status(int, String) constructor is missing")
 
     provider = locate_smali(
         root,
@@ -543,6 +638,7 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
         "com/google/android/gms/internal/mlkit_common/zzu.smali",
         # ML Kit Common RemoteModelManager requires Google Play Services Basement.
         "com/google/android/gms/common/internal/Preconditions.smali",
+        "com/google/android/gms/internal/base/zau.smali",
         "com/google/android/gms/tasks/TaskExecutors.smali",
         "com/google/android/gms/tasks/zzu.smali",
         "com/google/android/gms/internal/tasks/zza.smali",
@@ -606,56 +702,6 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
         ", ".join(sorted(provider_lambda_classes)),
     )
     print("Verified ML Kit manager APIs and builder classes in the APK.")
-
-
-def patch_google_play_services_status_compat(base: Path) -> None:
-    """Add the Play Services Status constructor required by base 18.5.0.
-
-    APK 219 ships an older Status class. The new GoogleApiManager copied from
-    play-services-base 18.5.0 invokes Status(int, String), while APK 219 only
-    has Status(int, String, PendingIntent, ConnectionResult). Add the missing
-    overload as a tiny adapter and preserve all existing Status fields/methods.
-    """
-    rel = "com/google/android/gms/common/api/Status.smali"
-    path = locate_smali(base, rel)
-    if path is None:
-        raise RuntimeError("APK 219 Status class is missing: " + rel)
-    source = path.read_text(encoding="utf-8")
-    signature = ".method public constructor <init>(ILjava/lang/String;)V"
-    if signature not in source:
-        legacy_signature = (
-            ".method public constructor <init>(ILjava/lang/String;"
-            "Landroid/app/PendingIntent;Lcom/google/android/gms/common/ConnectionResult;)V"
-        )
-        if legacy_signature not in source:
-            raise RuntimeError(
-                "APK 219 Status class has no compatible four-argument constructor"
-            )
-        adapter = """
-.method public constructor <init>(ILjava/lang/String;)V
-    .locals 2
-
-    const/4 v0, 0x0
-
-    const/4 v1, 0x0
-
-    invoke-direct {p0, p1, p2, v0, v1}, Lcom/google/android/gms/common/api/Status;-><init>(ILjava/lang/String;Landroid/app/PendingIntent;Lcom/google/android/gms/common/ConnectionResult;)V
-
-    return-void
-.end method
-"""
-        source = source.rstrip() + "\n\n" + adapter
-        path.write_text(source, encoding="utf-8")
-
-    verified = path.read_text(encoding="utf-8")
-    start = verified.find(signature)
-    end = verified.find(".end method", start)
-    if start < 0 or end < 0:
-        raise RuntimeError("Status(int, String) compatibility constructor was not installed")
-    method = verified[start:end]
-    if "Lcom/google/android/gms/common/api/Status;-><init>(ILjava/lang/String;Landroid/app/PendingIntent;Lcom/google/android/gms/common/ConnectionResult;)V" not in method:
-        raise RuntimeError("Status(int, String) does not delegate to APK 219's compatible constructor")
-    print("Patched Play Services Status(int, String) without replacing APK 219 Status implementation.")
 
 
 def copy_native_libraries(helper: Path, base: Path) -> None:
@@ -838,7 +884,7 @@ def main() -> int:
     verify_base_features(base)
     verify_region_editor_fix(base)
     copy_runtime_smali(helper, base)
-    patch_google_play_services_status_compat(base)
+    verify_helper_runtime_inventory(helper, base)
     integrate_language_pack_manager(base)
     verify_region_editor_fix(base)
     verify_mlkit_model_manager_classes(base)
@@ -861,6 +907,7 @@ def main() -> int:
         shutil.rmtree(final_decoded)
     run(["java", "-jar", str(args.apktool), "d", "-f", "-o", str(final_decoded), str(args.output)])
     verify_region_editor_fix(final_decoded)
+    verify_helper_runtime_inventory(helper, final_decoded)
     verify_mlkit_model_manager_classes(final_decoded)
     print("Base APK SHA-256:", actual_sha)
     print("Unsigned output SHA-256:", sha256(args.output))
