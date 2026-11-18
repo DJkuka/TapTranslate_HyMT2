@@ -750,7 +750,7 @@ def patch_picker_callbacks(base: Path) -> None:
 
 
 def patch_atomic_backport_shims(base: Path) -> None:
-    """Supply the two D8-generated CAS forwarding helpers referenced by coroutines."""
+    """Supply D8-generated CAS forwarding helpers referenced by merged AndroidX/GMS classes."""
     shims = {
         "androidx/concurrent/futures/AbstractResolvableFuture$SafeAtomicHelper$$ExternalSyntheticBackportWithForwarding0.smali": '''.class public final Landroidx/concurrent/futures/AbstractResolvableFuture$SafeAtomicHelper$$ExternalSyntheticBackportWithForwarding0;
 .super Ljava/lang/Object;
@@ -766,6 +766,19 @@ def patch_atomic_backport_shims(base: Path) -> None:
 .end method
 ''',
         "androidx/lifecycle/LifecycleKt$$ExternalSyntheticBackportWithForwarding0.smali": '''.class public final Landroidx/lifecycle/LifecycleKt$$ExternalSyntheticBackportWithForwarding0;
+.super Ljava/lang/Object;
+
+.method public static m(Ljava/util/concurrent/atomic/AtomicReference;Ljava/lang/Object;Ljava/lang/Object;)Z
+    .locals 1
+
+    invoke-virtual {p0, p1, p2}, Ljava/util/concurrent/atomic/AtomicReference;->compareAndSet(Ljava/lang/Object;Ljava/lang/Object;)Z
+
+    move-result v0
+
+    return v0
+.end method
+''',
+        "com/google/android/gms/common/api/internal/zap$ExternalSyntheticBackportWithForwarding0.smali": '''.class public final Lcom/google/android/gms/common/api/internal/zap$ExternalSyntheticBackportWithForwarding0;
 .super Ljava/lang/Object;
 
 .method public static m(Ljava/util/concurrent/atomic/AtomicReference;Ljava/lang/Object;Ljava/lang/Object;)Z
