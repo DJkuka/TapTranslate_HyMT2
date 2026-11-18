@@ -41,6 +41,12 @@ RUNTIME_PREFIXES = (
     "com/google/mlkit/nl/translate",
     # ML Kit Common 18.11.0 bootstrap and telemetry transitive dependencies.
     "com/google/firebase/components",
+    # ComponentDiscovery$Lambda$1 implements firebase.inject.Provider. These
+    # Firebase API packages are separate from firebase.components and are needed
+    # to load the ML Kit 18.11 component-discovery lambda at provider startup.
+    "com/google/firebase/inject",
+    "com/google/firebase/events",
+    "com/google/firebase/dynamicloading",
     "com/google/firebase/encoders",
     "com/google/android/datatransport",
     # TranslateLanguage references implementation classes in this internal package.
@@ -399,8 +405,18 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
         "com/google/mlkit/common/internal/MlKitComponentDiscoveryService.smali",
         # MlKitInitProvider calls ComponentDiscovery before it can initialize MlKitContext.
         "com/google/firebase/components/ComponentDiscovery.smali",
+        "com/google/firebase/components/ComponentDiscovery$Lambda$1.smali",
         "com/google/firebase/components/ComponentRegistrar.smali",
         "com/google/firebase/components/ComponentRuntime.smali",
+        # Interfaces used by the generated ComponentDiscovery lambda and registrars.
+        "com/google/firebase/inject/Provider.smali",
+        "com/google/firebase/inject/Deferred.smali",
+        "com/google/firebase/inject/Deferred$DeferredHandler.smali",
+        "com/google/firebase/events/Event.smali",
+        "com/google/firebase/events/EventHandler.smali",
+        "com/google/firebase/events/Publisher.smali",
+        "com/google/firebase/events/Subscriber.smali",
+        "com/google/firebase/dynamicloading/ComponentLoader.smali",
         # ML Kit Common telemetry dependencies are resolved from these namespaces.
         "com/google/firebase/encoders/Encoder.smali",
         "com/google/android/datatransport/TransportFactory.smali",
