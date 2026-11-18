@@ -1921,7 +1921,7 @@ def _read_uleb128(data: bytes, offset: int) -> tuple[int, int]:
 
 def dex_defined_classes(data: bytes) -> set[str]:
     # A descriptor string can exist only as a reference, so inspect class_defs.
-    if len(data) < 112 or not data.startswith(b"dex\\n"):
+    if len(data) < 112 or not data.startswith(bytes((100, 101, 120, 10))):
         raise RuntimeError("Invalid DEX payload while checking ML Kit API classes")
     string_size, string_off = struct.unpack_from("<II", data, 56)
     type_size, type_off = struct.unpack_from("<II", data, 64)
@@ -1930,7 +1930,7 @@ def dex_defined_classes(data: bytes) -> set[str]:
     for index in range(string_size):
         off = struct.unpack_from("<I", data, string_off + index * 4)[0]
         _, start = _read_uleb128(data, off)
-        end = data.find(b"\\0", start)
+        end = data.find(bytes((0,)), start)
         if end < 0:
             raise RuntimeError("Unterminated DEX string")
         strings.append(data[start:end].decode("utf-8", errors="replace"))
