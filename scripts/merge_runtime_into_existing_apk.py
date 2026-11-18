@@ -282,7 +282,6 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
         "com/google/mlkit/common/model/DownloadConditions.smali",
         "com/google/mlkit/common/model/DownloadConditions$Builder.smali",
         "com/google/mlkit/common/model/RemoteModel.smali",
-        "com/google/mlkit/common/model/RemoteModel$Builder.smali",
         "com/google/mlkit/nl/translate/TranslateRemoteModel.smali",
         "com/google/mlkit/nl/translate/TranslateRemoteModel$Builder.smali",
         "com/google/mlkit/nl/translate/TranslateLanguage.smali",
