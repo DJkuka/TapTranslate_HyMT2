@@ -83,6 +83,9 @@ RUNTIME_PREFIXES = (
     "ai/onnxruntime",
     "com/paddle/ocr",
     "org/opencv",
+    # Required by play-services-base: GoogleApiManager constructs ArraySet.
+    # The isolated dependency graph resolves androidx.collection:collection:1.1.0.
+    "androidx/collection",
 )
 
 REPLACEABLE_NATIVE = {
@@ -476,6 +479,10 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
         "javax/inject/Qualifier.smali",
         "javax/inject/Scope.smali",
         "javax/inject/Singleton.smali",
+        # GoogleApiManager references ArraySet; keep the full collection package.
+        "androidx/collection/ArraySet.smali",
+        "androidx/collection/SimpleArrayMap.smali",
+        "androidx/collection/ContainerHelpers.smali",
         "com/google/mlkit/common/internal/CommonComponentRegistrar.smali",
         "com/google/mlkit/nl/translate/NaturalLanguageTranslateRegistrar.smali",
         "com/google/mlkit/vision/text/internal/TextRegistrar.smali",
