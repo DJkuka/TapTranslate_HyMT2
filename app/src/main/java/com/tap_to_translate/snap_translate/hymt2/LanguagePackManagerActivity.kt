@@ -15,6 +15,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import com.google.mlkit.common.MlKit
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.common.model.RemoteModelManager
 import com.google.mlkit.nl.translate.TranslateLanguage
@@ -228,6 +229,29 @@ class LanguagePackManagerActivity : Activity() {
             .show()
     }
 
+    /**
+     * The host APK declares MlKitInitProvider, but on the patched host the provider
+     * did not initialize MlKitContext before this Activity resumed. Explicitly use
+     * ML Kit's supported manual initialization entry point. If the manifest provider
+     * already initialized it, verify that through RemoteModelManager and reuse it.
+     */
+    private fun mlKitRemoteModelManager(): RemoteModelManager {
+        try {
+            MlKit.initialize(applicationContext)
+            Log.i(TAG, "ML Kit initialized explicitly by LanguagePackManager")
+        } catch (initializationError: IllegalStateException) {
+            try {
+                val existing = RemoteModelManager.getInstance()
+                Log.i(TAG, "ML Kit was already initialized; reusing existing context")
+                return existing
+            } catch (verificationError: Throwable) {
+                initializationError.addSuppressed(verificationError)
+                throw initializationError
+            }
+        }
+        return RemoteModelManager.getInstance()
+    }
+
     private fun refreshMlKit() {
         if (loadingMlKit) return
         loadingMlKit = true
@@ -236,7 +260,7 @@ class LanguagePackManagerActivity : Activity() {
         render()
         Log.i(TAG, "Refreshing downloaded ML Kit translation models")
         try {
-            RemoteModelManager.getInstance()
+            mlKitRemoteModelManager()
                 .getDownloadedModels(TranslateRemoteModel::class.java)
                 .addOnSuccessListener(this) { models ->
                     downloadedMlKit = models.mapNotNull { it.language }.toSet()
@@ -272,7 +296,7 @@ class LanguagePackManagerActivity : Activity() {
             val builder = DownloadConditions.Builder()
             val wifiOnly = getPreferences(MODE_PRIVATE).getBoolean(KEY_WIFI_ONLY, true)
             if (wifiOnly) builder.requireWifi()
-            RemoteModelManager.getInstance()
+            mlKitRemoteModelManager()
                 .download(model, builder.build())
                 .addOnSuccessListener(this) {
                     busyMlKit.remove(code)
@@ -325,7 +349,7 @@ class LanguagePackManagerActivity : Activity() {
         render()
         try {
             val model = TranslateRemoteModel.Builder(code).build()
-            RemoteModelManager.getInstance()
+            mlKitRemoteModelManager()
                 .deleteDownloadedModel(model)
                 .addOnSuccessListener(this) {
                     busyMlKit.remove(code)
