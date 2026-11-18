@@ -236,15 +236,18 @@ object TesseractLanguagePackStore {
             val message = try {
                 require(validCode(code)) { "Недопустимый код языка" }
                 val local = internalFile(context, code)
-                if (local.exists() && !local.delete()) error("Не удалось удалить рабочую копию.")
-                val shared = findSharedFile(context, code)
-                if (shared != null &&
-                    !DocumentsContract.deleteDocument(context.contentResolver, shared)
-                ) error("Не удалось удалить постоянную копию.")
-                "Пакет " + code + " удалён из рабочей и общей папок."
+                val existed = local.exists()
+                if (existed && !local.delete()) error("Не удалось удалить рабочую копию.")
+                // The SAF folder is the persistent archive. Never delete or modify
+                // its document here; it must remain available for offline restoration.
+                if (existed) {
+                    "Рабочая копия пакета " + code + " удалена. Общая копия не затронута."
+                } else {
+                    "Рабочая копия пакета " + code + " уже отсутствует. Общая копия не затронута."
+                }
             } catch (t: Throwable) {
                 Log.e(TAG, "Tesseract delete failed: " + code, t)
-                "Ошибка удаления " + code + ": " + (t.message ?: t.javaClass.simpleName)
+                "Ошибка удаления рабочей копии " + code + ": " + (t.message ?: t.javaClass.simpleName)
             }
             main.post { callback(message) }
         }
