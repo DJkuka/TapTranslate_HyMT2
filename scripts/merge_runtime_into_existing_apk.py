@@ -23,6 +23,7 @@ RUNTIME_PREFIXES = (
     "com/google/android/gms/dynamic",
     "com/google/android/gms/internal/common",
     "com/google/android/gms/tasks",
+    "com/google/android/gms/internal/tasks",
     "com/google/android/gms/internal/mlkit_common",
 
     "com/google/android/gms/internal/mlkit_translate",
@@ -270,6 +271,7 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
                         "com/google/android/gms/dynamic/",
                         "com/google/android/gms/internal/common/",
                         "com/google/android/gms/tasks/",
+                        "com/google/android/gms/internal/tasks/",
                         "com/google/android/gms/internal/mlkit_common/",
 
                         "com/google/android/gms/internal/mlkit_translate/",
@@ -334,6 +336,9 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
         "com/google/android/gms/internal/mlkit_common/zzu.smali",
         # ML Kit Common RemoteModelManager requires Google Play Services Basement.
         "com/google/android/gms/common/internal/Preconditions.smali",
+        "com/google/android/gms/tasks/TaskExecutors.smali",
+        "com/google/android/gms/tasks/zzu.smali",
+        "com/google/android/gms/internal/tasks/zza.smali",
         "com/google/android/gms/internal/mlkit_translate/zzw.smali",
 
     )
