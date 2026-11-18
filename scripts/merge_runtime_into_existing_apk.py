@@ -479,10 +479,26 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
         "javax/inject/Qualifier.smali",
         "javax/inject/Scope.smali",
         "javax/inject/Singleton.smali",
-        # GoogleApiManager references ArraySet; keep the full collection package.
+        # Exact androidx.collection:collection:1.1.0 class inventory observed
+        # in the passing isolated APK. Require every class, including nested
+        # MapCollections and iterator classes, not only ArraySet's direct helpers.
+        "androidx/collection/ArrayMap$1.smali",
+        "androidx/collection/ArrayMap.smali",
+        "androidx/collection/ArraySet$1.smali",
         "androidx/collection/ArraySet.smali",
-        "androidx/collection/SimpleArrayMap.smali",
+        "androidx/collection/CircularArray.smali",
+        "androidx/collection/CircularIntArray.smali",
         "androidx/collection/ContainerHelpers.smali",
+        "androidx/collection/LongSparseArray.smali",
+        "androidx/collection/LruCache.smali",
+        "androidx/collection/MapCollections$ArrayIterator.smali",
+        "androidx/collection/MapCollections$EntrySet.smali",
+        "androidx/collection/MapCollections$KeySet.smali",
+        "androidx/collection/MapCollections$MapIterator.smali",
+        "androidx/collection/MapCollections$ValuesCollection.smali",
+        "androidx/collection/MapCollections.smali",
+        "androidx/collection/SimpleArrayMap.smali",
+        "androidx/collection/SparseArrayCompat.smali",
         "com/google/mlkit/common/internal/CommonComponentRegistrar.smali",
         "com/google/mlkit/nl/translate/NaturalLanguageTranslateRegistrar.smali",
         "com/google/mlkit/vision/text/internal/TextRegistrar.smali",
