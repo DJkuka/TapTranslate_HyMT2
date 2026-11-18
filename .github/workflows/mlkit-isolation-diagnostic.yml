@@ -12,7 +12,7 @@ concurrency:
 jobs:
   diagnostic:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -54,63 +54,80 @@ jobs:
           repository: ${{ github.repository }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: input/merged75
-      - name: Decode and trace Firebase component registrars in base and failed merge
+      - name: Decode and compare all three APKs
         shell: bash
         run: |
           set -euo pipefail
           base="input/run219/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk"
           merged="input/merged75/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_unsigned.apk"
+          isolated="diagnostics-output/MLKit-Isolated-Diagnostic.apk"
           test -s "$base"
           test -s "$merged"
+          test -s "$isolated"
           echo "0e0d30f30a98fa427a62d23c6fe670e9bd9781287da2515b1b8139f9332e82eb  $base" | sha256sum -c -
-          sha256sum "$merged" > diagnostics-output/failed-merge-sha256.txt
+          mkdir -p diagnostics-output/base219 diagnostics-output/merged75 diagnostics-output/isolated
+          sha256sum "$base" "$merged" "$isolated" > diagnostics-output/apk-sha256.txt
           java -jar tools/apktool.jar d -f -o build/base219 "$base" >/dev/null
           java -jar tools/apktool.jar d -f -o build/merged75 "$merged" >/dev/null
-          mkdir -p diagnostics-output/base219 diagnostics-output/merged75
+          java -jar tools/apktool.jar d -f -o build/isolated "$isolated" >/dev/null
 
           inspect_tree() {
             label="$1"
             root="$2"
-            out="diagnostics-output/$label"
+            apk="$3"
+            out="diagnostics-output/$label/firebase-component-trace.txt"
             {
-              echo "=== APK SHA ==="
-              if [ "$label" = "base219" ]; then sha256sum "$base"; else sha256sum "$merged"; fi
+              echo "=== APK ==="
+              echo "$apk"
+              sha256sum "$apk"
               echo
               echo "=== FIREBASE COMPONENT DISCOVERY METADATA IN MANIFEST ==="
               grep -n -B5 -A5 'com.google.firebase.components:' "$root/AndroidManifest.xml" || true
               echo
-              echo "=== SERVICES / PROVIDERS FOR ML KIT OR FIREBASE ==="
+              echo "=== ML KIT / FIREBASE PROVIDERS AND SERVICES ==="
               grep -n -E 'MlKit|Firebase|firebase.components|Crashlytics|Sessions|Transport' "$root/AndroidManifest.xml" || true
               echo
-              echo "=== CLASSES IMPLEMENTING ComponentRegistrar ==="
+              echo "=== ALL CLASSES IMPLEMENTING ComponentRegistrar ==="
               find "$root"/smali* -type f -name '*.smali' -print0 |
                 while IFS= read -r -d '' f; do
                   if grep -q '^\.implements Lcom/google/firebase/components/ComponentRegistrar;' "$f"; then
                     echo "----- $f"
-                    grep -n -A100 -B5 -E '^\.class|^\.implements|^\.method .*getComponents|Lid/a;|Lcom/google/firebase/components/Component;' "$f" || true
+                    cat "$f"
                   fi
                 done
               echo
-              echo "=== ALL SMALI FILES REFERENCING OLD Component DESCRIPTOR Lid/a ==="
-              grep -R -l -F 'Lid/a;' "$root"/smali* | sort || true
+              echo "=== ALL OLD/NEW COMPONENT TYPE REFERENCES ==="
+              grep -R -n -E 'Lid/a;|Lcom/google/firebase/components/Component;' "$root"/smali* | head -n 2500 || true
               echo
-              echo "=== REGISTRAR METHOD CALLS / LEGACY Component FACTORIES ==="
-              grep -R -n -E 'getComponents\(\)Ljava/util/List;|Lid/a;->c|Lid/a;->b|Lid/a;->a' "$root"/smali* | head -n 2500 || true
+              echo "=== DEFINITION OF id.a (IF PRESENT) ==="
+              find "$root"/smali* -path '*/id/a.smali' -type f -print -exec cat {} \; || true
               echo
-              echo "=== OLD COMPONENT CLASS AND CORE FACTORY / REGISTRAR CLASSES ==="
-              for rel in id/a.smali id/g.smali id/f.smali la/v.smali gf/g.smali gf/m.smali ba/df.smali ba/sd.smali com/google/mlkit/common/internal/CommonComponentRegistrar.smali com/google/mlkit/common/internal/MlKitComponentDiscoveryService.smali com/google/mlkit/nl/translate/NaturalLanguageTranslateRegistrar.smali com/google/firebase/components/ComponentRegistrar.smali com/google/firebase/components/ComponentRuntime.smali com/google/firebase/components/CycleDetector.smali com/google/firebase/components/ComponentDiscovery.smali; do
-                f=$(find "$root"/smali* -path "*/$rel" -print -quit)
-                if [ -n "$f" ]; then echo "----- $f"; cat "$f"; fi
-              done
-            } > "$out/firebase-component-trace.txt"
+              echo "=== FIREBASE COMPONENT PACKAGE CLASS INVENTORY ==="
+              find "$root"/smali* -path '*/com/google/firebase/components/*.smali' -type f -print | sort || true
+              echo
+              echo "=== ML KIT REGISTRAR CLASS INVENTORY ==="
+              find "$root"/smali* -type f -name '*.smali' -print0 |
+                while IFS= read -r -d '' f; do
+                  if grep -q -E 'ComponentRegistrar|TextRegistrar|VisionCommonRegistrar|CommonComponentRegistrar|NaturalLanguageTranslateRegistrar' "$f"; then
+                    echo "$f"
+                  fi
+                done
+              echo
+              echo "=== COMPONENT FACTORY CALL SITES ==="
+              grep -R -n -E 'getComponents\(\)Ljava/util/List;|Lid/a;->|Lcom/google/firebase/components/Component;->' "$root"/smali* | head -n 2000 || true
+            } > "$out"
           }
 
-          inspect_tree base219 build/base219
-          inspect_tree merged75 build/merged75
-      - name: Upload detailed Firebase component trace
+          inspect_tree base219 build/base219 "$base"
+          inspect_tree merged75 build/merged75 "$merged"
+          inspect_tree isolated build/isolated "$isolated"
+
+          diff -u diagnostics-output/base219/firebase-component-trace.txt diagnostics-output/isolated/firebase-component-trace.txt > diagnostics-output/base-vs-isolated.diff || true
+          diff -u diagnostics-output/isolated/firebase-component-trace.txt diagnostics-output/merged75/firebase-component-trace.txt > diagnostics-output/isolated-vs-failed-merge.diff || true
+      - name: Upload three-way Firebase component analysis
         uses: actions/upload-artifact@v4
         with:
-          name: MLKit-Firebase-component-forensics
+          name: MLKit-Firebase-three-way-forensics
           path: |
             diagnostics-output/
             mlkit-runtime-dependencies.txt
