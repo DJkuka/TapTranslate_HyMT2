@@ -778,7 +778,7 @@ def patch_atomic_backport_shims(base: Path) -> None:
     return v0
 .end method
 ''',
-        "com/google/android/gms/common/api/internal/zap$ExternalSyntheticBackportWithForwarding0.smali": '''.class public final Lcom/google/android/gms/common/api/internal/zap$ExternalSyntheticBackportWithForwarding0;
+        "com/google/android/gms/common/api/internal/zap$$ExternalSyntheticBackportWithForwarding0.smali": '''.class public final Lcom/google/android/gms/common/api/internal/zap$$ExternalSyntheticBackportWithForwarding0;
 .super Ljava/lang/Object;
 
 .method public static m(Ljava/util/concurrent/atomic/AtomicReference;Ljava/lang/Object;Ljava/lang/Object;)Z
