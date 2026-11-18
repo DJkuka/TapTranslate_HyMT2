@@ -23,6 +23,16 @@ REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES = {
     "com/google/mlkit/nl/translate/NaturalLanguageTranslateRegistrar.smali",
 }
 
+# ML Kit 18.11 pulls newer Firebase Components, Encoders and DataTransport
+# packages. APK 219 already has older Firebase copies; keeping a mixed package
+# causes ComponentDiscovery to be missing or incompatible at ML Kit startup.
+# Replace overlapping classes in-place, with exactly one definition per class.
+REPLACEABLE_MLKIT_TRANSITIVE_PREFIXES = (
+    "com/google/firebase/components/",
+    "com/google/firebase/encoders/",
+    "com/google/android/datatransport/",
+)
+
 RUNTIME_PREFIXES = (
     "com/tap_to_translate/snap_translate/hymt2",
     # The APK already contains some ML Kit internals, but not the public
@@ -274,6 +284,25 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
                     print("Replacing APK 219 ML Kit bootstrap class with matching helper version:", rel_name)
                     continue
 
+                if any(rel_name.startswith(prefix) for prefix in REPLACEABLE_MLKIT_TRANSITIVE_PREFIXES):
+                    candidates = list(existing)
+                    if target.is_file():
+                        candidates.append(target)
+                    if len(candidates) > 1:
+                        raise RuntimeError(
+                            "Multiple DEX definitions found for ML Kit transitive class: "
+                            + rel_name + " -> " + ", ".join(str(p) for p in candidates)
+                        )
+                    destination = candidates[0] if candidates else target
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, destination)
+                    if candidates:
+                        replaced += 1
+                    else:
+                        copied += 1
+                    print("Merging matching ML Kit transitive class:", rel_name)
+                    continue
+
                 preserve_exact = rel_name in PRESERVED_CLASSES
                 preserve_family = any(
                     rel_name == prefix + ".smali" or rel_name.startswith(prefix + "$")
@@ -378,8 +407,8 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
         "com/google/mlkit/common/internal/MlKitComponentDiscoveryService.smali",
         # MlKitInitProvider calls ComponentDiscovery before it can initialize MlKitContext.
         "com/google/firebase/components/ComponentDiscovery.smali",
-        "com/google/firebase/components/ComponentDiscoveryService.smali",
         "com/google/firebase/components/ComponentRegistrar.smali",
+        "com/google/firebase/components/ComponentRuntime.smali",
         # ML Kit Common telemetry dependencies are resolved from these namespaces.
         "com/google/firebase/encoders/Encoder.smali",
         "com/google/android/datatransport/TransportFactory.smali",
