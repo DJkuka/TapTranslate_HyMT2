@@ -72,6 +72,10 @@ RUNTIME_PREFIXES = (
     "com/google/android/gms/internal/mlkit_translate",
     "com/google/android/gms/internal/mlkit_vision_common",
     "com/google/android/gms/internal/mlkit_vision_text_common",
+    # DataTransport's generated Factory classes implement javax.inject.Provider.
+    # APK 219 has the Factory implementation dependency missing, so include this
+    # small API package from the matched helper runtime.
+    "javax/inject",
     "dev/ffmpegkit/llama",
     "kotlinx",
     "kotlin",
@@ -452,6 +456,13 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
         # ML Kit Common telemetry dependencies are resolved from these namespaces.
         "com/google/firebase/encoders/Encoder.smali",
         "com/google/android/datatransport/TransportFactory.smali",
+        # Required superclass interface of DataTransport's generated Factory.
+        "javax/inject/Provider.smali",
+        "javax/inject/Inject.smali",
+        "javax/inject/Named.smali",
+        "javax/inject/Qualifier.smali",
+        "javax/inject/Scope.smali",
+        "javax/inject/Singleton.smali",
         "com/google/mlkit/common/internal/CommonComponentRegistrar.smali",
         "com/google/mlkit/nl/translate/NaturalLanguageTranslateRegistrar.smali",
         "com/google/mlkit/vision/text/internal/TextRegistrar.smali",
