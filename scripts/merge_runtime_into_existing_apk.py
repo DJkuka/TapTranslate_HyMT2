@@ -11,17 +11,27 @@ from pathlib import Path
 
 BASE_SHA256 = "0e0d30f30a98fa427a62d23c6fe670e9bd9781287da2515b1b8139f9332e82eb"
 
-# These four classes form the ML Kit 18.11 bootstrap path used by the
-# language-pack manager. APK 219 contains older copies of the same class names.
-# Keeping those old definitions while adding 18.11 APIs leaves MlKitContext
-# uninitialized. Replace the existing class definitions in-place with the
-# helper's matching implementations; do not create duplicate DEX definitions.
+# The four ML Kit registrars in APK 219 all used the old id.a Component type.
+# Translate 17.0.3 / Common 18.11.0 use firebase.components.Component instead.
+# Replace all four registrar definitions together so MlKitInitProvider never
+# feeds an old id.a object into the new ComponentRuntime.
 REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES = {
     "com/google/mlkit/common/internal/MlKitInitProvider.smali",
     "com/google/mlkit/common/internal/MlKitComponentDiscoveryService.smali",
     "com/google/mlkit/common/internal/CommonComponentRegistrar.smali",
     "com/google/mlkit/nl/translate/NaturalLanguageTranslateRegistrar.smali",
+    "com/google/mlkit/vision/text/internal/TextRegistrar.smali",
+    "com/google/mlkit/vision/common/internal/VisionCommonRegistrar.smali",
 }
+
+# The newer TextRegistrar and VisionCommonRegistrar must be accompanied by the
+# exact newer ML Kit Vision implementation they were compiled against. Replace
+# colliding classes within these prefixes and copy the new classes into classes5.
+REPLACEABLE_MLKIT_PACKAGE_PREFIXES = (
+    "com/google/mlkit/vision/",
+    "com/google/android/gms/internal/mlkit_vision_common/",
+    "com/google/android/gms/internal/mlkit_vision_text_common/",
+)
 
 # APK 219 already contains Firebase/DataTransport runtime used by Crashlytics
 # and Sessions. Keep those host definitions on collision and copy only classes
@@ -39,6 +49,8 @@ RUNTIME_PREFIXES = (
     # RemoteModelManager APIs used by the language-pack manager.
     "com/google/mlkit/common",
     "com/google/mlkit/nl/translate",
+    # Matched modern OCR registrars and their complete Vision implementation.
+    "com/google/mlkit/vision",
     # ML Kit Common 18.11.0 bootstrap and telemetry transitive dependencies.
     "com/google/firebase/components",
     # Firebase API packages are separate from firebase.components and are needed
@@ -58,6 +70,8 @@ RUNTIME_PREFIXES = (
     "com/google/android/gms/internal/mlkit_common",
 
     "com/google/android/gms/internal/mlkit_translate",
+    "com/google/android/gms/internal/mlkit_vision_common",
+    "com/google/android/gms/internal/mlkit_vision_text_common",
     "dev/ffmpegkit/llama",
     "kotlinx",
     "kotlin",
@@ -249,6 +263,7 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
     replaced = 0
     skipped_identical = 0
     bootstrap_replaced: set[str] = set()
+    replaced_vision_prefixes: set[str] = set()
 
     for helper_dir in smali_dirs(helper):
         for prefix in RUNTIME_PREFIXES:
@@ -267,25 +282,33 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
                 # so checking only for a copy in another DEX is insufficient.
                 rel_name = rel.as_posix()
 
-                # The base APK's ML Kit bootstrap classes are from an older runtime.
-                # Replacing only missing ML Kit APIs leaves the old provider and
-                # registrar wired to the old initialization path. Replace these
-                # four definitions at their existing DEX location, never duplicate.
-                if rel_name in REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES:
+                # Replace the exact six ML Kit initialization/registrar classes.
+                # Also replace every colliding class in the three Vision prefixes:
+                # the two modern OCR registrars must not bind to old internal
+                # Vision classes compiled against id.a.
+                vision_prefix = next(
+                    (prefix for prefix in REPLACEABLE_MLKIT_PACKAGE_PREFIXES
+                     if rel_name.startswith(prefix)),
+                    None,
+                )
+                if rel_name in REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES or vision_prefix is not None:
                     candidates = list(existing)
                     if target.is_file():
                         candidates.append(target)
                     if len(candidates) > 1:
                         raise RuntimeError(
-                            "Multiple DEX definitions found for ML Kit bootstrap class: "
+                            "Multiple DEX definitions found for replaceable ML Kit class: "
                             + rel_name + " -> " + ", ".join(str(p) for p in candidates)
                         )
                     destination = candidates[0] if candidates else target
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source, destination)
                     replaced += 1
-                    bootstrap_replaced.add(rel_name)
-                    print("Replacing APK 219 ML Kit bootstrap class with matching helper version:", rel_name)
+                    if rel_name in REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES:
+                        bootstrap_replaced.add(rel_name)
+                    if vision_prefix is not None:
+                        replaced_vision_prefixes.add(vision_prefix)
+                    print("Replacing ML Kit compatibility class with matched helper version:", rel_name)
                     continue
 
                 if (
@@ -363,6 +386,12 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
             "Helper APK is missing matching ML Kit bootstrap implementations: "
             + ", ".join(missing_bootstrap)
         )
+    missing_vision_prefixes = sorted(set(REPLACEABLE_MLKIT_PACKAGE_PREFIXES) - replaced_vision_prefixes)
+    if missing_vision_prefixes:
+        raise RuntimeError(
+            "Helper APK is missing matched ML Kit Vision runtime packages: "
+            + ", ".join(missing_vision_prefixes)
+        )
     if copied + replaced == 0:
         raise RuntimeError("No Hy-MT2 runtime classes were found in the helper APK")
     print("Verified replacement of all ML Kit 18.11 bootstrap classes:", ", ".join(sorted(bootstrap_replaced)))
@@ -405,6 +434,11 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
         # MlKitInitProvider calls ComponentDiscovery before it can initialize MlKitContext.
         "com/google/firebase/components/ComponentDiscovery.smali",
         "com/google/firebase/components/ComponentRegistrar.smali",
+        "com/google/firebase/components/Component.smali",
+        "com/google/firebase/components/Component$Builder.smali",
+        "com/google/firebase/components/ComponentContainer.smali",
+        "com/google/firebase/components/ComponentFactory.smali",
+        "com/google/firebase/components/Dependency.smali",
         "com/google/firebase/components/ComponentRuntime.smali",
         # Interfaces used by the generated ComponentDiscovery lambda and registrars.
         "com/google/firebase/inject/Provider.smali",
@@ -420,6 +454,8 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
         "com/google/android/datatransport/TransportFactory.smali",
         "com/google/mlkit/common/internal/CommonComponentRegistrar.smali",
         "com/google/mlkit/nl/translate/NaturalLanguageTranslateRegistrar.smali",
+        "com/google/mlkit/vision/text/internal/TextRegistrar.smali",
+        "com/google/mlkit/vision/common/internal/VisionCommonRegistrar.smali",
         "com/google/mlkit/common/model/RemoteModelManager.smali",
         "com/google/mlkit/common/model/DownloadConditions.smali",
         "com/google/mlkit/common/model/DownloadConditions$Builder.smali",
@@ -492,6 +528,32 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
             "Firebase ComponentDiscovery provider lambda is missing: "
             "no generated ComponentDiscovery*.smali implements firebase.inject.Provider"
         )
+    # Every registrar named by MlKitComponentDiscoveryService must return the
+    # modern Component class. Do not confuse this with Firebase's separate
+    # ComponentDiscoveryService, whose legacy runtime remains untouched.
+    mlkit_registrars = (
+        "com/google/mlkit/common/internal/CommonComponentRegistrar.smali",
+        "com/google/mlkit/nl/translate/NaturalLanguageTranslateRegistrar.smali",
+        "com/google/mlkit/vision/text/internal/TextRegistrar.smali",
+        "com/google/mlkit/vision/common/internal/VisionCommonRegistrar.smali",
+    )
+    for rel in mlkit_registrars:
+        registrar = locate_smali(root, rel)
+        if registrar is None:
+            raise RuntimeError("Required modern ML Kit registrar is missing: " + rel)
+        registrar_source = registrar.read_text(encoding="utf-8")
+        if "Lcom/google/firebase/components/Component;" not in registrar_source:
+            raise RuntimeError("ML Kit registrar does not return modern Component objects: " + rel)
+        if "Lid/a;" in registrar_source:
+            raise RuntimeError("Legacy id.a Component reference remains in ML Kit registrar: " + rel)
+
+    text_source = locate_smali(root, mlkit_registrars[2]).read_text(encoding="utf-8")
+    vision_source = locate_smali(root, mlkit_registrars[3]).read_text(encoding="utf-8")
+    if 'com.google.android.gms:play-services-mlkit-text-recognition-common@@19.1.0' not in text_source:
+        raise RuntimeError("TextRegistrar is not the matched 19.1.0 implementation")
+    if 'com.google.mlkit:vision-common@@17.3.0' not in vision_source:
+        raise RuntimeError("VisionCommonRegistrar is not the matched 17.3.0 implementation")
+
     print(
         "Verified Firebase ComponentDiscovery provider lambda:",
         ", ".join(sorted(provider_lambda_classes)),
