@@ -41,9 +41,8 @@ RUNTIME_PREFIXES = (
     "com/google/mlkit/nl/translate",
     # ML Kit Common 18.11.0 bootstrap and telemetry transitive dependencies.
     "com/google/firebase/components",
-    # ComponentDiscovery$Lambda$1 implements firebase.inject.Provider. These
     # Firebase API packages are separate from firebase.components and are needed
-    # to load the ML Kit 18.11 component-discovery lambda at provider startup.
+    # by the generated ML Kit 18.11 component-discovery provider lambda.
     "com/google/firebase/inject",
     "com/google/firebase/events",
     "com/google/firebase/dynamicloading",
@@ -405,7 +404,6 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
         "com/google/mlkit/common/internal/MlKitComponentDiscoveryService.smali",
         # MlKitInitProvider calls ComponentDiscovery before it can initialize MlKitContext.
         "com/google/firebase/components/ComponentDiscovery.smali",
-        "com/google/firebase/components/ComponentDiscovery$Lambda$1.smali",
         "com/google/firebase/components/ComponentRegistrar.smali",
         "com/google/firebase/components/ComponentRuntime.smali",
         # Interfaces used by the generated ComponentDiscovery lambda and registrars.
@@ -474,6 +472,30 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
             "ML Kit language-manager API classes are missing from the APK: "
             + ", ".join(missing)
         )
+
+    # The name of a compiler-generated lambda class is not a stable API:
+    # depending on the toolchain it may be ComponentDiscovery$Lambda$1,
+    # ComponentDiscovery$Lambda$1 or another synthetic variant. Verify the
+    # behaviorally relevant contract instead of hard-coding one filename.
+    provider_lambda_classes = []
+    for directory in smali_dirs(root):
+        component_dir = directory / "com/google/firebase/components"
+        if not component_dir.is_dir():
+            continue
+        for candidate in component_dir.glob("ComponentDiscovery*.smali"):
+            candidate_source = candidate.read_text(encoding="utf-8")
+            if ".implements Lcom/google/firebase/inject/Provider;" in candidate_source:
+                provider_lambda_classes.append(candidate.relative_to(root).as_posix())
+
+    if not provider_lambda_classes:
+        raise RuntimeError(
+            "Firebase ComponentDiscovery provider lambda is missing: "
+            "no generated ComponentDiscovery*.smali implements firebase.inject.Provider"
+        )
+    print(
+        "Verified Firebase ComponentDiscovery provider lambda:",
+        ", ".join(sorted(provider_lambda_classes)),
+    )
     print("Verified ML Kit manager APIs and builder classes in the APK.")
 
 
