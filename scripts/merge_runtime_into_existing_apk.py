@@ -330,6 +330,9 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
                         "kotlin/",
                         "kotlinx/",
                         "org/jetbrains/annotations/",
+                        # APK 219 already ships AndroidX annotation classes. They
+                        # are compile-time metadata; keep the host copy on collision.
+                        "androidx/annotation/",
                     )):
                         skipped_identical += 1
                         continue
