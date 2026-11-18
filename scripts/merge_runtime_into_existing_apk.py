@@ -13,6 +13,10 @@ BASE_SHA256 = "0e0d30f30a98fa427a62d23c6fe670e9bd9781287da2515b1b8139f9332e82eb"
 
 RUNTIME_PREFIXES = (
     "com/tap_to_translate/snap_translate/hymt2",
+    # The original APK has selected ML Kit internals, but not public remote-model
+    # management APIs. Bring in the missing ML Kit common/translation classes.
+    "com/google/mlkit/common",
+    "com/google/mlkit/nl/translate",
     "dev/ffmpegkit/llama",
     "kotlinx",
     "kotlin",
@@ -248,6 +252,17 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
                     )):
                         skipped_identical += 1
                         continue
+                    # Keep APK 219's already-shipped ML Kit internal classes to avoid
+                    # replacing implementations used by its original translator. Copy
+                    # only the missing public API and support classes from the same
+                    # compile-time ML Kit dependency into the new DEX.
+                    if rel.as_posix().startswith((
+                        "com/google/mlkit/common/",
+                        "com/google/mlkit/nl/translate/",
+                    )):
+                        print("Keeping APK 219 ML Kit class on duplicate:", rel.as_posix())
+                        skipped_identical += 1
+                        continue
                     # For actual app/runtime classes, a differing definition outside
                     # classes5.dex is unsafe: fail instead of creating duplicate classes.
                     raise RuntimeError(
@@ -261,6 +276,23 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
     if copied + replaced == 0:
         raise RuntimeError("No Hy-MT2 runtime classes were found in the helper APK")
     print(f"Runtime DEX merge: {copied} added, {replaced} replaced, {skipped_identical} identical host classes retained.")
+
+def verify_mlkit_model_manager_classes(root: Path) -> None:
+    required = (
+        "com/google/mlkit/common/model/RemoteModelManager.smali",
+        "com/google/mlkit/common/model/DownloadConditions.smali",
+        "com/google/mlkit/common/model/RemoteModel.smali",
+        "com/google/mlkit/nl/translate/TranslateRemoteModel.smali",
+        "com/google/mlkit/nl/translate/TranslateLanguage.smali",
+    )
+    missing = [rel for rel in required if locate_smali(root, rel) is None]
+    if missing:
+        raise RuntimeError(
+            "ML Kit model-management API classes are missing from the final APK: "
+            + ", ".join(missing)
+        )
+    print("Verified ML Kit RemoteModelManager, download conditions and translation model API classes.")
+
 
 def copy_native_libraries(helper: Path, base: Path) -> None:
     source_dir = helper / "lib/arm64-v8a"
@@ -443,6 +475,7 @@ def main() -> int:
     copy_runtime_smali(helper, base)
     integrate_language_pack_manager(base)
     verify_region_editor_fix(base)
+    verify_mlkit_model_manager_classes(base)
     copy_native_libraries(helper, base)
     copy_new_assets_and_services(helper, base)
 
@@ -462,6 +495,7 @@ def main() -> int:
         shutil.rmtree(final_decoded)
     run(["java", "-jar", str(args.apktool), "d", "-f", "-o", str(final_decoded), str(args.output)])
     verify_region_editor_fix(final_decoded)
+    verify_mlkit_model_manager_classes(final_decoded)
     print("Base APK SHA-256:", actual_sha)
     print("Unsigned output SHA-256:", sha256(args.output))
     print(f"Unsigned APK created: {args.output} ({args.output.stat().st_size} bytes)")
