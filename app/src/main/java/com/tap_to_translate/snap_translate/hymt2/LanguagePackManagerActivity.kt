@@ -80,7 +80,7 @@ class LanguagePackManagerActivity : Activity() {
             val saved = tesseractStatus[pack.code]
             val local = saved?.internal == true
             val shared = saved?.shared == true
-            val installed = local || shared
+            val hasAnyCopy = local || shared
             val detail = when {
                 local && shared -> "Установлен · рабочая и постоянная копии · " + formatBytes(saved?.bytes ?: 0L)
                 shared -> "Сохранён в общей папке · " + formatBytes(saved?.bytes ?: 0L)
@@ -88,24 +88,25 @@ class LanguagePackManagerActivity : Activity() {
                 else -> "Не загружен"
             }
             val actions = ArrayList<Pair<String, () -> Unit>>()
-            if (installed) {
-                actions.add(Pair("Удалить") { confirmDeleteTesseract(pack) })
-                if (local && !shared && hasFolder) {
-                    actions.add(Pair("Сохранить в общей") {
-                        TesseractLanguagePackStore.saveLocalToShared(this, pack.code) { showResult(it) }
-                    })
-                }
-                if (shared && !local) {
-                    actions.add(Pair("Восстановить") {
-                        TesseractLanguagePackStore.restoreFromShared(this, pack.code) { showResult(it) }
-                    })
-                }
-            } else {
+            if (local) {
+                actions.add(Pair("Удалить рабочую") { confirmDeleteTesseract(pack, shared) })
+            }
+            if (local && !shared && hasFolder) {
+                actions.add(Pair("Сохранить в общей") {
+                    TesseractLanguagePackStore.saveLocalToShared(this, pack.code) { showResult(it) }
+                })
+            }
+            if (shared && !local) {
+                actions.add(Pair("Восстановить") {
+                    TesseractLanguagePackStore.restoreFromShared(this, pack.code) { showResult(it) }
+                })
+            }
+            if (!local && !shared) {
                 actions.add(Pair("Скачать") {
                     TesseractLanguagePackStore.download(this, pack) { showResult(it) }
                 })
             }
-            addPackRow(pack.name + " (" + pack.code + ")", detail, actions, !installed || hasFolder)
+            addPackRow(pack.name + " (" + pack.code + ")", detail, actions, hasFolder || local || shared)
         }
         if (!hasFolder) {
             addText(
@@ -199,12 +200,20 @@ class LanguagePackManagerActivity : Activity() {
         TesseractLanguagePackStore.attachFolder(this, uri, flags) { showResult(it) }
     }
 
-    private fun confirmDeleteTesseract(pack: TesseractLanguagePackStore.LanguagePack) {
+    private fun confirmDeleteTesseract(
+        pack: TesseractLanguagePackStore.LanguagePack,
+        hasSharedCopy: Boolean
+    ) {
         AlertDialog.Builder(this)
-            .setTitle("Удалить пакет Tesseract?")
+            .setTitle("Удалить рабочую копию?")
             .setMessage(
-                "Удалить язык «" + pack.name + "» из рабочей папки и общей папки? " +
-                    "Остальные языки останутся без изменений. При следующем выборе этого языка приложение сможет скачать его снова."
+                if (hasSharedCopy) {
+                    "Удалить пакет «" + pack.name + "» только из рабочей папки приложения? " +
+                        "Постоянная копия в общей папке останется. Её можно будет восстановить без повторной загрузки."
+                } else {
+                    "Для пакета «" + pack.name + "» нет копии в общей папке. " +
+                        "Рабочая копия будет удалена окончательно; при необходимости пакет можно будет скачать заново."
+                }
             )
             .setNegativeButton("Отмена", null)
             .setPositiveButton("Удалить") { _, _ ->
