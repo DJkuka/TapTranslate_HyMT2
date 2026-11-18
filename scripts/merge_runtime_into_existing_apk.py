@@ -11,6 +11,18 @@ from pathlib import Path
 
 BASE_SHA256 = "0e0d30f30a98fa427a62d23c6fe670e9bd9781287da2515b1b8139f9332e82eb"
 
+# These four classes form the ML Kit 18.11 bootstrap path used by the
+# language-pack manager. APK 219 contains older copies of the same class names.
+# Keeping those old definitions while adding 18.11 APIs leaves MlKitContext
+# uninitialized. Replace the existing class definitions in-place with the
+# helper's matching implementations; do not create duplicate DEX definitions.
+REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES = {
+    "com/google/mlkit/common/internal/MlKitInitProvider.smali",
+    "com/google/mlkit/common/internal/MlKitComponentDiscoveryService.smali",
+    "com/google/mlkit/common/internal/CommonComponentRegistrar.smali",
+    "com/google/mlkit/nl/translate/NaturalLanguageTranslateRegistrar.smali",
+}
+
 RUNTIME_PREFIXES = (
     "com/tap_to_translate/snap_translate/hymt2",
     # The APK already contains some ML Kit internals, but not the public
@@ -217,6 +229,7 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
     copied = 0
     replaced = 0
     skipped_identical = 0
+    bootstrap_replaced: set[str] = set()
 
     for helper_dir in smali_dirs(helper):
         for prefix in RUNTIME_PREFIXES:
@@ -234,6 +247,28 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
                 # helper APK. Some preserved classes live in classes5.dex itself,
                 # so checking only for a copy in another DEX is insufficient.
                 rel_name = rel.as_posix()
+
+                # The base APK's ML Kit bootstrap classes are from an older runtime.
+                # Replacing only missing ML Kit APIs leaves the old provider and
+                # registrar wired to the old initialization path. Replace these
+                # four definitions at their existing DEX location, never duplicate.
+                if rel_name in REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES:
+                    candidates = list(existing)
+                    if target.is_file():
+                        candidates.append(target)
+                    if len(candidates) > 1:
+                        raise RuntimeError(
+                            "Multiple DEX definitions found for ML Kit bootstrap class: "
+                            + rel_name + " -> " + ", ".join(str(p) for p in candidates)
+                        )
+                    destination = candidates[0] if candidates else target
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, destination)
+                    replaced += 1
+                    bootstrap_replaced.add(rel_name)
+                    print("Replacing APK 219 ML Kit bootstrap class with matching helper version:", rel_name)
+                    continue
+
                 preserve_exact = rel_name in PRESERVED_CLASSES
                 preserve_family = any(
                     rel_name == prefix + ".smali" or rel_name.startswith(prefix + "$")
@@ -291,8 +326,15 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
                 shutil.copy2(source, target)
                 copied += 1
 
+    missing_bootstrap = sorted(REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES - bootstrap_replaced)
+    if missing_bootstrap:
+        raise RuntimeError(
+            "Helper APK is missing matching ML Kit bootstrap implementations: "
+            + ", ".join(missing_bootstrap)
+        )
     if copied + replaced == 0:
         raise RuntimeError("No Hy-MT2 runtime classes were found in the helper APK")
+    print("Verified replacement of all ML Kit 18.11 bootstrap classes:", ", ".join(sorted(bootstrap_replaced)))
     print(f"Runtime DEX merge: {copied} added, {replaced} replaced, {skipped_identical} identical host classes retained.")
 
 
@@ -308,7 +350,29 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
     activity_source = activity.read_text(encoding="utf-8")
     if "Lcom/google/mlkit/common/MlKit;->initialize(Landroid/content/Context;)V" in activity_source:
         raise RuntimeError("LanguagePackManagerActivity must not manually initialize ML Kit; APK 219 has MlKitInitProvider")
+
+    provider = locate_smali(
+        root,
+        "com/google/mlkit/common/internal/MlKitInitProvider.smali",
+    )
+    if provider is None:
+        raise RuntimeError("ML Kit 18.11 MlKitInitProvider is missing")
+    provider_source = provider.read_text(encoding="utf-8")
+    if "Lgf/g;->d(" in provider_source:
+        raise RuntimeError("Legacy APK 219 MlKitInitProvider implementation was not replaced")
+    if not (
+        "Lcom/google/mlkit/common/sdkinternal/MlKitContext;->" in provider_source
+        or "Lcom/google/mlkit/common/MlKit;->initialize(" in provider_source
+    ):
+        raise RuntimeError(
+            "MlKitInitProvider does not call the ML Kit 18.11 initialization path"
+        )
+
     required = (
+        "com/google/mlkit/common/internal/MlKitInitProvider.smali",
+        "com/google/mlkit/common/internal/MlKitComponentDiscoveryService.smali",
+        "com/google/mlkit/common/internal/CommonComponentRegistrar.smali",
+        "com/google/mlkit/nl/translate/NaturalLanguageTranslateRegistrar.smali",
         "com/google/mlkit/common/model/RemoteModelManager.smali",
         "com/google/mlkit/common/model/DownloadConditions.smali",
         "com/google/mlkit/common/model/DownloadConditions$Builder.smali",
