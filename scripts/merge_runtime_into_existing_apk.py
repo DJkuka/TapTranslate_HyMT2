@@ -17,6 +17,8 @@ RUNTIME_PREFIXES = (
     # RemoteModelManager APIs used by the language-pack manager.
     "com/google/mlkit/common",
     "com/google/mlkit/nl/translate",
+    # TranslateLanguage references implementation classes in this internal package.
+    "com/google/android/gms/internal/mlkit_translate",
     "dev/ffmpegkit/llama",
     "kotlinx",
     "kotlin",
@@ -257,6 +259,7 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
                     if rel.as_posix().startswith((
                         "com/google/mlkit/common/",
                         "com/google/mlkit/nl/translate/",
+                        "com/google/android/gms/internal/mlkit_translate/",
                     )):
                         print("Keeping APK 219 ML Kit class on duplicate:", rel.as_posix())
                         skipped_identical += 1
@@ -285,6 +288,8 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
         "com/google/mlkit/nl/translate/TranslateRemoteModel.smali",
         "com/google/mlkit/nl/translate/TranslateRemoteModel$Builder.smali",
         "com/google/mlkit/nl/translate/TranslateLanguage.smali",
+        # TranslateLanguage.<clinit> in ML Kit Translate 17.0.3 references this class.
+        "com/google/android/gms/internal/mlkit_translate/zzw.smali",
     )
     missing = [rel for rel in required if locate_smali(root, rel) is None]
     if missing:

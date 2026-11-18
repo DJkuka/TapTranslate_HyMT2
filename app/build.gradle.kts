@@ -57,7 +57,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.21.1")
     implementation("com.quickbirdstudios:opencv:4.5.3.0")
-    // Compile against ML Kit APIs already present in APK 219; do not duplicate SDK classes in helper APK.
+    // Package ML Kit Translate runtime classes; the APK219 merge keeps existing host duplicates and adds missing dependencies.
     implementation("com.google.mlkit:translate:17.0.3")
     testImplementation("junit:junit:4.13.2")
 }
