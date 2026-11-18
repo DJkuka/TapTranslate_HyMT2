@@ -29,13 +29,18 @@ class LanguagePackManagerActivity : Activity() {
     private var downloadedMlKit = emptySet<String>()
     private var loadingMlKit = false
     private var mlKitError: String? = null
+    private var mlKitStatus: String? = null
     private val busyMlKit = HashSet<String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         title = "Языковые пакеты"
         buildScreen()
-        refreshMlKit()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::root.isInitialized) refreshMlKit()
     }
 
     private fun buildScreen() {
@@ -133,6 +138,7 @@ class LanguagePackManagerActivity : Activity() {
             loadingMlKit -> addText("Получаю список загруженных моделей ML Kit…", 12f, false, 4)
             mlKitError != null -> addText("Ошибка ML Kit: " + mlKitError, 12f, false, 4)
         }
+        mlKitStatus?.let { addText(it, 12f, false, 6) }
         val supported = try {
             TranslateLanguage.getAllLanguages().distinct().sorted()
         } catch (t: Throwable) {
@@ -226,51 +232,77 @@ class LanguagePackManagerActivity : Activity() {
         if (loadingMlKit) return
         loadingMlKit = true
         mlKitError = null
+        mlKitStatus = "Обновляю состояние языковых моделей…"
         render()
+        Log.i(TAG, "Refreshing downloaded ML Kit translation models")
         try {
             RemoteModelManager.getInstance()
                 .getDownloadedModels(TranslateRemoteModel::class.java)
-                .addOnSuccessListener { models ->
+                .addOnSuccessListener(this) { models ->
                     downloadedMlKit = models.mapNotNull { it.language }.toSet()
                     loadingMlKit = false
+                    mlKitStatus = "На устройстве загружено языков: " + downloadedMlKit.size
+                    Log.i(TAG, "Downloaded ML Kit translation languages: " + downloadedMlKit.sorted())
                     render()
                 }
-                .addOnFailureListener { error ->
+                .addOnFailureListener(this) { error ->
                     loadingMlKit = false
-                    mlKitError = error.message ?: error.javaClass.simpleName
+                    mlKitError = describeMlKitError(error)
+                    mlKitStatus = "Не удалось прочитать состояние моделей."
+                    Log.e(TAG, "Could not refresh downloaded ML Kit translation models", error)
                     render()
                 }
         } catch (t: Throwable) {
             loadingMlKit = false
-            mlKitError = t.message ?: t.javaClass.simpleName
+            mlKitError = describeMlKitError(t)
+            mlKitStatus = "Ошибка при обращении к менеджеру моделей."
+            Log.e(TAG, "Could not request downloaded ML Kit translation models", t)
             render()
         }
     }
 
     private fun downloadMlKit(code: String, name: String) {
         if (!busyMlKit.add(code)) return
+        mlKitError = null
+        mlKitStatus = "Подготавливаю загрузку языка «" + name + "»…"
+        Log.i(TAG, "ML Kit download requested for language=$code")
         render()
         try {
             val model = TranslateRemoteModel.Builder(code).build()
             val builder = DownloadConditions.Builder()
-            if (getPreferences(MODE_PRIVATE).getBoolean(KEY_WIFI_ONLY, true)) builder.requireWifi()
+            val wifiOnly = getPreferences(MODE_PRIVATE).getBoolean(KEY_WIFI_ONLY, true)
+            if (wifiOnly) builder.requireWifi()
             RemoteModelManager.getInstance()
                 .download(model, builder.build())
-                .addOnSuccessListener {
+                .addOnSuccessListener(this) {
                     busyMlKit.remove(code)
+                    mlKitStatus = "ML Kit сообщил об успешной загрузке «" + name + "». Проверяю список…"
+                    Log.i(TAG, "ML Kit download succeeded for language=$code")
                     Toast.makeText(this, "Пакет ML Kit «" + name + "» загружен.", Toast.LENGTH_LONG).show()
                     refreshMlKit()
                 }
-                .addOnFailureListener { error ->
+                .addOnFailureListener(this) { error ->
                     busyMlKit.remove(code)
-                    mlKitError = error.message ?: error.javaClass.simpleName
+                    mlKitError = describeMlKitError(error)
+                    mlKitStatus = "Загрузка языка «" + name + "» завершилась ошибкой."
+                    Log.e(TAG, "ML Kit download failed for language=$code", error)
                     render()
                 }
+            mlKitStatus = "Запрос передан ML Kit для языка «" + name + "». " +
+                if (wifiOnly) "Ожидается сеть Wi-Fi без ограничения по трафику." else "Загрузка разрешена через любую сеть."
+            render()
         } catch (t: Throwable) {
             busyMlKit.remove(code)
-            mlKitError = t.message ?: t.javaClass.simpleName
+            mlKitError = describeMlKitError(t)
+            mlKitStatus = "Не удалось запустить загрузку языка «" + name + "»."
+            Log.e(TAG, "Could not start ML Kit download for language=$code", t)
             render()
         }
+    }
+
+    private fun describeMlKitError(error: Throwable): String {
+        val message = error.message?.takeIf { it.isNotBlank() } ?: "без подробного сообщения"
+        return error.javaClass.name + ": " + message
     }
 
     private fun confirmDeleteMlKit(code: String, name: String) {
@@ -287,24 +319,33 @@ class LanguagePackManagerActivity : Activity() {
 
     private fun deleteMlKit(code: String, name: String) {
         if (!busyMlKit.add(code)) return
+        mlKitError = null
+        mlKitStatus = "Удаляю языковую модель «" + name + "»…"
+        Log.i(TAG, "ML Kit delete requested for language=$code")
         render()
         try {
             val model = TranslateRemoteModel.Builder(code).build()
             RemoteModelManager.getInstance()
                 .deleteDownloadedModel(model)
-                .addOnSuccessListener {
+                .addOnSuccessListener(this) {
                     busyMlKit.remove(code)
+                    mlKitStatus = "Модель «" + name + "» удалена. Обновляю список…"
+                    Log.i(TAG, "ML Kit delete succeeded for language=$code")
                     Toast.makeText(this, "Пакет ML Kit «" + name + "» удалён.", Toast.LENGTH_SHORT).show()
                     refreshMlKit()
                 }
-                .addOnFailureListener { error ->
+                .addOnFailureListener(this) { error ->
                     busyMlKit.remove(code)
-                    mlKitError = error.message ?: error.javaClass.simpleName
+                    mlKitError = describeMlKitError(error)
+                    mlKitStatus = "Не удалось удалить модель «" + name + "»."
+                    Log.e(TAG, "ML Kit delete failed for language=$code", error)
                     render()
                 }
         } catch (t: Throwable) {
             busyMlKit.remove(code)
-            mlKitError = t.message ?: t.javaClass.simpleName
+            mlKitError = describeMlKitError(t)
+            mlKitStatus = "Не удалось запустить удаление модели «" + name + "»."
+            Log.e(TAG, "Could not start ML Kit delete for language=$code", t)
             render()
         }
     }

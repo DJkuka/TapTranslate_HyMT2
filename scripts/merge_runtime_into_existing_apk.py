@@ -18,6 +18,7 @@ RUNTIME_PREFIXES = (
     "com/google/mlkit/common",
     "com/google/mlkit/nl/translate",
     # TranslateLanguage references implementation classes in this internal package.
+    "com/google/android/gms/internal/mlkit_common",
     "com/google/android/gms/internal/mlkit_translate",
     "dev/ffmpegkit/llama",
     "kotlinx",
@@ -259,6 +260,7 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
                     if rel.as_posix().startswith((
                         "com/google/mlkit/common/",
                         "com/google/mlkit/nl/translate/",
+                        "com/google/android/gms/internal/mlkit_common/",
                         "com/google/android/gms/internal/mlkit_translate/",
                     )):
                         print("Keeping APK 219 ML Kit class on duplicate:", rel.as_posix())
@@ -289,6 +291,36 @@ def verify_mlkit_model_manager_classes(root: Path) -> None:
         "com/google/mlkit/nl/translate/TranslateRemoteModel$Builder.smali",
         "com/google/mlkit/nl/translate/TranslateLanguage.smali",
         # TranslateLanguage.<clinit> in ML Kit Translate 17.0.3 references this class.
+        "com/google/android/gms/internal/mlkit_common/zza.smali",
+        "com/google/android/gms/internal/mlkit_common/zzaf.smali",
+        "com/google/android/gms/internal/mlkit_common/zzah.smali",
+        "com/google/android/gms/internal/mlkit_common/zzai.smali",
+        "com/google/android/gms/internal/mlkit_common/zzav.smali",
+        "com/google/android/gms/internal/mlkit_common/zzaw.smali",
+        "com/google/android/gms/internal/mlkit_common/zzh.smali",
+        "com/google/android/gms/internal/mlkit_common/zzi.smali",
+        "com/google/android/gms/internal/mlkit_common/zzlm.smali",
+        "com/google/android/gms/internal/mlkit_common/zzlo.smali",
+        "com/google/android/gms/internal/mlkit_common/zzmh.smali",
+        "com/google/android/gms/internal/mlkit_common/zzmj.smali",
+        "com/google/android/gms/internal/mlkit_common/zzmm.smali",
+        "com/google/android/gms/internal/mlkit_common/zzmn.smali",
+        "com/google/android/gms/internal/mlkit_common/zzmp.smali",
+        "com/google/android/gms/internal/mlkit_common/zzmu.smali",
+        "com/google/android/gms/internal/mlkit_common/zzmv.smali",
+        "com/google/android/gms/internal/mlkit_common/zzmw.smali",
+        "com/google/android/gms/internal/mlkit_common/zzna.smali",
+        "com/google/android/gms/internal/mlkit_common/zzne.smali",
+        "com/google/android/gms/internal/mlkit_common/zzq.smali",
+        "com/google/android/gms/internal/mlkit_common/zzr.smali",
+        "com/google/android/gms/internal/mlkit_common/zzrr.smali",
+        "com/google/android/gms/internal/mlkit_common/zzry.smali",
+        "com/google/android/gms/internal/mlkit_common/zzsh.smali",
+        "com/google/android/gms/internal/mlkit_common/zzsi.smali",
+        "com/google/android/gms/internal/mlkit_common/zzsj.smali",
+        "com/google/android/gms/internal/mlkit_common/zzsk.smali",
+        "com/google/android/gms/internal/mlkit_common/zzss.smali",
+        "com/google/android/gms/internal/mlkit_common/zzu.smali",
         "com/google/android/gms/internal/mlkit_translate/zzw.smali",
     )
     missing = [rel for rel in required if locate_smali(root, rel) is None]
