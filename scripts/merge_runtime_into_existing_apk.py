@@ -349,30 +349,36 @@ def verify_preserved_payload(base_apk: Path, output_apk: Path) -> None:
             if name not in new_names or original.read(name) != built.read(name):
                 raise RuntimeError("Unrelated APK 219 native library changed: " + name)
 
-        # classes3.dex is deliberately rebuilt because APK 219 hosts the two
-        # Tesseract integration hooks in smali_classes3 (ca/b2 and vh/a).
-        # Every other original DEX except classes5.dex must remain byte-identical.
-        expected_hook_dex = "classes3.dex"
+        # APK 219 ca/b2 is in classes2.dex; vh/a is in classes3.dex.
+        # Both are intentionally rebuilt because each receives one Tesseract hook.
+        hook_symbols_by_dex = {
+            "classes2.dex": (b"beforeLanguageCheck",),
+            "classes3.dex": (b"persistDownloadedPack",),
+        }
+        target_hook_dexes = set(hook_symbols_by_dex)
+
+        # Every original DEX other than the actual hook targets and classes5.dex
+        # must remain byte-identical.
         for name in old_names:
             if not (name.startswith("classes") and name.endswith(".dex")):
                 continue
-            if name in ("classes5.dex", expected_hook_dex):
+            if name == "classes5.dex" or name in target_hook_dexes:
                 continue
             if name not in new_names or original.read(name) != built.read(name):
                 raise RuntimeError("Unrelated DEX changed during runtime merge: " + name)
 
-        if expected_hook_dex not in old_names or expected_hook_dex not in new_names:
-            raise RuntimeError("APK 219 Tesseract host DEX classes3.dex is missing")
-        original_hook_dex = original.read(expected_hook_dex)
-        merged_hook_dex = built.read(expected_hook_dex)
-        if original_hook_dex == merged_hook_dex:
-            raise RuntimeError("Tesseract host hooks did not modify classes3.dex")
-        for symbol in (b"beforeLanguageCheck", b"persistDownloadedPack"):
-            if symbol not in merged_hook_dex:
-                raise RuntimeError(
-                    "Final classes3.dex is missing Tesseract hook: "
-                    + symbol.decode("ascii")
-                )
+        for dex_name, symbols in hook_symbols_by_dex.items():
+            if dex_name not in old_names or dex_name not in new_names:
+                raise RuntimeError("APK 219 Tesseract host DEX is missing: " + dex_name)
+            if original.read(dex_name) == built.read(dex_name):
+                raise RuntimeError("Expected Tesseract hook did not modify " + dex_name)
+            merged_dex = built.read(dex_name)
+            for symbol in symbols:
+                if symbol not in merged_dex:
+                    raise RuntimeError(
+                        "Final " + dex_name + " is missing Tesseract hook: "
+                        + symbol.decode("ascii")
+                    )
 
         if "classes5.dex" not in new_names:
             raise RuntimeError("Final APK has no classes5.dex")
