@@ -122,11 +122,11 @@ llama_sampler *make_sampler(
         llama_sampler_chain_init(llama_sampler_chain_default_params());
 
     if (repetition_penalty > 1.0f) {
-        const int32_t n_vocab = llama_vocab_n_tokens(vocab);
         const int32_t penalty_last_n = std::max(1, context_size);
+        // llama.cpp b9878 removed the vocabulary-size parameter from this API.
         llama_sampler_chain_add(
             sampler, llama_sampler_init_penalties(
-                n_vocab, penalty_last_n, repetition_penalty, 0.0f, 0.0f));
+                penalty_last_n, repetition_penalty, 0.0f, 0.0f));
     }
 
     if (temperature <= 0.0f) {
