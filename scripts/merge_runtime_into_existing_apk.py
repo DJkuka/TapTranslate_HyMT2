@@ -884,11 +884,17 @@ def verify_preserved_payload(base_apk: Path, output_apk: Path) -> None:
                         + symbol.decode("ascii")
                     )
 
-        if "classes5.dex" not in new_names:
-            raise RuntimeError("Final APK has no classes5.dex")
-        manager_dex = built.read("classes5.dex")
-        if b"LanguagePackManagerActivity" not in manager_dex:
-            raise RuntimeError("LanguagePackManagerActivity is missing from final classes5.dex")
+        dex_names = sorted(
+            name for name in new_names
+            if name == "classes.dex" or (name.startswith("classes") and name.endswith(".dex"))
+        )
+        if not dex_names:
+            raise RuntimeError("Final APK contains no DEX files")
+        if not any(
+            b"LanguagePackManagerActivity" in built.read(name)
+            for name in dex_names
+        ):
+            raise RuntimeError("LanguagePackManagerActivity is missing from all final DEX files")
 
         if "AndroidManifest.xml" not in new_names:
             raise RuntimeError("Final APK has no AndroidManifest.xml")
