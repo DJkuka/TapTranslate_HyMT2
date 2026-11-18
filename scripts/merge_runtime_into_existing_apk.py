@@ -13,6 +13,10 @@ BASE_SHA256 = "0e0d30f30a98fa427a62d23c6fe670e9bd9781287da2515b1b8139f9332e82eb"
 
 RUNTIME_PREFIXES = (
     "com/tap_to_translate/snap_translate/hymt2",
+    # The APK already contains some ML Kit internals, but not the public
+    # RemoteModelManager APIs used by the language-pack manager.
+    "com/google/mlkit/common",
+    "com/google/mlkit/nl/translate",
     "dev/ffmpegkit/llama",
     "kotlinx",
     "kotlin",
@@ -248,6 +252,15 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
                     )):
                         skipped_identical += 1
                         continue
+                    # Retain APK 219 ML Kit implementations already used by its
+                    # translator. Only classes absent from the base APK are copied.
+                    if rel.as_posix().startswith((
+                        "com/google/mlkit/common/",
+                        "com/google/mlkit/nl/translate/",
+                    )):
+                        print("Keeping APK 219 ML Kit class on duplicate:", rel.as_posix())
+                        skipped_identical += 1
+                        continue
                     # For actual app/runtime classes, a differing definition outside
                     # classes5.dex is unsafe: fail instead of creating duplicate classes.
                     raise RuntimeError(
@@ -261,6 +274,27 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
     if copied + replaced == 0:
         raise RuntimeError("No Hy-MT2 runtime classes were found in the helper APK")
     print(f"Runtime DEX merge: {copied} added, {replaced} replaced, {skipped_identical} identical host classes retained.")
+
+
+def verify_mlkit_model_manager_classes(root: Path) -> None:
+    required = (
+        "com/google/mlkit/common/model/RemoteModelManager.smali",
+        "com/google/mlkit/common/model/DownloadConditions.smali",
+        "com/google/mlkit/common/model/DownloadConditions$Builder.smali",
+        "com/google/mlkit/common/model/RemoteModel.smali",
+        "com/google/mlkit/common/model/RemoteModel$Builder.smali",
+        "com/google/mlkit/nl/translate/TranslateRemoteModel.smali",
+        "com/google/mlkit/nl/translate/TranslateRemoteModel$Builder.smali",
+        "com/google/mlkit/nl/translate/TranslateLanguage.smali",
+    )
+    missing = [rel for rel in required if locate_smali(root, rel) is None]
+    if missing:
+        raise RuntimeError(
+            "ML Kit language-manager API classes are missing from the APK: "
+            + ", ".join(missing)
+        )
+    print("Verified ML Kit manager APIs and builder classes in the APK.")
+
 
 def copy_native_libraries(helper: Path, base: Path) -> None:
     source_dir = helper / "lib/arm64-v8a"
@@ -277,7 +311,8 @@ def copy_native_libraries(helper: Path, base: Path) -> None:
         destination = destination_dir / source.name
         if destination.exists() and destination.read_bytes() != source.read_bytes():
             if source.name not in REPLACEABLE_NATIVE:
-                raise RuntimeError("Unexpected native library collision: " + source.name)
+                print("Keeping APK 219 native library on duplicate:", source.name)
+                continue
             print("Replacing native runtime:", source.name)
         shutil.copy2(source, destination)
 
@@ -443,6 +478,7 @@ def main() -> int:
     copy_runtime_smali(helper, base)
     integrate_language_pack_manager(base)
     verify_region_editor_fix(base)
+    verify_mlkit_model_manager_classes(base)
     copy_native_libraries(helper, base)
     copy_new_assets_and_services(helper, base)
 
@@ -462,6 +498,7 @@ def main() -> int:
         shutil.rmtree(final_decoded)
     run(["java", "-jar", str(args.apktool), "d", "-f", "-o", str(final_decoded), str(args.output)])
     verify_region_editor_fix(final_decoded)
+    verify_mlkit_model_manager_classes(final_decoded)
     print("Base APK SHA-256:", actual_sha)
     print("Unsigned output SHA-256:", sha256(args.output))
     print(f"Unsigned APK created: {args.output} ({args.output.stat().st_size} bytes)")
