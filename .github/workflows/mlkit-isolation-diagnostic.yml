@@ -1,0 +1,82 @@
+name: ML Kit isolated diagnostic and APK219 forensics
+on:
+  workflow_dispatch:
+  push:
+    branches: [ mlkit-isolation-diagnostic ]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: mlkit-isolation-diagnostic
+  cancel-in-progress: true
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+          accept-android-sdk-licenses: true
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Build standalone ML Kit diagnostic
+        run: |
+          set -euo pipefail
+          gradle --no-daemon -p diagnostics/mlkit-isolated :app:assembleDebug
+          gradle --no-daemon -p diagnostics/mlkit-isolated :app:dependencies --configuration debugRuntimeClasspath > mlkit-runtime-dependencies.txt
+          mkdir -p diagnostics-output
+          cp diagnostics/mlkit-isolated/app/build/outputs/apk/debug/app-debug.apk diagnostics-output/MLKit-Isolated-Diagnostic.apk
+          apkanalyzer manifest print diagnostics-output/MLKit-Isolated-Diagnostic.apk > diagnostics-output/isolated-manifest.txt
+          apkanalyzer dex packages diagnostics-output/MLKit-Isolated-Diagnostic.apk > diagnostics-output/isolated-dex-packages.txt
+          unzip -t diagnostics-output/MLKit-Isolated-Diagnostic.apk | tail -n 2
+      - name: Download base APK 219
+        uses: actions/download-artifact@v4
+        with:
+          name: TapTranslate-1.125-FontFit-AutoFill-HyMT2-Vulkan-unsigned
+          run-id: 43736943007
+          repository: ${{ github.repository }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/run219
+      - name: Decode base and map id.a
+        run: |
+          set -euo pipefail
+          base="input/run219/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk"
+          test -s "$base"
+          echo "0e0d30f30a98fa427a62d23c6fe670e9bd9781287da2515b1b8139f9332e82eb  $base" | sha256sum -c -
+          java -jar tools/apktool.jar d -f -o build/base219 "$base" >/dev/null
+          mkdir -p diagnostics-output/base219
+          {
+            echo "=== id.a declaration ==="
+            find build/base219/smali* -path '*/id/a.smali' -print -exec cat {} \; || true
+            echo "=== references to Lid/a; ==="
+            grep -R -n -F 'Lid/a;' build/base219/smali* || true
+            echo "=== Firebase component classes ==="
+            find build/base219/smali* -path '*/com/google/firebase/components/*.smali' -print | sort
+            echo "=== ComponentRuntime references ==="
+            grep -R -n -E 'ComponentRuntime|CycleDetector|ComponentDiscovery|ComponentRegistrar|Lid/a;' build/base219/smali* | head -n 1200 || true
+          } > diagnostics-output/base219/id-a-firebase-report.txt
+      - name: Decode isolated APK
+        run: |
+          set -euo pipefail
+          java -jar tools/apktool.jar d -f -o build/mlkit-isolated diagnostics-output/MLKit-Isolated-Diagnostic.apk >/dev/null
+          {
+            grep -n -A5 -B3 'MlKitInitProvider' build/mlkit-isolated/AndroidManifest.xml || true
+            find build/mlkit-isolated/smali* -path '*/com/google/firebase/components/*.smali' -print | sort
+          } > diagnostics-output/isolated-firebase-components.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MLKit-isolated-diagnostic
+          path: |
+            diagnostics-output/
+            mlkit-runtime-dependencies.txt
+          if-no-files-found: error
+          retention-days: 14
