@@ -2,6 +2,8 @@ name: Diagnose ML Kit registrar compatibility (APK 219)
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ mlkit-registrar-fix ]
 
 permissions:
   contents: read
