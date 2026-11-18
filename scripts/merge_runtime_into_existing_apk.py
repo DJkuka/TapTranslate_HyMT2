@@ -23,11 +23,11 @@ REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES = {
     "com/google/mlkit/nl/translate/NaturalLanguageTranslateRegistrar.smali",
 }
 
-# ML Kit 18.11 pulls newer Firebase Components, Encoders and DataTransport
-# packages. APK 219 already has older Firebase copies; keeping a mixed package
-# causes ComponentDiscovery to be missing or incompatible at ML Kit startup.
-# Replace overlapping classes in-place, with exactly one definition per class.
-REPLACEABLE_MLKIT_TRANSITIVE_PREFIXES = (
+# APK 219 already contains Firebase/DataTransport runtime used by Crashlytics
+# and Sessions. Keep those host definitions on collision and copy only classes
+# that are absent. Replacing these classes would unnecessarily rewrite the
+# original DEX and could break unrelated Firebase integrations.
+HOST_PREFERRED_MLKIT_TRANSITIVE_PREFIXES = (
     "com/google/firebase/components/",
     "com/google/firebase/encoders/",
     "com/google/android/datatransport/",
@@ -283,23 +283,15 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
                     print("Replacing APK 219 ML Kit bootstrap class with matching helper version:", rel_name)
                     continue
 
-                if any(rel_name.startswith(prefix) for prefix in REPLACEABLE_MLKIT_TRANSITIVE_PREFIXES):
-                    candidates = list(existing)
-                    if target.is_file():
-                        candidates.append(target)
-                    if len(candidates) > 1:
-                        raise RuntimeError(
-                            "Multiple DEX definitions found for ML Kit transitive class: "
-                            + rel_name + " -> " + ", ".join(str(p) for p in candidates)
-                        )
-                    destination = candidates[0] if candidates else target
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(source, destination)
-                    if candidates:
-                        replaced += 1
-                    else:
-                        copied += 1
-                    print("Merging matching ML Kit transitive class:", rel_name)
+                if (
+                    existing
+                    and any(
+                        rel_name.startswith(prefix)
+                        for prefix in HOST_PREFERRED_MLKIT_TRANSITIVE_PREFIXES
+                    )
+                ):
+                    print("Keeping APK 219 Firebase/DataTransport implementation:", rel_name)
+                    skipped_identical += 1
                     continue
 
                 preserve_exact = rel_name in PRESERVED_CLASSES
@@ -329,6 +321,7 @@ def copy_runtime_smali(helper: Path, base: Path) -> None:
                         "kotlin/",
                         "kotlinx/",
                         "org/jetbrains/annotations/",
+                        "androidx/annotation/",
                     )):
                         skipped_identical += 1
                         continue
