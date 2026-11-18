@@ -389,7 +389,16 @@ def verify_preserved_payload(base_apk: Path, output_apk: Path) -> None:
         if "AndroidManifest.xml" not in new_names:
             raise RuntimeError("Final APK has no AndroidManifest.xml")
         manifest = built.read("AndroidManifest.xml")
-        if b"LanguagePackManagerActivity" not in manifest:
+        # AndroidManifest.xml is binary AXML in the final APK. Apktool/aapt may
+        # encode its string pool as UTF-8 or UTF-16, so check all valid encodings
+        # rather than treating a UTF-8-only miss as a missing Activity.
+        activity_name = "LanguagePackManagerActivity"
+        encoded_names = (
+            activity_name.encode("utf-8"),
+            activity_name.encode("utf-16le"),
+            activity_name.encode("utf-16be"),
+        )
+        if not any(value in manifest for value in encoded_names):
             raise RuntimeError("LanguagePackManagerActivity is not registered in final manifest")
 
         signatures = [
