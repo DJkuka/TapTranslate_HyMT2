@@ -65,7 +65,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p test-model build
-          curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 --max-time 1200 \
+          curl --http1.1 --fail --location --retry 5 --retry-all-errors --connect-timeout 30 --max-time 1200 \
             "https://huggingface.co/tencent/Hy-MT2-1.8B-1.25Bit-GGUF/resolve/main/Hy-MT2-1.8B-1.25Bit.gguf?download=true" \
             -o test-model/Hy-MT2-1.8B-1.25Bit.gguf
           echo "cc497fe8f033b52b3b8b00a7669e9661435432f9d4cd43f7ed24400c01507a93  test-model/Hy-MT2-1.8B-1.25Bit.gguf" | sha256sum -c -
