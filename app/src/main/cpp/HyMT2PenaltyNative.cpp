@@ -1,9 +1,17 @@
 #include <jni.h>
 #include <android/log.h>
 #include <algorithm>
+#include <cerrno>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <dirent.h>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
+#include <sched.h>
+#include <unistd.h>
 
 #include "llama.h"
 
@@ -146,6 +154,150 @@ LlamaCtx *get_context(jlong handle) {
     auto *context = reinterpret_cast<LlamaCtx *>(handle);
     if (!context || !context->model || !context->ctx) return nullptr;
     return context;
+}
+} // namespace
+
+
+namespace {
+long read_cpu_value(const std::string &path) {
+    std::ifstream input(path);
+    long value = 0;
+    if (input.good()) input >> value;
+    return value;
+}
+
+bool is_cpu_online(int id) {
+    if (id == 0) return true;
+    const std::string path = "/sys/devices/system/cpu/cpu" + std::to_string(id) + "/online";
+    std::ifstream input(path);
+    if (!input.good()) return true;
+    int online = 0;
+    input >> online;
+    return online == 1;
+}
+
+uint64_t cpu_set_mask(const cpu_set_t &set) {
+    uint64_t mask = 0;
+    for (int cpu = 0; cpu < 64; ++cpu) {
+        if (CPU_ISSET(cpu, &set)) mask |= (1ULL << cpu);
+    }
+    return mask;
+}
+
+std::string mask_to_hex(uint64_t mask) {
+    char buffer[32];
+    std::snprintf(buffer, sizeof(buffer), "0x%llx",
+                  static_cast<unsigned long long>(mask));
+    return buffer;
+}
+
+std::string cpu_topology_json() {
+    const long configured = sysconf(_SC_NPROCESSORS_CONF);
+    const int count = static_cast<int>(std::max(1L, std::min(64L, configured > 0 ? configured : 1L)));
+    struct CpuInfo { int id; bool online; bool allowed; long max_freq; long capacity; };
+    std::vector<CpuInfo> cpus;
+    cpus.reserve(static_cast<size_t>(count));
+    long max_freq = 0;
+    long max_capacity = 0;
+    cpu_set_t allowed_set;
+    CPU_ZERO(&allowed_set);
+    const bool have_allowed = sched_getaffinity(getpid(), sizeof(allowed_set), &allowed_set) == 0;
+
+    for (int id = 0; id < count; ++id) {
+        const std::string base = "/sys/devices/system/cpu/cpu" + std::to_string(id) + "/";
+        long freq = read_cpu_value(base + "cpufreq/cpuinfo_max_freq");
+        if (freq <= 0) freq = read_cpu_value(base + "cpufreq/scaling_max_freq");
+        const long capacity = read_cpu_value(base + "cpu_capacity");
+        const bool online = is_cpu_online(id);
+        const bool allowed = !have_allowed || CPU_ISSET(id, &allowed_set);
+        cpus.push_back({id, online, allowed, freq, capacity});
+        if (online) {
+            max_freq = std::max(max_freq, freq);
+            max_capacity = std::max(max_capacity, capacity);
+        }
+    }
+
+    std::ostringstream out;
+    out << "{\"cpus\":[";
+    for (size_t i = 0; i < cpus.size(); ++i) {
+        const CpuInfo &cpu = cpus[i];
+        if (i != 0) out << ",";
+        const bool performance = cpu.online && (
+            max_capacity > 0 ? cpu.capacity == max_capacity :
+            (max_freq > 0 && cpu.max_freq == max_freq));
+        out << "{\"id\":" << cpu.id
+            << ",\"online\":" << (cpu.online ? "true" : "false")
+            << ",\"allowed\":" << (cpu.allowed ? "true" : "false")
+            << ",\"maxFreqKhz\":" << cpu.max_freq
+            << ",\"capacity\":" << cpu.capacity
+            << ",\"performance\":" << (performance ? "true" : "false")
+            << "}";
+    }
+    out << "]}";
+    return out.str();
+}
+
+std::string apply_cpu_affinity_json(uint64_t requested_mask) {
+    cpu_set_t target;
+    CPU_ZERO(&target);
+    const bool restore_system = requested_mask == 0;
+
+    if (restore_system) {
+        if (sched_getaffinity(getpid(), sizeof(target), &target) != 0) {
+            const int error = errno;
+            return "{\"error\":\"sched_getaffinity(main) failed\",\"errno\":" +
+                   std::to_string(error) + "}";
+        }
+    } else {
+        for (int cpu = 0; cpu < 64; ++cpu) {
+            if (requested_mask & (1ULL << cpu)) CPU_SET(cpu, &target);
+        }
+        if (CPU_COUNT(&target) == 0) {
+            return "{\"error\":\"empty CPU mask\"}";
+        }
+    }
+
+    DIR *tasks = opendir("/proc/self/task");
+    if (!tasks) {
+        const int error = errno;
+        return "{\"error\":\"cannot open /proc/self/task\",\"errno\":" +
+               std::to_string(error) + "}";
+    }
+
+    std::ostringstream out;
+    out << "{\"requested\":\""
+        << (restore_system ? "system-allowed" : mask_to_hex(requested_mask))
+        << "\",\"threads\":[";
+    bool first = true;
+    int changed = 0;
+    int failures = 0;
+    struct dirent *entry = nullptr;
+    while ((entry = readdir(tasks)) != nullptr) {
+        char *end = nullptr;
+        const long tid_value = std::strtol(entry->d_name, &end, 10);
+        if (end == entry->d_name || *end != 0 || tid_value <= 0) continue;
+        if (tid_value == getpid()) continue;
+
+        const pid_t tid = static_cast<pid_t>(tid_value);
+        errno = 0;
+        const int set_result = sched_setaffinity(tid, sizeof(target), &target);
+        const int set_errno = set_result == 0 ? 0 : errno;
+        cpu_set_t effective;
+        CPU_ZERO(&effective);
+        const int get_result = sched_getaffinity(tid, sizeof(effective), &effective);
+        if (set_result == 0) ++changed; else ++failures;
+        if (!first) out << ",";
+        first = false;
+        out << "{\"tid\":" << tid
+            << ",\"rc\":" << set_result
+            << ",\"errno\":" << set_errno
+            << ",\"effective\":\""
+            << (get_result == 0 ? mask_to_hex(cpu_set_mask(effective)) : "unavailable")
+            << "\"}";
+    }
+    closedir(tasks);
+    out << "],\"changed\":" << changed << ",\"failures\":" << failures << "}";
+    return out.str();
 }
 } // namespace
 
@@ -300,4 +452,19 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
         ",\"generateTimeMs\":" + std::to_string(generation_ms) + "}";
     return env->NewStringUTF(json.c_str());
 }
+
+JNIEXPORT jstring JNICALL
+Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCpuTopologyJson(
+        JNIEnv *env, jobject) {
+    const std::string json = cpu_topology_json();
+    return env->NewStringUTF(json.c_str());
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeSetCpuAffinity(
+        JNIEnv *env, jobject, jlong requested_mask) {
+    const std::string json = apply_cpu_affinity_json(static_cast<uint64_t>(requested_mask));
+    return env->NewStringUTF(json.c_str());
+}
+
 } // extern "C"
