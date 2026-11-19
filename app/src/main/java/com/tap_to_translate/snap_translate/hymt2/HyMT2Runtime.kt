@@ -73,6 +73,9 @@ object HyMT2Runtime {
         return value?.let { runCatching { Uri.parse(it) }.getOrNull() }
     }
 
+    // Keep the original two-argument JVM signature used by APK 219 while
+    // exposing the optional model-kind argument to new code.
+    @JvmOverloads
     @JvmStatic
     fun setSelectedModelUri(context: Context, uri: Uri, modelKind: String = MODEL_KIND_Q4) {
         val safeKind = if (modelKind == MODEL_KIND_STQ1) MODEL_KIND_STQ1 else MODEL_KIND_Q4
