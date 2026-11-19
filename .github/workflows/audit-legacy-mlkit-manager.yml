@@ -1,0 +1,87 @@
+name: Audit legacy ML Kit model-manager compatibility
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ mlkit-legacy-manager-research ]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: mlkit-legacy-manager-audit
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout research branch
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Download exact APK 219 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: TapTranslate-1.125-FontFit-AutoFill-HyMT2-Vulkan-unsigned
+          run-id: 43736943007
+          repository: ${{ github.repository }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/base
+
+      - name: Download isolated ML Kit diagnostic artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: MLKit-Firebase-three-way-forensics
+          run-id: 44382807488
+          repository: ${{ github.repository }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/isolated-artifact
+
+      - name: Verify inputs and extract isolated diagnostic APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="input/base/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk"
+          test -s "$base"
+          echo "0e0d30f30a98fa427a62d23c6fe670e9bd9781287da2515b1b8139f9332e82eb  $base" | sha256sum -c -
+          isolated="$(find input/isolated-artifact -name 'MLKit-Isolated-Diagnostic.apk' -print -quit)"
+          test -n "$isolated"
+          mkdir -p input
+          cp "$isolated" input/MLKit-Isolated-Diagnostic.apk
+          sha256sum "$base" input/MLKit-Isolated-Diagnostic.apk | tee input/apk-sha256.txt
+
+      - name: Decode both APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -jar tools/apktool.jar d -f -o build/base219 input/base/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
+          java -jar tools/apktool.jar d -f -o build/isolated input/MLKit-Isolated-Diagnostic.apk
+
+      - name: Audit model-manager dependency closure and legacy ABI
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/audit_legacy_mlkit_manager.py
+          python3 scripts/audit_legacy_mlkit_manager.py \
+            --base build/base219 \
+            --helper build/isolated \
+            --out build/legacy-mlkit-manager-audit.txt
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: legacy-mlkit-manager-audit
+          path: |
+            build/legacy-mlkit-manager-audit.txt
+            input/apk-sha256.txt
+          if-no-files-found: ignore
+          retention-days: 14
