@@ -1,3 +1,4 @@
+# Build the standalone Language Packs settings entry alongside the APK merge.
 name: Build Tap Translate 1.125 FontFit AutoFill + Hy-MT2 Vulkan
 
 on:
