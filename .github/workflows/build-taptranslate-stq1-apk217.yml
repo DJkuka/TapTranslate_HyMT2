@@ -4,7 +4,7 @@ name: Build TapTranslate STQ1_0 on verified APK 219
 on:
   workflow_dispatch:
   push:
-    branches: [ stq1_0-apk219-final, stq1_0-apk219-standalone-parity, cpu-affinity-apk219-two-model-test ]
+    branches: [ stq1_0-apk219-final, stq1_0-apk219-standalone-parity ]
 
 permissions:
   contents: read
