@@ -2040,6 +2040,20 @@ def copy_helper_payload(helper: Path, base: Path) -> None:
     }
     for source in so_files:
         destination = out_lib / source.name
+        # The verified host APK already carries the legacy ML Kit Translate JNI
+        # library used by its original offline translator. The helper APK also
+        # packages libtranslate_jni.so through the newer compile-time ML Kit SDK.
+        # Never replace the host copy: preserving it avoids changing the existing
+        # translation engine and its native ABI. It is not part of the Hy-MT2
+        # runtime payload.
+        if source.name == "libtranslate_jni.so":
+            if not destination.is_file():
+                raise RuntimeError(
+                    "Verified base APK is missing its legacy ML Kit library: "
+                    + source.name
+                )
+            print("Preserving original host ML Kit library: " + source.name)
+            continue
         if destination.exists() and destination.read_bytes() != source.read_bytes():
             if source.name not in replaceable:
                 raise RuntimeError(f"Unexpected native library collision: {source.name}")
