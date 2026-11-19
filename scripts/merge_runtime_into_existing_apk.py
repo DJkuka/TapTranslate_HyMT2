@@ -37,6 +37,8 @@ REPLACEABLE_MLKIT_PACKAGE_PREFIXES = (
     "com/google/android/gms/internal/mlkit_translate/",
     "com/google/android/gms/internal/mlkit_vision_common/",
     "com/google/android/gms/internal/mlkit_vision_text_common/",
+    # The new JNI .so and its Java wrapper are a single matched runtime unit.
+    "dev/ffmpegkit/llama/",
 )
 
 # Google Play Services core is a versioned runtime family. Keep its classes
@@ -111,6 +113,8 @@ RUNTIME_PREFIXES = (
     "com/google/android/gms/internal/mlkit_translate",
     "com/google/android/gms/internal/mlkit_vision_common",
     "com/google/android/gms/internal/mlkit_vision_text_common",
+    # Llama JNI Java bindings must stay matched with the helper's native runtime.
+    "dev/ffmpegkit/llama",
     # DataTransport's generated Factory classes implement javax.inject.Provider.
     # APK 219 has the Factory implementation dependency missing, so include this
     # small API package from the matched helper runtime.
@@ -307,6 +311,88 @@ def verify_region_editor_fix(root: Path) -> None:
     print("Verified APK 219 Rect/String constructor in TranslationRegionEditor.addRegion().")
 
 
+def smali_class_api(path: Path) -> tuple[str | None, set[str], dict[str, set[str]], dict[str, set[str]]]:
+    """Extract hierarchy and callable/member signatures from a smali class."""
+    source = path.read_text(encoding="utf-8")
+    super_desc = next((line.split()[-1] for line in source.splitlines() if line.startswith(".super ")), None)
+    interfaces = {
+        line.split()[-1]
+        for line in source.splitlines()
+        if line.startswith(".implements ")
+    }
+    methods: dict[str, set[str]] = {}
+    fields: dict[str, set[str]] = {}
+    for line in source.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(".method "):
+            tokens = stripped.split()
+            signature = tokens[-1]
+            flags = set(tokens[1:-1])
+            methods[signature] = flags
+        elif stripped.startswith(".field "):
+            tokens = stripped.split()
+            member = tokens[-1].split("=", 1)[0]
+            flags = set(tokens[1:-1])
+            fields[member] = flags
+    return super_desc, interfaces, methods, fields
+
+
+def verify_llama_wrapper_compatibility(host: Path, helper: Path) -> None:
+    """Ensure the helper Llama wrapper preserves the base app's callable API."""
+    host_super, host_interfaces, host_methods, host_fields = smali_class_api(host)
+    helper_super, helper_interfaces, helper_methods, helper_fields = smali_class_api(helper)
+
+    if host_super != helper_super:
+        raise RuntimeError(
+            "Llama JNI wrapper superclass mismatch: base="
+            + str(host_super) + ", helper=" + str(helper_super)
+        )
+    missing_interfaces = sorted(host_interfaces - helper_interfaces)
+    if missing_interfaces:
+        raise RuntimeError(
+            "Helper Llama wrapper drops interfaces used by APK 219: "
+            + ", ".join(missing_interfaces)
+        )
+
+    missing_methods = sorted(
+        signature for signature, flags in host_methods.items()
+        if "private" not in flags and signature not in helper_methods
+    )
+    if missing_methods:
+        raise RuntimeError(
+            "Helper Llama wrapper is missing methods used by APK 219: "
+            + ", ".join(missing_methods)
+        )
+    incompatible_methods = sorted(
+        signature for signature, flags in host_methods.items()
+        if "private" not in flags
+        and signature in helper_methods
+        and ("static" in flags) != ("static" in helper_methods[signature])
+    )
+    if incompatible_methods:
+        raise RuntimeError(
+            "Helper Llama wrapper changes static/instance method ABI: "
+            + ", ".join(incompatible_methods)
+        )
+
+    missing_fields = sorted(
+        member for member, flags in host_fields.items()
+        if "private" not in flags and member not in helper_fields
+    )
+    if missing_fields:
+        raise RuntimeError(
+            "Helper Llama wrapper is missing fields used by APK 219: "
+            + ", ".join(missing_fields)
+        )
+
+    print(
+        "Verified Llama wrapper ABI compatibility:",
+        len(host_methods), "base methods;",
+        len(host_fields), "base fields;",
+        len(host_interfaces), "base interfaces."
+    )
+
+
 def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
     # Never inject thousands of helper definitions into APK 219's original
     # DEX files. The previous approach overwrote classes in their original
@@ -360,6 +446,13 @@ def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
                      if rel_name.startswith(prefix)),
                     None,
                 )
+                if rel_name.startswith("dev/ffmpegkit/llama/") and existing:
+                    if len(existing) != 1:
+                        raise RuntimeError(
+                            "Multiple base definitions found for Llama JNI wrapper: " + rel_name
+                        )
+                    verify_llama_wrapper_compatibility(existing[0], source)
+
                 if rel_name in REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES or replaceable_prefix is not None:
                     # Relocate the matched helper definition into the appended
                     # DEX partition. Delete any old APK 219 definitions rather
