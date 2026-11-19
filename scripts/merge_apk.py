@@ -850,8 +850,8 @@ def patch_atomic_backport_shims(base: Path, helper: Path) -> None:
     # those exact classes that the merged DEX actually references; do not copy an
     # entire Play Services package over the host's pinned legacy implementation.
     target_root = base / "smali_classes5"
-    ref_re = re.compile(r"L([^;\\s]+ExternalSynthetic[^;\\s]*);")
-    class_re = re.compile(r"^\\.class\\s+.*?\\s(L[^;]+);", re.MULTILINE)
+    ref_re = re.compile(r"L([^;\s]+ExternalSynthetic[^;\s]*);")
+    class_re = re.compile(r"^\.class\s+.*?\s(L[^;]+);", re.MULTILINE)
 
     def scan_synthetic_classes() -> tuple[set[str], set[str]]:
         descriptors: set[str] = set()
