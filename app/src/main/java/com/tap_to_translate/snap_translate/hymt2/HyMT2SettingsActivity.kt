@@ -118,6 +118,7 @@ class HyMT2SettingsActivity : Activity() {
             }
         }
         threadsSpinner = addSpinner(root, "Потоки CPU", HyMT2Settings.threadChoices.map { it.toString() })
+        addButton(root, "Распределение CPU по ядрам…") { startActivity(Intent(this, HyMT2CpuSettingsActivity::class.java)) }
         gpuLayerSpinner = addSpinner(root, "Слои Vulkan на GPU", HyMT2Settings.gpuLayerChoices.map { if (it == 0) "0 · CPU only" else it.toString() })
         contextSpinner = addSpinner(root, "Размер контекста (токены)", HyMT2Settings.contextChoices.map { it.toString() })
         maxTokensSpinner = addSpinner(root, "Максимум выходных токенов", HyMT2Settings.maxTokenChoices.map { it.toString() })
