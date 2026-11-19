@@ -1,0 +1,59 @@
+name: Inspect exact APK 219 Hy-MT2 classes
+
+on:
+  push:
+    branches: [ cpu-affinity-apk219-two-model-test ]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Download exact APK 219
+        uses: actions/download-artifact@v4
+        with:
+          name: TapTranslate-1.125-FontFit-AutoFill-HyMT2-Vulkan-unsigned
+          run-id: 43736943007
+          repository: ${{ github.repository }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/run219
+      - name: Verify and decode APK 219
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="input/run219/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk"
+          echo "0e0d30f30a98fa427a62d23c6fe670e9bd9781287da2515b1b8139f9332e82eb  $base" | sha256sum -c -
+          java -jar tools/apktool.jar d -f --no-src "$base" -o build/apk219-decoded
+      - name: Collect only APK 219 app smali and manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/inspection
+          cp build/apk219-decoded/AndroidManifest.xml build/inspection/
+          for root in build/apk219-decoded/smali*; do
+            [ -d "$root" ] || continue
+            package="$root/com/tap_to_translate/snap_translate/hymt2"
+            if [ -d "$package" ]; then
+              mkdir -p "build/inspection/$(basename "$root")/com/tap_to_translate/snap_translate"
+              cp -a "$package" "build/inspection/$(basename "$root")/com/tap_to_translate/snap_translate/"
+            fi
+          done
+          find build/inspection -type f -name '*.smali' | sort > build/inspection/smali-files.txt
+          grep -R -nE '^\\.class .*HyMT2(SettingsActivity|Settings|Runtime|PenaltyNative)' build/inspection --include='*.smali' > build/inspection/hymt2-class-index.txt || true
+          zip -qr build/apk219-hymt2-smali-inspection.zip build/inspection
+          echo "APK219_SMALI_FILES=$(wc -l < build/inspection/smali-files.txt)"
+          cat build/inspection/hymt2-class-index.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk219-hymt2-smali-inspection
+          path: build/apk219-hymt2-smali-inspection.zip
+          if-no-files-found: error
+          retention-days: 7
