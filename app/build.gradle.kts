@@ -32,6 +32,13 @@ android {
 
     kotlinOptions { jvmTarget = "17" }
 
+    // CPU-affinity helper only needs the top-level Hy-MT2 runtime. The host APK
+    // already contains OCR classes and native OCR libraries; do not resolve or
+    // package ONNX Runtime/OpenCV in this surgical CPU-only integration build.
+    sourceSets.getByName("main").java {
+        exclude("com/tap_to_translate/snap_translate/hymt2/ocr/**")
+    }
+
     buildTypes {
         debug { isMinifyEnabled = false }
         release { isMinifyEnabled = false }
@@ -55,7 +62,5 @@ android {
 dependencies {
     implementation(files("libs/llama-android-vulkan.aar"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.21.1")
-    implementation("com.quickbirdstudios:opencv:4.5.3.0")
     testImplementation("junit:junit:4.13.2")
 }
