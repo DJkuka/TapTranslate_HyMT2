@@ -4,6 +4,16 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <mutex>
+#include <unordered_map>
+#include <fstream>
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <sched.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#include "ggml-cpu.h"
 
 #include "llama.h"
 
@@ -123,6 +133,278 @@ LlamaCtx *get_context(jlong handle) {
     if (!context || !context->model || !context->ctx) return nullptr;
     return context;
 }
+
+} // namespace
+
+namespace {
+struct CpuAffinityPool {
+    ggml_threadpool_t pool = nullptr;
+    uint64_t mask = 0;
+    int threads = 0;
+};
+
+struct SavedCallerAffinity {
+    pid_t tid = -1;
+    cpu_set_t mask{};
+};
+
+std::mutex g_cpu_affinity_mutex;
+std::unordered_map<LlamaCtx *, CpuAffinityPool> g_cpu_affinity_pools;
+std::unordered_map<LlamaCtx *, SavedCallerAffinity> g_saved_caller_affinities;
+
+pid_t current_tid() {
+    return static_cast<pid_t>(syscall(__NR_gettid));
+}
+
+long read_cpu_value(const std::string &path) {
+    std::ifstream input(path);
+    long value = 0;
+    if (input.good()) input >> value;
+    return value;
+}
+
+bool is_cpu_online(int id) {
+    if (id == 0) return access("/sys/devices/system/cpu/cpu0", F_OK) == 0;
+    const std::string base = "/sys/devices/system/cpu/cpu" + std::to_string(id);
+    if (access(base.c_str(), F_OK) != 0) return false;
+    std::ifstream input(base + "/online");
+    if (!input.good()) return true;
+    int online = 0;
+    input >> online;
+    return online == 1;
+}
+
+uint64_t cpu_set_to_mask(const cpu_set_t &set) {
+    uint64_t mask = 0;
+    for (int cpu = 0; cpu < 64 && cpu < CPU_SETSIZE; ++cpu) {
+        if (CPU_ISSET(cpu, &set)) mask |= (1ULL << cpu);
+    }
+    return mask;
+}
+
+std::string mask_to_hex(uint64_t mask) {
+    char buffer[32];
+    std::snprintf(buffer, sizeof(buffer), "0x%llx",
+                  static_cast<unsigned long long>(mask));
+    return buffer;
+}
+
+uint64_t online_cpu_mask() {
+    const long configured = sysconf(_SC_NPROCESSORS_CONF);
+    const int count = static_cast<int>(
+        std::max(1L, std::min(64L, configured > 0 ? configured : 1L)));
+    uint64_t mask = 0;
+    for (int id = 0; id < count; ++id) {
+        if (is_cpu_online(id)) mask |= (1ULL << id);
+    }
+    return mask;
+}
+
+std::string cpu_topology_json() {
+    const long configured = sysconf(_SC_NPROCESSORS_CONF);
+    const int count = static_cast<int>(
+        std::max(1L, std::min(64L, configured > 0 ? configured : 1L)));
+
+    cpu_set_t allowed_set;
+    CPU_ZERO(&allowed_set);
+    const bool have_allowed =
+        sched_getaffinity(0, sizeof(allowed_set), &allowed_set) == 0;
+
+    struct CpuInfo {
+        int id;
+        bool online;
+        bool allowed;
+        long max_freq;
+        long capacity;
+    };
+
+    std::vector<CpuInfo> cpus;
+    cpus.reserve(static_cast<size_t>(count));
+    long max_freq = 0;
+    long max_capacity = 0;
+
+    for (int id = 0; id < count; ++id) {
+        const std::string base =
+            "/sys/devices/system/cpu/cpu" + std::to_string(id) + "/";
+        long freq = read_cpu_value(base + "cpufreq/cpuinfo_max_freq");
+        if (freq <= 0) {
+            freq = read_cpu_value(base + "cpufreq/scaling_max_freq");
+        }
+        const long capacity = read_cpu_value(base + "cpu_capacity");
+        const bool online = is_cpu_online(id);
+        const bool allowed = online && (!have_allowed || CPU_ISSET(id, &allowed_set));
+        cpus.push_back({id, online, allowed, freq, capacity});
+        if (online) {
+            max_freq = std::max(max_freq, freq);
+            max_capacity = std::max(max_capacity, capacity);
+        }
+    }
+
+    const char *classification_source =
+        max_capacity > 0 ? "cpu_capacity" : (max_freq > 0 ? "max_frequency" : "unknown");
+
+    std::ostringstream out;
+    out << "{\"affinitySupported\":" << (have_allowed ? "true" : "false")
+        << ",\"classificationSource\":\"" << classification_source
+        << "\",\"onlineMask\":\"" << mask_to_hex(online_cpu_mask())
+        << "\",\"cpus\":[";
+    for (size_t i = 0; i < cpus.size(); ++i) {
+        const CpuInfo &cpu = cpus[i];
+        if (i != 0) out << ",";
+        const bool performance = cpu.online && (
+            max_capacity > 0 ? cpu.capacity == max_capacity :
+            (max_freq > 0 && cpu.max_freq == max_freq));
+        out << "{\"id\":" << cpu.id
+            << ",\"online\":" << (cpu.online ? "true" : "false")
+            << ",\"allowed\":" << (cpu.allowed ? "true" : "false")
+            << ",\"maxFreqKhz\":" << cpu.max_freq
+            << ",\"capacity\":" << cpu.capacity
+            << ",\"performance\":" << (performance ? "true" : "false")
+            << "}";
+    }
+    out << "]}";
+    return out.str();
+}
+
+void restore_saved_caller_locked(LlamaCtx *context, std::ostringstream *report) {
+    auto saved = g_saved_caller_affinities.find(context);
+    if (saved == g_saved_caller_affinities.end()) return;
+
+    errno = 0;
+    const int rc = sched_setaffinity(
+        saved->second.tid, sizeof(saved->second.mask), &saved->second.mask);
+    const int saved_errno = rc == 0 ? 0 : errno;
+    if (report) {
+        *report << ",\"callerRestoreRc\":" << rc
+                << ",\"callerRestoreErrno\":" << saved_errno;
+    }
+    g_saved_caller_affinities.erase(saved);
+}
+
+std::string begin_cpu_affinity(
+        LlamaCtx *context, uint64_t requested_mask, int requested_threads) {
+    if (!context) return "{\"ok\":false,\"error\":\"invalid model handle\"}";
+
+    const int threads = std::max(1, std::min(8, requested_threads));
+
+    if (requested_mask == 0) {
+        std::lock_guard<std::mutex> lock(g_cpu_affinity_mutex);
+        auto existing = g_cpu_affinity_pools.find(context);
+        if (existing != g_cpu_affinity_pools.end()) {
+            llama_detach_threadpool(context->ctx);
+            ggml_threadpool_free(existing->second.pool);
+            g_cpu_affinity_pools.erase(existing);
+        }
+        std::ostringstream out;
+        out << "{\"ok\":true,\"mode\":\"system\",\"requestedMask\":\"system\","
+            << "\"effectiveMask\":\"system\",\"threads\":" << threads
+            << ",\"pool\":\"default\"}";
+        restore_saved_caller_locked(context, &out);
+        out << "}";
+        return out.str();
+    }
+
+    cpu_set_t caller_allowed;
+    CPU_ZERO(&caller_allowed);
+    if (sched_getaffinity(0, sizeof(caller_allowed), &caller_allowed) != 0) {
+        const int error = errno;
+        return "{\"ok\":false,\"error\":\"sched_getaffinity failed\",\"errno\":" +
+               std::to_string(error) + "}";
+    }
+
+    const uint64_t allowed_mask = cpu_set_to_mask(caller_allowed);
+    const uint64_t online_mask = online_cpu_mask();
+    const uint64_t effective_mask = requested_mask & allowed_mask & online_mask;
+    if (effective_mask == 0) {
+        return "{\"ok\":false,\"error\":\"no requested CPU is both online and allowed\","
+               "\"requestedMask\":\"" + mask_to_hex(requested_mask) +
+               "\",\"allowedMask\":\"" + mask_to_hex(allowed_mask) +
+               "\",\"onlineMask\":\"" + mask_to_hex(online_mask) + "\"}";
+    }
+
+    std::lock_guard<std::mutex> lock(g_cpu_affinity_mutex);
+
+    if (g_saved_caller_affinities.find(context) == g_saved_caller_affinities.end()) {
+        SavedCallerAffinity saved;
+        saved.tid = current_tid();
+        saved.mask = caller_allowed;
+        g_saved_caller_affinities.emplace(context, saved);
+    }
+
+    auto existing = g_cpu_affinity_pools.find(context);
+    if (existing != g_cpu_affinity_pools.end() &&
+        existing->second.mask == effective_mask &&
+        existing->second.threads == threads) {
+        std::ostringstream out;
+        out << "{\"ok\":true,\"mode\":\"custom\",\"requestedMask\":\""
+            << mask_to_hex(requested_mask) << "\",\"effectiveMask\":\""
+            << mask_to_hex(effective_mask) << "\",\"threads\":" << threads
+            << ",\"pool\":\"reused\"}";
+        return out.str();
+    }
+
+    if (existing != g_cpu_affinity_pools.end()) {
+        llama_detach_threadpool(context->ctx);
+        ggml_threadpool_free(existing->second.pool);
+        g_cpu_affinity_pools.erase(existing);
+    }
+
+    ggml_threadpool_params params = ggml_threadpool_params_default(threads);
+    params.paused = true;
+    params.strict_cpu = false;
+    for (int cpu = 0; cpu < GGML_MAX_N_THREADS; ++cpu) {
+        params.cpumask[cpu] =
+            cpu < 64 && (effective_mask & (1ULL << cpu)) != 0;
+    }
+
+    ggml_threadpool_t pool = ggml_threadpool_new(&params);
+    if (!pool) {
+        restore_saved_caller_locked(context, nullptr);
+        return "{\"ok\":false,\"error\":\"ggml_threadpool_new returned null\"}";
+    }
+
+    llama_attach_threadpool(context->ctx, pool, pool);
+    g_cpu_affinity_pools.emplace(
+        context, CpuAffinityPool{pool, effective_mask, threads});
+
+    std::ostringstream out;
+    out << "{\"ok\":true,\"mode\":\"custom\",\"requestedMask\":\""
+        << mask_to_hex(requested_mask) << "\",\"effectiveMask\":\""
+        << mask_to_hex(effective_mask) << "\",\"threads\":" << threads
+        << ",\"pool\":\"created\",\"strictCpu\":false}";
+    return out.str();
+}
+
+std::string end_cpu_affinity(LlamaCtx *context) {
+    if (!context) return "{\"ok\":false,\"error\":\"invalid model handle\"}";
+    std::lock_guard<std::mutex> lock(g_cpu_affinity_mutex);
+    auto existing = g_cpu_affinity_pools.find(context);
+    if (existing != g_cpu_affinity_pools.end()) {
+        ggml_threadpool_pause(existing->second.pool);
+    }
+    std::ostringstream out;
+    out << "{\"ok\":true,\"poolPaused\":"
+        << (existing != g_cpu_affinity_pools.end() ? "true" : "false");
+    restore_saved_caller_locked(context, &out);
+    out << "}";
+    return out.str();
+}
+
+std::string release_cpu_affinity(LlamaCtx *context) {
+    if (!context) return "{\"ok\":false,\"error\":\"invalid model handle\"}";
+    std::lock_guard<std::mutex> lock(g_cpu_affinity_mutex);
+    auto existing = g_cpu_affinity_pools.find(context);
+    if (existing != g_cpu_affinity_pools.end()) {
+        llama_detach_threadpool(context->ctx);
+        ggml_threadpool_free(existing->second.pool);
+        g_cpu_affinity_pools.erase(existing);
+    }
+    std::ostringstream out;
+    out << "{\"ok\":true,\"poolReleased\":true";
+    restore_saved_caller_locked(context, &out);
+    out << "}";
+    return out.str();
+}
 } // namespace
 
 extern "C" {
@@ -197,4 +479,35 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
         ",\"generateTimeMs\":" + std::to_string(generation_ms) + "}";
     return env->NewStringUTF(json.c_str());
 }
+
+JNIEXPORT jstring JNICALL
+Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCpuTopologyJson(
+        JNIEnv *env, jobject) {
+    const std::string json = cpu_topology_json();
+    return env->NewStringUTF(json.c_str());
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeSetCpuAffinity(
+        JNIEnv *env, jobject, jlong handle, jlong requested_mask, jint threads) {
+    LlamaCtx *context = get_context(handle);
+    const std::string json = begin_cpu_affinity(
+        context, static_cast<uint64_t>(requested_mask), static_cast<int>(threads));
+    return env->NewStringUTF(json.c_str());
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeEndCpuAffinity(
+        JNIEnv *env, jobject, jlong handle) {
+    const std::string json = end_cpu_affinity(get_context(handle));
+    return env->NewStringUTF(json.c_str());
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeReleaseCpuAffinity(
+        JNIEnv *env, jobject, jlong handle) {
+    const std::string json = release_cpu_affinity(get_context(handle));
+    return env->NewStringUTF(json.c_str());
+}
+
 } // extern "C"
