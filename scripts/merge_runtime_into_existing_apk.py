@@ -85,7 +85,6 @@ HOST_PREFERRED_MLKIT_TRANSITIVE_PREFIXES = (
 )
 
 RUNTIME_PREFIXES = (
-    "com/tap_to_translate/snap_translate/hymt2",
     # The APK already contains some ML Kit internals, but not the public
     # RemoteModelManager APIs used by the language-pack manager.
     "com/google/mlkit/common",
@@ -174,9 +173,18 @@ PRESERVED_CLASS_FAMILIES = (
     "com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor",
 )
 
+# Only these app-owned class families belong to this runtime merge.
+# Never copy the entire hymt2 package from the helper: it also contains older
+# copies of already-integrated Settings/OCR/UI classes and compiler-generated
+# lambdas that must remain exactly as APK 219 shipped them.
+APP_RUNTIME_CLASS_FAMILIES = (
+    "com/tap_to_translate/snap_translate/hymt2/HyMT2Runtime",
+    "com/tap_to_translate/snap_translate/hymt2/LanguagePackManagerActivity",
+    "com/tap_to_translate/snap_translate/hymt2/TesseractLanguagePackStore",
+)
+
 # HyMT2Runtime must be rebuilt in lockstep with the helper's updated Llama JNI
-# wrapper. Move only this exact class family; keep the rest of APK 219's
-# already-tested settings, OCR, editor, and UI classes untouched.
+# wrapper and preserve the public ABI already called by APK 219.
 REPLACEABLE_APP_RUNTIME_FAMILIES = (
     "com/tap_to_translate/snap_translate/hymt2/HyMT2Runtime",
 )
@@ -440,6 +448,7 @@ def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
     replaced_runtime_prefixes: set[str] = set()
     relocated_classes: set[str] = set()
     replaced_app_families: set[str] = set()
+    added_app_families: set[str] = set()
 
     for helper_dir in helper_dirs:
         target_root = target_roots[helper_dir]
@@ -579,6 +588,67 @@ def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
                 shutil.copy2(source, target)
                 copied += 1
 
+    # Merge only explicitly approved app class families. The helper contains
+    # the entire hymt2 source package, but most of it duplicates classes already
+    # integrated into APK 219 and may contain mismatched synthetic lambdas.
+    for helper_dir in helper_dirs:
+        target_root = target_roots[helper_dir]
+        for family in APP_RUNTIME_CLASS_FAMILIES:
+            parent = Path(family).parent
+            stem = Path(family).name
+            package_dir = helper_dir / parent
+            if not package_dir.is_dir():
+                continue
+            sources: list[Path] = []
+            exact = package_dir / (stem + ".smali")
+            if exact.is_file():
+                sources.append(exact)
+            sources.extend(sorted(package_dir.glob(stem + "$*.smali")))
+
+            for source in sources:
+                rel = source.relative_to(helper_dir)
+                rel_name = rel.as_posix()
+                target = target_root / rel
+                existing = [
+                    directory / rel
+                    for directory in smali_dirs(base)
+                    if (directory / rel).is_file() and directory != target_root
+                ]
+
+                replaceable = family in REPLACEABLE_APP_RUNTIME_FAMILIES
+                if replaceable:
+                    if rel_name == family + ".smali" and existing:
+                        if len(existing) != 1:
+                            raise RuntimeError(
+                                "Multiple base definitions found for app runtime class: " + rel_name
+                            )
+                        verify_class_abi(existing[0], source, "HyMT2Runtime")
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    for stale in existing:
+                        stale.unlink()
+                        print("Relocating APK 219 app runtime class:", rel_name)
+                    shutil.copy2(source, target)
+                    relocated_classes.add(rel_name)
+                    replaced_app_families.add(family)
+                    replaced += 1
+                    print("Placed updated app runtime class in", target_root.name + ":", rel_name)
+                else:
+                    if existing:
+                        if len(existing) == 1 and existing[0].read_bytes() == source.read_bytes():
+                            skipped_identical += 1
+                            added_app_families.add(family)
+                            continue
+                        raise RuntimeError(
+                            "New language-pack class unexpectedly collides with APK 219: "
+                            + rel_name
+                        )
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, target)
+                    relocated_classes.add(rel_name)
+                    added_app_families.add(family)
+                    copied += 1
+                    print("Added language-pack class to", target_root.name + ":", rel_name)
+
     missing_bootstrap = sorted(REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES - bootstrap_replaced)
     if missing_bootstrap:
         raise RuntimeError(
@@ -603,6 +673,12 @@ def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
         raise RuntimeError(
             "Helper APK app runtime families were not merged: "
             + ", ".join(missing_app_families)
+        )
+    missing_added_families = sorted(set(APP_RUNTIME_CLASS_FAMILIES) - set(REPLACEABLE_APP_RUNTIME_FAMILIES) - added_app_families)
+    if missing_added_families:
+        raise RuntimeError(
+            "Helper APK new language-pack class families were not merged: "
+            + ", ".join(missing_added_families)
         )
     if copied + replaced == 0:
         raise RuntimeError("No Hy-MT2 runtime classes were found in the helper APK")
@@ -675,7 +751,7 @@ def verify_helper_runtime_inventory(helper: Path, root: Path) -> None:
 
     # Include explicitly replaceable app runtime class families (currently
     # HyMT2Runtime and its generated nested/continuation classes).
-    for family in REPLACEABLE_APP_RUNTIME_FAMILIES:
+    for family in APP_RUNTIME_CLASS_FAMILIES:
         parent = Path(family).parent
         stem = Path(family).name
         for helper_dir in smali_dirs(helper):
@@ -727,7 +803,7 @@ def verify_helper_runtime_inventory(helper: Path, root: Path) -> None:
         prefix = next((p for p in REPLACEABLE_RUNTIME_PREFIXES if rel.startswith(p)), None)
         if prefix is None:
             family = next(
-                f for f in REPLACEABLE_APP_RUNTIME_FAMILIES
+                f for f in APP_RUNTIME_CLASS_FAMILIES
                 if rel == f + ".smali" or rel.startswith(f + "$")
             )
             prefix = "app-family:" + family
