@@ -28,6 +28,15 @@ object HyMT2PenaltyNative {
 
     external fun nativeCountPromptTokens(handle: Long, prompt: String, systemPrompt: String): Int
 
+    external fun nativeCpuTopologyJson(): String
+
+    external fun nativeSetCpuAffinity(mask: Long): String
+
+    fun cpuTopology(): org.json.JSONArray =
+        JSONObject(nativeCpuTopologyJson()).getJSONArray("cpus")
+
+    fun applyCpuAffinity(mask: Long): String = nativeSetCpuAffinity(mask)
+
     private external fun nativeComplete(
         handle: Long,
         prompt: String,
