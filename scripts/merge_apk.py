@@ -605,15 +605,29 @@ def patch_language_pack_manager_resources(base: Path) -> None:
     public = base / "res/values/public.xml"
     public_text = public.read_text(encoding="utf-8")
     if LANGUAGE_PACK_ROW_ID_NAME not in public_text:
-        if re.search(r'id="' + re.escape(LANGUAGE_PACK_ROW_ID) + r'"', public_text):
-            raise RuntimeError("Resource ID " + LANGUAGE_PACK_ROW_ID + " is already occupied")
-        anchor = f'    <public type="id" name="{PROFILE_ROW_ID_NAME}" id="{PROFILE_ROW_ID}" />\n'
+        # Resource IDs depend on the exact host APK. The old reserved ID is
+        # occupied, so allocate the first free ID in the same type/package range.
+        used_ids = {
+            int(value, 16)
+            for value in re.findall(
+                r'<public type="id" name="[^"]+" id="(0x[0-9a-fA-F]+)"',
+                public_text,
+            )
+        }
+        candidate = int(LANGUAGE_PACK_ROW_ID, 16)
+        while candidate in used_ids:
+            candidate += 1
+        if candidate > 0x7f0affff:
+            raise RuntimeError("No free public ID remains in the host id resource range")
+        global LANGUAGE_PACK_ROW_ID
+        LANGUAGE_PACK_ROW_ID = f"0x{candidate:08x}"
+        anchor = f'    <public type="id" name="{PROFILE_ROW_ID_NAME}" id="{PROFILE_ROW_ID}" />\\n'
         if public_text.count(anchor) != 1:
             raise RuntimeError("Could not locate display-profiles public ID")
         public.write_text(
             public_text.replace(
                 anchor,
-                anchor + f'    <public type="id" name="{LANGUAGE_PACK_ROW_ID_NAME}" id="{LANGUAGE_PACK_ROW_ID}" />\n',
+                anchor + f'    <public type="id" name="{LANGUAGE_PACK_ROW_ID_NAME}" id="{LANGUAGE_PACK_ROW_ID}" />\\n',
                 1,
             ),
             encoding="utf-8",
