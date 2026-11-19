@@ -1,0 +1,108 @@
+name: Build CPU affinity integration on exact APK 219
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ cpu-affinity-apk219-clean ]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: cpu-affinity-apk219-clean
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: '15859902'
+          packages: 'platform-tools'
+          accept-android-sdk-licenses: true
+
+      - name: Install Android platform, build tools, NDK and CMake
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Download and verify exact APK 219 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: TapTranslate-1.125-FontFit-AutoFill-HyMT2-Vulkan-unsigned
+          run-id: 43736943007
+          repository: ${{ github.repository }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/run219
+
+      - name: Prepare pinned Vulkan AAR and llama.cpp headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/libs build/vulkan-aar upstream
+          base="input/run219/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk"
+          test -s "$base"
+          echo "0e0d30f30a98fa427a62d23c6fe670e9bd9781287da2515b1b8139f9332e82eb  $base" | sha256sum -c -
+          curl --fail --location --retry 4 --retry-all-errors             "https://raw.githubusercontent.com/DJkuka/HyMT2_Vulkan_Standalone_Test/main/app/libs/llama-android-vulkan.aar"             -o app/libs/llama-android-vulkan.aar
+          echo "b2a15a3e297b4107575df52711a86e6a53e1a14fff497db5acb1837abe1f49bb  app/libs/llama-android-vulkan.aar" | sha256sum -c -
+          unzip -q app/libs/llama-android-vulkan.aar -d build/vulkan-aar
+          git clone --depth 1 --branch b9878 https://github.com/ggml-org/llama.cpp.git upstream/llama.cpp
+          test "$(git -C upstream/llama.cpp describe --tags --exact-match)" = "b9878"
+          echo "LLAMA_ROOT=$GITHUB_WORKSPACE/upstream/llama.cpp" >> "$GITHUB_ENV"
+          echo "VULKAN_AAR_NATIVE_DIR=$GITHUB_WORKSPACE/build/vulkan-aar/jni/arm64-v8a" >> "$GITHUB_ENV"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Compile helper and affinity JNI only
+        run: |
+          gradle --no-daemon -PllamaRoot="$LLAMA_ROOT" -PvulkanAarNativeDir="$VULKAN_AAR_NATIVE_DIR" :app:assembleDebug
+
+      - name: Verify JNI exports and helper classes
+        shell: bash
+        run: |
+          set -euo pipefail
+          helper="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$helper"
+          mkdir -p build/helper-lib
+          unzip -p "$helper" lib/arm64-v8a/libhymt2_jni.so > build/helper-lib/libhymt2_jni.so
+          llvm-readelf -Ws build/helper-lib/libhymt2_jni.so | grep -F nativeCpuTopologyJson
+          llvm-readelf -Ws build/helper-lib/libhymt2_jni.so | grep -F nativeSetCpuAffinity
+          llvm-readelf -Ws build/helper-lib/libhymt2_jni.so | grep -F nativeEndCpuAffinity
+          llvm-readelf -Ws build/helper-lib/libhymt2_jni.so | grep -F nativeReleaseCpuAffinity
+          unzip -l "$helper" | grep -F 'classes.dex'
+
+      - name: Merge only Hy-MT2 classes and affinity JNI into APK 219
+        run: |
+          python3 scripts/merge_cpu_affinity_apk219.py             --base-apk input/run219/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk             --helper-apk app/build/outputs/apk/debug/app-debug.apk             --apktool tools/apktool.jar             --zipalign "$ANDROID_HOME/build-tools/35.0.0/zipalign"             --aar-native-dir "$VULKAN_AAR_NATIVE_DIR"             --work build/cpu-affinity-merge             --output build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_CPU_Affinity_unsigned.apk
+
+      - name: Decode final APK and verify exact scoped changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          final="build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_CPU_Affinity_unsigned.apk"
+          java -jar tools/apktool.jar d -f --no-src "$final" -o build/final-check
+          root="build/final-check/smali_classes5/com/tap_to_translate/snap_translate/hymt2"
+          test -s "$root/HyMT2CpuAffinity.smali"
+          test -s "$root/HyMT2CpuSettingsActivity.smali"
+          grep -q 'nativeCpuTopologyJson' "$root/HyMT2PenaltyNative.smali"
+          grep -q 'HyMT2CpuSettingsActivity' build/final-check/AndroidManifest.xml
+          grep -q 'Распределение CPU по ядрам' "$root/HyMT2SettingsActivity.smali"
+          echo "Verified CPU settings Activity, manifest registration and JNI declarations."
+          sha256sum "$final"
+          ls -lh "$final"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TapTranslate-APK219-CPU-Affinity-unsigned
+          path: build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_CPU_Affinity_unsigned.apk
+          if-no-files-found: error
+          retention-days: 14
