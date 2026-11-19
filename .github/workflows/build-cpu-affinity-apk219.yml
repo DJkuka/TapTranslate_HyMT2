@@ -74,10 +74,10 @@ jobs:
           test -s "$helper"
           mkdir -p build/helper-lib
           unzip -p "$helper" lib/arm64-v8a/libhymt2_jni.so > build/helper-lib/libhymt2_jni.so
-          llvm-readelf -Ws build/helper-lib/libhymt2_jni.so | grep -F nativeCpuTopologyJson
-          llvm-readelf -Ws build/helper-lib/libhymt2_jni.so | grep -F nativeSetCpuAffinity
-          llvm-readelf -Ws build/helper-lib/libhymt2_jni.so | grep -F nativeEndCpuAffinity
-          llvm-readelf -Ws build/helper-lib/libhymt2_jni.so | grep -F nativeReleaseCpuAffinity
+          readelf -Ws build/helper-lib/libhymt2_jni.so | grep -F nativeCpuTopologyJson
+          readelf -Ws build/helper-lib/libhymt2_jni.so | grep -F nativeSetCpuAffinity
+          readelf -Ws build/helper-lib/libhymt2_jni.so | grep -F nativeEndCpuAffinity
+          readelf -Ws build/helper-lib/libhymt2_jni.so | grep -F nativeReleaseCpuAffinity
           unzip -l "$helper" | grep -F 'classes.dex'
 
       - name: Merge only Hy-MT2 classes and affinity JNI into APK 219
@@ -95,7 +95,7 @@ jobs:
           test -s "$root/HyMT2CpuSettingsActivity.smali"
           grep -q 'nativeCpuTopologyJson' "$root/HyMT2PenaltyNative.smali"
           grep -q 'HyMT2CpuSettingsActivity' build/final-check/AndroidManifest.xml
-          grep -q 'Распределение CPU по ядрам' "$root/HyMT2SettingsActivity.smali"
+          grep -q 'HyMT2CpuSettingsActivity' "$root/HyMT2SettingsActivity.smali"
           echo "Verified CPU settings Activity, manifest registration and JNI declarations."
           sha256sum "$final"
           ls -lh "$final"
