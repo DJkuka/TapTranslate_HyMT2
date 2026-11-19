@@ -51,11 +51,22 @@ object HyMT2CpuAffinity {
     }
 
     fun begin(context: Context, model: LlamaModel, threads: Int) {
-        val topology = topology()
-        val (mask, description) = selectedMask(context, topology)
-        val result = JSONObject(HyMT2PenaltyNative.nativeSetCpuAffinity(HyMT2PenaltyNative.handleForAffinity(model), mask, threads))
-        Log.i(TAG, "$description requested=${result.optString("requestedMask")} effective=${result.optString("effectiveMask")} result=$result")
-        if (!result.optBoolean("ok")) Log.w(TAG, "CPU affinity was not applied: $result")
+        val handle = HyMT2PenaltyNative.handleForAffinity(model)
+        try {
+            val topology = topology()
+            val (mask, description) = selectedMask(context, topology)
+            val result = JSONObject(HyMT2PenaltyNative.nativeSetCpuAffinity(handle, mask, threads))
+            Log.i(TAG, "$description requested=${result.optString("requestedMask")} effective=${result.optString("effectiveMask")} result=$result")
+            if (!result.optBoolean("ok")) {
+                Log.w(TAG, "CPU affinity was not applied; restoring system scheduler: $result")
+                runCatching { HyMT2PenaltyNative.nativeSetCpuAffinity(handle, 0L, threads) }
+                    .onFailure { Log.w(TAG, "Unable to reset CPU affinity; inference will continue with the current scheduler state", it) }
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "CPU affinity setup failed; inference will continue with system scheduler", t)
+            runCatching { HyMT2PenaltyNative.nativeSetCpuAffinity(handle, 0L, threads) }
+                .onFailure { Log.w(TAG, "Unable to reset CPU affinity after setup failure", it) }
+        }
     }
 
     fun end(model: LlamaModel) {
