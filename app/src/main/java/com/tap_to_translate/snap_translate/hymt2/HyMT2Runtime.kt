@@ -160,7 +160,7 @@ object HyMT2Runtime {
                 val message = try {
                     inferenceMutex.withLock {
                         modelMutex.withLock {
-                            loadedModel?.let { Llama.releaseModel(it) }
+                            loadedModel?.let { HyMT2CpuAffinity.release(it); Llama.releaseModel(it) }
                             loadedModel = null
                             loadedSource = null
                             loadedDescriptor?.close()
@@ -245,6 +245,8 @@ object HyMT2Runtime {
                                     prompt = prompt,
                                     systemPrompt = systemPrompt,
                                     maxTokens = effectiveMaxTokens,
+                                    context = appContext,
+                                    threads = options.threads,
                                 )
                                 // One OCR block must yield exactly one output line. If the
                                 // model wraps a sentence, flatten those wraps within this block.
@@ -376,6 +378,7 @@ $sourceText"""
         val existing = loadedModel
         if (existing != null && loadedSource == sourceKey) return@withLock existing
         if (existing != null) {
+            HyMT2CpuAffinity.release(existing)
             Llama.releaseModel(existing)
             loadedModel = null
             loadedSource = null
