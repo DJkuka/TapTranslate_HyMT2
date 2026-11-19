@@ -165,6 +165,30 @@ def main():
         if not (name.startswith("com/google/mlkit/") or name.startswith("com/google/android/gms/internal/mlkit_")):
             w(name)
     w()
+
+    # Full implementations of the obfuscated legacy model storage/download classes.
+    # These are the actual APK219 classes behind names such as ModelFileHelper;
+    # their short descriptors are needed to avoid substituting the modern runtime.
+    DUMP_TARGETS = (
+        "hf/b", "hf/c", "kf/c", "kf/e", "kf/f", "kf/i", "kf/l", "kf/p",
+        "gf/k", "gf/m", "gf/i", "jf/b", "jf/d",
+        "com/google/mlkit/nl/translate/internal/TranslatorImpl",
+        "com/google/mlkit/nl/translate/internal/TranslateJni",
+        "com/google/mlkit/nl/translate/NaturalLanguageTranslateRegistrar",
+    )
+    w("=== FULL APK219 SMALI FOR LEGACY TRANSLATE/MODEL STORAGE CLASSES ===")
+    for name in DUMP_TARGETS:
+        desc = "L" + name + ";"
+        p = inv.get(desc)
+        if p is None:
+            w(f"--- {name}: NOT FOUND")
+            continue
+        w(f"--- BEGIN {name} ---")
+        for line in read(p).splitlines():
+            w(line)
+        w(f"--- END {name} ---")
+        w()
+
     w("=== TRANSLATE MODEL RESOURCE METADATA ===")
     metadata = args.base / "res/raw/translate_models_metadata.json"
     if metadata.is_file():
