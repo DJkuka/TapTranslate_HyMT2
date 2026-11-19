@@ -126,7 +126,8 @@ RUNTIME_PREFIXES = (
     "org/jetbrains/annotations",
     "ai/onnxruntime",
     "com/paddle/ocr",
-    "org/opencv",
+    # APK 219 already ships OpenCV 4.5.3 for OCR. The pack manager does not
+    # use OpenCV; do not import a second copy from the helper APK.
     # AndroidX runtime dependencies resolved by the isolated ML Kit helper.
     "androidx/activity",
     "androidx/arch/core",
@@ -146,7 +147,6 @@ REPLACEABLE_NATIVE = {
     "libggml-vulkan.so",
     "libhymt2_jni.so",
     "libc++_shared.so",
-    "libopencv_java4.so",
 }
 
 REQUIRED_NATIVE = {
