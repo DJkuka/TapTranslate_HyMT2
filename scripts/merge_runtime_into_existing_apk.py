@@ -81,7 +81,10 @@ HOST_PREFERRED_MLKIT_TRANSITIVE_PREFIXES = (
     "com/google/firebase/components/",
     "com/google/firebase/encoders/",
     "com/google/android/datatransport/",
+    # Existing APK 219 OCR runtimes are independent of ML Kit pack management.
+    # Preserve their complete implementations instead of mixing a second SDK.
     "ai/onnxruntime/",
+    "com/paddle/ocr/",
 )
 
 RUNTIME_PREFIXES = (
@@ -534,7 +537,7 @@ def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
                         for prefix in HOST_PREFERRED_MLKIT_TRANSITIVE_PREFIXES
                     )
                 ):
-                    print("Keeping APK 219 Firebase/DataTransport implementation:", rel_name)
+                    print("Keeping APK 219 host runtime implementation:", rel_name)
                     skipped_identical += 1
                     continue
 
