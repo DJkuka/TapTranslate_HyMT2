@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deep, whole-DEX tracing of the legacy ML Kit translation/model storage code."""
 from __future__ import annotations
-import argparse, re
+import argparse, re, json
 from collections import deque
 from pathlib import Path
 
@@ -165,9 +165,26 @@ def main():
         if not (name.startswith("com/google/mlkit/") or name.startswith("com/google/android/gms/internal/mlkit_")):
             w(name)
     w()
-    w("=== MODEL STORAGE STRINGS IN APK RESOURCES ===")
-    # Resource files are scanned separately by workflow companion step if present.
-    w("See res/raw/translate_models_metadata.json in decoded APK; this report traces DEX only.")
+    w("=== TRANSLATE MODEL RESOURCE METADATA ===")
+    metadata = args.base / "res/raw/translate_models_metadata.json"
+    if metadata.is_file():
+        try:
+            meta = json.loads(metadata.read_text(encoding="utf-8"))
+            for package_name in ("PKG_HIGH", "PKG_LOW"):
+                entries = meta.get(package_name, {})
+                w(f"{package_name}: {len(entries)} model-pair entries")
+                for pair, row in sorted(entries.items()):
+                    caps = row.get("CAPS", {})
+                    w(
+                        f"{pair} DL_SZ={row.get('DL_SZ')} SZ={row.get('SZ')} "
+                        f"RV={row.get('RV')} HASH={row.get('HASH')} "
+                        f"L1={caps.get('L1')} L2={caps.get('L2')}"
+                    )
+            w(f"Metadata root keys: {sorted(meta.keys())}")
+        except Exception as exc:
+            w(f"Metadata parse failed: {type(exc).__name__}: {exc}")
+    else:
+        w("res/raw/translate_models_metadata.json: NOT FOUND in decoded APK")
     args.out.parent.mkdir(parents=True,exist_ok=True)
     args.out.write_text("\n".join(lines)+"\n",encoding="utf-8")
     print(f"Wrote {args.out}: {len(lines)} lines, {args.out.stat().st_size} bytes, {len(owners)} string-owning classes, {len(seen)} graph classes")
