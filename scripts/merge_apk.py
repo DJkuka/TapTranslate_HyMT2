@@ -579,6 +579,7 @@ def patch_ocr_resources(base: Path) -> None:
 
 def patch_language_pack_manager_resources(base: Path) -> None:
     """Add Language Packs as a standalone row in the application's primary Settings screen."""
+    global LANGUAGE_PACK_ROW_ID
     layout = base / "res/layout/fragment_settings.xml"
     text = layout.read_text(encoding="utf-8")
     if LANGUAGE_PACK_ROW_ID_NAME not in text:
@@ -619,7 +620,6 @@ def patch_language_pack_manager_resources(base: Path) -> None:
             candidate += 1
         if candidate > 0x7f0affff:
             raise RuntimeError("No free public ID remains in the host id resource range")
-        global LANGUAGE_PACK_ROW_ID
         LANGUAGE_PACK_ROW_ID = f"0x{candidate:08x}"
         anchor = f'    <public type="id" name="{PROFILE_ROW_ID_NAME}" id="{PROFILE_ROW_ID}" />\\n'
         if public_text.count(anchor) != 1:
