@@ -299,7 +299,7 @@ std::string begin_cpu_affinity(
         std::ostringstream out;
         out << "{\"ok\":true,\"mode\":\"system\",\"requestedMask\":\"system\","
             << "\"effectiveMask\":\"system\",\"threads\":" << threads
-            << ",\"pool\":\"default\"}";
+            << ",\"pool\":\"default\"";
         restore_saved_caller_locked(context, &out);
         out << "}";
         return out.str();
