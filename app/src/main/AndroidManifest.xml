@@ -14,6 +14,5 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name="com.tap_to_translate.snap_translate.hymt2.HyMT2CpuSettingsActivity" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="CPU affinity" />
     </application>
 </manifest>
