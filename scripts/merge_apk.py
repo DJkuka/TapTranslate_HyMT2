@@ -803,7 +803,7 @@ def patch_picker_callbacks(base: Path) -> None:
         print(f"Patched immediate Hy-MT2 picker launch: {description}")
 
 
-def patch_atomic_backport_shims(base: Path) -> None:
+def patch_atomic_backport_shims(base: Path, helper: Path) -> None:
     """Supply the two D8-generated CAS forwarding helpers referenced by coroutines."""
     shims = {
         "androidx/concurrent/futures/AbstractResolvableFuture$SafeAtomicHelper$$ExternalSyntheticBackportWithForwarding0.smali": '''.class public final Landroidx/concurrent/futures/AbstractResolvableFuture$SafeAtomicHelper$$ExternalSyntheticBackportWithForwarding0;
@@ -844,21 +844,62 @@ def patch_atomic_backport_shims(base: Path) -> None:
         path.write_text(content, encoding="utf-8")
         print(f"Added D8 CAS backport shim: {rel}")
 
-    # Audit that every referenced D8 synthetic class has a corresponding definition.
-    descriptors: set[str] = set()
-    references: set[str] = set()
-    ref_re = re.compile(r"L([^;\s]+ExternalSynthetic[^;\s]*);")
-    class_re = re.compile(r"^\.class\s+.*?\s(L[^;]+);", re.MULTILINE)
-    for smali_root in base.glob("smali*"):
-        if not smali_root.is_dir():
-            continue
-        for smali_file in smali_root.rglob("*.smali"):
-            source = smali_file.read_text(encoding="utf-8", errors="ignore")
-            descriptors.update(value + ";" for value in class_re.findall(source))
-            references.update("L" + value + ";" for value in ref_re.findall(source))
-    missing = sorted(references - descriptors)
-    if missing:
-        raise RuntimeError("Unresolved D8 synthetic class references remain: " + ", ".join(missing))
+    # Resolve helper-generated D8 synthetic classes by exact descriptor. The
+    # helper APK can contain synthetic support classes in Google namespaces that
+    # are intentionally excluded from the broad package import above. Import only
+    # those exact classes that the merged DEX actually references; do not copy an
+    # entire Play Services package over the host's pinned legacy implementation.
+    target_root = base / "smali_classes5"
+    ref_re = re.compile(r"L([^;\\s]+ExternalSynthetic[^;\\s]*);")
+    class_re = re.compile(r"^\\.class\\s+.*?\\s(L[^;]+);", re.MULTILINE)
+
+    def scan_synthetic_classes() -> tuple[set[str], set[str]]:
+        descriptors: set[str] = set()
+        references: set[str] = set()
+        for smali_root in base.glob("smali*"):
+            if not smali_root.is_dir():
+                continue
+            for smali_file in smali_root.rglob("*.smali"):
+                source = smali_file.read_text(encoding="utf-8", errors="ignore")
+                descriptors.update(value + ";" for value in class_re.findall(source))
+                references.update("L" + value + ";" for value in ref_re.findall(source))
+        return descriptors, references
+
+    helper_roots = [directory for directory in helper.glob("smali*") if directory.is_dir()]
+    while True:
+        descriptors, references = scan_synthetic_classes()
+        missing = sorted(references - descriptors)
+        if not missing:
+            break
+        copied_this_pass = 0
+        for descriptor in missing:
+            relative = Path(descriptor[1:-1] + ".smali")
+            candidates = [root / relative for root in helper_roots if (root / relative).is_file()]
+            if not candidates:
+                raise RuntimeError(
+                    "Missing D8 synthetic class in both host and helper APK: " + descriptor
+                )
+            source = candidates[0]
+            source_bytes = source.read_bytes()
+            if any(candidate.read_bytes() != source_bytes for candidate in candidates[1:]):
+                raise RuntimeError("Conflicting helper D8 synthetic definitions: " + descriptor)
+
+            # A host definition would already have appeared in the descriptor scan.
+            # Still refuse to overwrite any unexpected filesystem collision.
+            destination = target_root / relative
+            if destination.exists():
+                if destination.read_bytes() != source_bytes:
+                    raise RuntimeError("D8 synthetic class destination collision: " + descriptor)
+            else:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+                copied_this_pass += 1
+                print("Imported referenced D8 synthetic helper: " + descriptor)
+        if copied_this_pass == 0:
+            raise RuntimeError(
+                "D8 synthetic reference closure did not converge: " + ", ".join(missing)
+            )
+
     print(f"Verified all {len(references)} referenced D8 synthetic classes are present")
 
 def patch_settings_click(base: Path) -> None:
@@ -2132,7 +2173,7 @@ def main() -> int:
     preserved_ocr = snapshot_preserved_ocr(base)
 
     copy_helper_payload(helper, base)
-    patch_atomic_backport_shims(base)
+    patch_atomic_backport_shims(base, helper)
     patch_engine_list(base)
     patch_ocr_engine_picker(base)
     patch_dispatcher(base)
