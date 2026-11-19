@@ -73,14 +73,15 @@ REPLACEABLE_RUNTIME_PREFIXES = (
     + REPLACEABLE_ANDROIDX_PREFIXES
 )
 
-# APK 219 already contains Firebase/DataTransport runtime used by Crashlytics
-# and Sessions. Keep those host definitions on collision and copy only classes
-# that are absent. Replacing these classes would unnecessarily rewrite the
-# original DEX and could break unrelated Firebase integrations.
+# Keep APK 219's existing Firebase/DataTransport implementation used by
+# Crashlytics/Sessions, and its ONNX Runtime used by the app's existing OCR.
+# The language-pack manager does not require an ONNX Runtime upgrade. Copy a
+# helper class only when the host does not already provide that class.
 HOST_PREFERRED_MLKIT_TRANSITIVE_PREFIXES = (
     "com/google/firebase/components/",
     "com/google/firebase/encoders/",
     "com/google/android/datatransport/",
+    "ai/onnxruntime/",
 )
 
 RUNTIME_PREFIXES = (
