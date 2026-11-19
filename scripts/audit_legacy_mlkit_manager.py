@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit whether ML Kit's model-manager API can be restored without replacing APK 219 runtimes."""
+"""Focused executable-reference audit for restoring ML Kit's model manager additively."""
 from __future__ import annotations
 
 import argparse
@@ -11,47 +11,31 @@ SYSTEM_PREFIXES = (
     "android/", "java/", "javax/", "kotlin/", "kotlinx/",
     "dalvik/", "sun/", "org/jetbrains/annotations/",
 )
-ROOT_DESCRIPTORS = (
+ROOTS = (
     "Lcom/google/mlkit/common/model/RemoteModelManager;",
     "Lcom/google/mlkit/common/model/RemoteModel;",
     "Lcom/google/mlkit/nl/translate/TranslateRemoteModel;",
-    "Lcom/google/mlkit/nl/translate/Translator;",
 )
-CLASS_REF_RE = re.compile(r"L([^;]+);")
-METHOD_REF_RE = re.compile(r"L([^;]+);->([^\s(]+)(\([^)]*\)[^\s]+)")
-FIELD_REF_RE = re.compile(r"L([^;]+);->([^\s:]+):([^\s]+)")
+INVOKE_RE = re.compile(
+    r"^\s*invoke-\S+\s+\{[^}]*\},\s+(L[^;]+;)->([^\s(]+)(\([^)]*\)\S+)",
+    re.MULTILINE,
+)
+FIELD_RE = re.compile(
+    r"^\s*(?:sget|sput|iget|iput|sget-boolean|sput-boolean|iget-boolean|iput-boolean|"
+    r"sget-object|sput-object|iget-object|iput-object|sget-wide|sput-wide|iget-wide|iput-wide)"
+    r"\s+\S+,\s+(L[^;]+;)->([^\s:]+):(\S+)",
+    re.MULTILINE,
+)
+TYPE_RE = re.compile(
+    r"^\s*(?:new-instance|check-cast|instance-of|const-class|new-array|filled-new-array(?:/range)?)"
+    r"\s+[^,]+,\s*(L[^;]+;)",
+    re.MULTILINE,
+)
 
 def smali_dirs(root: Path) -> list[Path]:
-    return sorted((p for p in root.glob("smali*") if p.is_dir()),
-                  key=lambda p: (1, int(p.name.removeprefix("smali_classes")))
+    ds = [p for p in root.glob("smali*") if p.is_dir()]
+    return sorted(ds, key=lambda p: (1, int(p.name.removeprefix("smali_classes")))
                   if p.name.startswith("smali_classes") else (0, 1))
-
-def locate(root: Path, descriptor: str) -> Path | None:
-    rel = descriptor[1:-1] + ".smali"
-    for directory in smali_dirs(root):
-        candidate = directory / rel
-        if candidate.is_file():
-            return candidate
-    return None
-
-def parse_defs(path: Path) -> tuple[set[str], set[str], str | None, set[str]]:
-    source = path.read_text(encoding="utf-8", errors="replace")
-    methods: set[str] = set()
-    fields: set[str] = set()
-    superclass = None
-    interfaces: set[str] = set()
-    for line in source.splitlines():
-        s = line.strip()
-        if s.startswith(".method "):
-            methods.add(s.split()[-1])
-        elif s.startswith(".field "):
-            member = s.split()[-1].split("=", 1)[0]
-            fields.add(member)
-        elif s.startswith(".super "):
-            superclass = s.split()[-1]
-        elif s.startswith(".implements "):
-            interfaces.add(s.split()[-1])
-    return methods, fields, superclass, interfaces
 
 def inventory(root: Path) -> dict[str, Path]:
     out: dict[str, Path] = {}
@@ -60,6 +44,23 @@ def inventory(root: Path) -> dict[str, Path]:
             rel = p.relative_to(d).as_posix()
             out["L" + rel[:-6] + ";"] = p
     return out
+
+def api(path: Path):
+    source = path.read_text(encoding="utf-8", errors="replace")
+    methods, fields = set(), set()
+    super_desc = None
+    interfaces = set()
+    for line in source.splitlines():
+        s = line.strip()
+        if s.startswith(".method "):
+            methods.add(s.split()[-1])
+        elif s.startswith(".field "):
+            fields.add(s.split()[-1].split("=", 1)[0])
+        elif s.startswith(".super "):
+            super_desc = s.split()[-1]
+        elif s.startswith(".implements "):
+            interfaces.add(s.split()[-1])
+    return methods, fields, super_desc, interfaces
 
 def short(desc: str) -> str:
     return desc[1:-1] if desc.startswith("L") and desc.endswith(";") else desc
@@ -70,177 +71,136 @@ def main() -> int:
     ap.add_argument("--helper", required=True, type=Path)
     ap.add_argument("--out", required=True, type=Path)
     args = ap.parse_args()
+    base, helper = inventory(args.base), inventory(args.helper)
+    base_api = {d: api(p) for d,p in base.items()}
+    helper_api = {d: api(p) for d,p in helper.items()}
 
-    base_defs = inventory(args.base)
-    helper_defs = inventory(args.helper)
-    base_apis = {d: parse_defs(p) for d, p in base_defs.items()}
-    helper_apis = {d: parse_defs(p) for d, p in helper_defs.items()}
-
-    lines: list[str] = []
-    def emit(s: str = "") -> None:
-        lines.append(s)
-
-    emit("ML KIT LEGACY MODEL-MANAGER COMPATIBILITY AUDIT")
-    emit(f"Base smali classes: {len(base_defs)}")
-    emit(f"Isolated helper smali classes: {len(helper_defs)}")
-    emit()
-    emit("=== REQUIRED API ROOTS ===")
-    roots_present = []
-    for desc in ROOT_DESCRIPTORS:
-        bp = base_defs.get(desc)
-        hp = helper_defs.get(desc)
-        emit(f"{short(desc)}: base={'YES' if bp else 'NO'} helper={'YES' if hp else 'NO'}")
-        if hp:
-            roots_present.append(desc)
-            m, f, sup, impl = helper_apis[desc]
-            emit("  helper methods: " + ", ".join(sorted(m)))
-            emit("  superclass: " + str(sup))
-            emit("  interfaces: " + ", ".join(sorted(impl)))
-        if bp:
-            m, f, sup, impl = base_apis[desc]
-            emit("  base methods: " + ", ".join(sorted(m)))
-    emit()
-
-    # Follow only model-manager implementation classes which are absent in the
-    # host. Existing host classes are treated as the binary boundary and are
-    # checked for exact methods/fields referenced by newly added code.
-    queue = deque(roots_present)
+    queue = deque(d for d in ROOTS if d in helper)
     visited: set[str] = set()
     missing_classes: set[str] = set()
-    missing_methods: set[tuple[str, str, str]] = set()
-    missing_fields: set[tuple[str, str, str]] = set()
-    unresolved_classes: set[str] = set()
-    dependency_edges: set[tuple[str, str, str]] = set()
+    missing_methods: set[tuple[str,str,str]] = set()
+    missing_fields: set[tuple[str,str,str]] = set()
+    unresolved: set[str] = set()
+    calls_by_owner: dict[str,set[str]] = {}
+    callers_by_owner: dict[str,set[str]] = {}
 
     while queue:
         desc = queue.popleft()
         if desc in visited:
             continue
         visited.add(desc)
-        hp = helper_defs.get(desc)
-        if not hp:
-            unresolved_classes.add(desc)
+        p = helper.get(desc)
+        if p is None:
+            unresolved.add(desc)
             continue
-        h_methods, h_fields, h_super, h_interfaces = helper_apis[desc]
-        source = hp.read_text(encoding="utf-8", errors="replace")
-
-        # Class-level descriptors, superclass and interfaces. Recursively pull
-        # a helper implementation only if APK 219 has no definition at all.
-        refs = set(CLASS_REF_RE.findall(source))
-        if h_super:
-            refs.add(h_super[1:-1] if h_super.startswith("L") else h_super)
-        refs.update(x[1:-1] if x.startswith("L") else x for x in h_interfaces)
-
-        for ref in sorted(refs):
-            target_desc = "L" + ref + ";"
-            if ref.startswith(SYSTEM_PREFIXES):
-                continue
-            if target_desc in base_defs:
-                continue
-            if target_desc in helper_defs and target_desc not in visited:
-                missing_classes.add(target_desc)
-                dependency_edges.add((desc, target_desc, "class"))
-                queue.append(target_desc)
-            elif target_desc not in helper_defs:
-                unresolved_classes.add(target_desc)
-
-        for owner, name, sig in METHOD_REF_RE.findall(source):
-            target = "L" + owner + ";"
-            if owner.startswith(SYSTEM_PREFIXES):
-                continue
-            if target in base_defs:
-                methods = base_apis[target][0]
-                if name + sig not in methods:
-                    missing_methods.add((desc, target, name + sig))
-            elif target in helper_defs:
-                missing_classes.add(target)
-                dependency_edges.add((desc, target, "method"))
+        source = p.read_text(encoding="utf-8", errors="replace")
+        # Only executable references are considered. Comments, debug metadata,
+        # annotations and generic signatures do not expand the runtime closure.
+        method_refs = INVOKE_RE.findall(source)
+        field_refs = FIELD_RE.findall(source)
+        type_refs = TYPE_RE.findall(source)
+        supers = [api(p)[2]] if api(p)[2] else []
+        interfaces = list(api(p)[3])
+        all_refs = set()
+        for owner, name, sig in method_refs:
+            target = owner if owner.startswith("L") else "L"+owner+";"
+            calls_by_owner.setdefault(target,set()).add(name+sig)
+            callers_by_owner.setdefault(target,set()).add(short(desc))
+            all_refs.add(target)
+            if target in base:
+                if name+sig not in base_api[target][0]:
+                    missing_methods.add((desc,target,name+sig))
+            elif target in helper:
                 if target not in visited:
+                    missing_classes.add(target)
                     queue.append(target)
             else:
-                unresolved_classes.add(target)
-
-        for owner, name, typ in FIELD_REF_RE.findall(source):
-            target = "L" + owner + ";"
-            if owner.startswith(SYSTEM_PREFIXES):
-                continue
-            if target in base_defs:
-                fields = base_apis[target][1]
-                if name + ":" + typ not in fields:
-                    missing_fields.add((desc, target, name + ":" + typ))
-            elif target in helper_defs:
-                missing_classes.add(target)
-                dependency_edges.add((desc, target, "field"))
+                if not short(target).startswith(SYSTEM_PREFIXES):
+                    unresolved.add(target)
+        for owner, name, typ in field_refs:
+            target = owner if owner.startswith("L") else "L"+owner+";"
+            all_refs.add(target)
+            if target in base:
+                if name+":"+typ not in base_api[target][1]:
+                    missing_fields.add((desc,target,name+":"+typ))
+            elif target in helper:
                 if target not in visited:
+                    missing_classes.add(target)
                     queue.append(target)
             else:
-                unresolved_classes.add(target)
+                if not short(target).startswith(SYSTEM_PREFIXES):
+                    unresolved.add(target)
+        for raw in type_refs + [(s[1:-1] if s.startswith("L") else s) for s in supers+interfaces]:
+            target = raw if raw.startswith("L") else "L"+raw+";"
+            all_refs.add(target)
+            if target in base:
+                continue
+            if target in helper:
+                missing_classes.add(target)
+                if target not in visited:
+                    queue.append(target)
+            elif not short(target).startswith(SYSTEM_PREFIXES):
+                unresolved.add(target)
 
-    emit("=== MANAGER DEPENDENCY CLOSURE ===")
-    emit(f"Visited helper classes: {len(visited)}")
-    emit(f"Classes absent from APK 219 but available in helper: {len(missing_classes)}")
-    emit(f"Method references not found exactly in APK 219: {len(missing_methods)}")
-    emit(f"Field references not found exactly in APK 219: {len(missing_fields)}")
-    emit(f"References not defined in either APK or treated as platform: {len(unresolved_classes)}")
+    lines=[]
+    def emit(s=""): lines.append(s)
+    emit("FOCUSED ML KIT MODEL-MANAGER EXECUTABLE ABI AUDIT")
+    emit(f"APK219 definitions: {len(base)}")
+    emit(f"isolated helper definitions: {len(helper)}")
+    emit("Roots (Translator deliberately excluded): " + ", ".join(short(d) for d in ROOTS))
+    emit(f"Helper classes traversed: {len(visited)}")
+    emit(f"New classes required by executable-reference closure: {len(missing_classes)}")
+    emit(f"Methods absent from unchanged APK219 classes: {len(missing_methods)}")
+    emit(f"Fields absent from unchanged APK219 classes: {len(missing_fields)}")
+    emit(f"Unresolved non-platform references: {len(unresolved)}")
     emit()
-    emit("=== MISSING CLASSES TO ADD (NO EXISTING BASE DEFINITION) ===")
-    for desc in sorted(missing_classes):
-        emit(short(desc))
+    emit("=== MISSING CLASSES ===")
+    for d in sorted(missing_classes): emit(short(d))
     emit()
-    emit("=== METHOD REFERENCES THAT WOULD BREAK AGAINST PRESERVED APK 219 CLASSES ===")
-    for caller, owner, method in sorted(missing_methods):
-        emit(f"{short(caller)} -> {short(owner)}->{method}")
+    emit("=== METHOD ABI MISMATCHES ===")
+    for c,o,m in sorted(missing_methods): emit(f"{short(c)} -> {short(o)}->{m}")
     emit()
-    emit("=== FIELD REFERENCES THAT WOULD BREAK AGAINST PRESERVED APK 219 CLASSES ===")
-    for caller, owner, field in sorted(missing_fields):
-        emit(f"{short(caller)} -> {short(owner)}->{field}")
+    emit("=== FIELD ABI MISMATCHES ===")
+    for c,o,f in sorted(missing_fields): emit(f"{short(c)} -> {short(o)}->{f}")
     emit()
-    emit("=== UNRESOLVED CLASS REFERENCES ===")
-    for desc in sorted(unresolved_classes):
-        emit(short(desc))
+    emit("=== UNRESOLVED REFERENCES ===")
+    for d in sorted(unresolved): emit(short(d))
     emit()
-
-    # The most important binary boundary: Google Tasks.
-    task_desc = "Lcom/google/android/gms/tasks/Task;"
-    emit("=== TASK API: APK 219 VS ISOLATED HELPER ===")
-    for label, api in (("APK219", base_apis.get(task_desc)),
-                       ("HELPER", helper_apis.get(task_desc))):
-        emit(label + ": " + ("missing" if api is None else ""))
-        if api:
-            for method in sorted(api[0]):
-                emit("  " + method)
+    emit("=== TASK METHODS CALLED BY THE MANAGER CLOSURE ===")
+    task="Lcom/google/android/gms/tasks/Task;"
+    for caller in sorted(callers_by_owner.get(task,())):
+        emit("Caller: "+caller)
+    for m in sorted(calls_by_owner.get(task,())): emit(m)
     emit()
-    emit("=== MODEL/MANAGER RELATED CLASSES ALREADY PRESENT IN APK219 ===")
-    prefixes = ("com/google/mlkit/common/model/", "com/google/mlkit/nl/translate/")
-    for desc in sorted(base_defs):
-        p = short(desc)
-        if p.startswith(prefixes):
-            emit(p)
+    emit("=== APK219 TASK DECLARATION ===")
+    if task in base:
+        m, f, sup, impl = base_api[task]
+        emit("super="+str(sup))
+        emit("interfaces="+", ".join(sorted(impl)))
+        for x in sorted(m): emit(x)
+    else:
+        emit("Task not present")
     emit()
-    emit("=== TRANSLATOR-RELATED CALLS TO TASK IN APK219 ===")
-    for desc, path in sorted(base_defs.items()):
-        p = short(desc)
-        if not (p.startswith("com/google/mlkit/nl/translate/")
-                or p.startswith("com/google/mlkit/common/model/")):
-            continue
-        source = path.read_text(encoding="utf-8", errors="replace")
-        for owner, name, sig in METHOD_REF_RE.findall(source):
-            if owner == "com/google/android/gms/tasks/Task":
-                emit(f"{p} -> Task->{name}{sig}")
+    emit("=== OLD TASK PARAMETER INTERFACE TYPES ===")
+    if task in base:
+        source=base[task].read_text(encoding="utf-8", errors="replace")
+        types=set()
+        for name in re.findall(r"L(pa/[^;]+;)",source): types.add("L"+name+";")
+        for d in sorted(types):
+            if d in base:
+                m,f,sup,impl=base_api[d]
+                emit(short(d)+" super="+str(sup)+" interfaces="+",".join(sorted(impl)))
+                for x in sorted(m): emit("  "+x)
     emit()
     emit("=== INTERPRETATION ===")
-    if missing_methods:
-        emit("The manager implementation cannot be copied as-is while preserving APK 219's existing runtime. It references methods absent from host classes.")
+    if missing_methods or missing_fields:
+        emit("At least one manager-closure executable reference targets an existing APK219 class with a missing exact member. Additive restore requires a narrow compatibility adapter or an alternate internal implementation; do not replace the host class.")
     else:
-        emit("No exact missing methods found in the traversed manager dependency closure. A limited additive restore may be feasible; still validate runtime initialization before merging.")
-    if unresolved_classes:
-        emit("Some symbols are unresolved in both APKs; inspect these manually before any integration.")
-    emit("This is a static DEX/API scan, not proof of runtime correctness.")
-
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        emit("No executable member mismatch was found in the focused closure. A no-replacement additive restore is a candidate for an isolated test build, not yet runtime-proven.")
+    emit("Translator was intentionally excluded because the existing host translator must remain untouched.")
+    args.out.parent.mkdir(parents=True,exist_ok=True)
+    args.out.write_text("\n".join(lines)+"\n",encoding="utf-8")
     print("\n".join(lines))
     return 0
-
-if __name__ == "__main__":
+if __name__=="__main__":
     raise SystemExit(main())
