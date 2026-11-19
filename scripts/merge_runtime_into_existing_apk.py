@@ -115,7 +115,6 @@ RUNTIME_PREFIXES = (
     "com/google/android/gms/internal/mlkit_vision_common",
     "com/google/android/gms/internal/mlkit_vision_text_common",
     # Llama JNI Java bindings must stay matched with the helper's native runtime.
-    "dev/ffmpegkit/llama",
     # DataTransport's generated Factory classes implement javax.inject.Provider.
     # APK 219 has the Factory implementation dependency missing, so include this
     # small API package from the matched helper runtime.
@@ -173,6 +172,13 @@ PRESERVED_CLASSES = (
 
 PRESERVED_CLASS_FAMILIES = (
     "com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor",
+)
+
+# HyMT2Runtime must be rebuilt in lockstep with the helper's updated Llama JNI
+# wrapper. Move only this exact class family; keep the rest of APK 219's
+# already-tested settings, OCR, editor, and UI classes untouched.
+REPLACEABLE_APP_RUNTIME_FAMILIES = (
+    "com/tap_to_translate/snap_translate/hymt2/HyMT2Runtime",
 )
 
 def run(cmd: list[str]) -> None:
@@ -338,20 +344,19 @@ def smali_class_api(path: Path) -> tuple[str | None, set[str], dict[str, set[str
     return super_desc, interfaces, methods, fields
 
 
-def verify_llama_wrapper_compatibility(host: Path, helper: Path) -> None:
-    """Ensure the helper Llama wrapper preserves the base app's callable API."""
+def verify_class_abi(host: Path, helper: Path, label: str) -> None:
+    """Ensure a replacement class preserves the base app's callable ABI."""
     host_super, host_interfaces, host_methods, host_fields = smali_class_api(host)
     helper_super, helper_interfaces, helper_methods, helper_fields = smali_class_api(helper)
 
     if host_super != helper_super:
         raise RuntimeError(
-            "Llama JNI wrapper superclass mismatch: base="
-            + str(host_super) + ", helper=" + str(helper_super)
+            f"{label} superclass mismatch: base={host_super}, helper={helper_super}"
         )
     missing_interfaces = sorted(host_interfaces - helper_interfaces)
     if missing_interfaces:
         raise RuntimeError(
-            "Helper Llama wrapper drops interfaces used by APK 219: "
+            f"Helper {label} drops interfaces used by APK 219: "
             + ", ".join(missing_interfaces)
         )
 
@@ -361,7 +366,7 @@ def verify_llama_wrapper_compatibility(host: Path, helper: Path) -> None:
     )
     if missing_methods:
         raise RuntimeError(
-            "Helper Llama wrapper is missing methods used by APK 219: "
+            f"Helper {label} is missing methods used by APK 219: "
             + ", ".join(missing_methods)
         )
     incompatible_methods = sorted(
@@ -372,7 +377,7 @@ def verify_llama_wrapper_compatibility(host: Path, helper: Path) -> None:
     )
     if incompatible_methods:
         raise RuntimeError(
-            "Helper Llama wrapper changes static/instance method ABI: "
+            f"Helper {label} changes static/instance method ABI: "
             + ", ".join(incompatible_methods)
         )
 
@@ -382,16 +387,31 @@ def verify_llama_wrapper_compatibility(host: Path, helper: Path) -> None:
     )
     if missing_fields:
         raise RuntimeError(
-            "Helper Llama wrapper is missing fields used by APK 219: "
+            f"Helper {label} is missing fields used by APK 219: "
             + ", ".join(missing_fields)
+        )
+    incompatible_fields = sorted(
+        member for member, flags in host_fields.items()
+        if "private" not in flags
+        and member in helper_fields
+        and ("static" in flags) != ("static" in helper_fields[member])
+    )
+    if incompatible_fields:
+        raise RuntimeError(
+            f"Helper {label} changes static/instance field ABI: "
+            + ", ".join(incompatible_fields)
         )
 
     print(
-        "Verified Llama wrapper ABI compatibility:",
+        f"Verified {label} ABI compatibility:",
         len(host_methods), "base methods;",
         len(host_fields), "base fields;",
         len(host_interfaces), "base interfaces."
     )
+
+
+def verify_llama_wrapper_compatibility(host: Path, helper: Path) -> None:
+    verify_class_abi(host, helper, "Llama JNI wrapper")
 
 
 def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
@@ -419,6 +439,7 @@ def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
     bootstrap_replaced: set[str] = set()
     replaced_runtime_prefixes: set[str] = set()
     relocated_classes: set[str] = set()
+    replaced_app_families: set[str] = set()
 
     for helper_dir in helper_dirs:
         target_root = target_roots[helper_dir]
@@ -447,6 +468,24 @@ def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
                      if rel_name.startswith(prefix)),
                     None,
                 )
+                replaceable_app_family = next(
+                    (
+                        family for family in REPLACEABLE_APP_RUNTIME_FAMILIES
+                        if rel_name == family + ".smali"
+                        or rel_name.startswith(family + "$")
+                    ),
+                    None,
+                )
+                if (
+                    replaceable_app_family is not None
+                    and rel_name == replaceable_app_family + ".smali"
+                    and existing
+                ):
+                    if len(existing) != 1:
+                        raise RuntimeError(
+                            "Multiple base definitions found for app runtime class: " + rel_name
+                        )
+                    verify_class_abi(existing[0], source, "HyMT2Runtime")
                 if rel_name.startswith("dev/ffmpegkit/llama/") and existing:
                     if len(existing) != 1:
                         raise RuntimeError(
@@ -454,7 +493,11 @@ def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
                         )
                     verify_llama_wrapper_compatibility(existing[0], source)
 
-                if rel_name in REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES or replaceable_prefix is not None:
+                if (
+                    rel_name in REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES
+                    or replaceable_prefix is not None
+                    or replaceable_app_family is not None
+                ):
                     # Relocate the matched helper definition into the appended
                     # DEX partition. Delete any old APK 219 definitions rather
                     # than overwriting them in classes.dex/classes2.dex, which
@@ -470,7 +513,9 @@ def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
                         bootstrap_replaced.add(rel_name)
                     if replaceable_prefix is not None:
                         replaced_runtime_prefixes.add(replaceable_prefix)
-                    print("Placed matched ML Kit/GMS/AndroidX class in", target_root.name + ":", rel_name)
+                    if replaceable_app_family is not None:
+                        replaced_app_families.add(replaceable_app_family)
+                    print("Placed matched ML Kit/GMS/AndroidX/app runtime class in", target_root.name + ":", rel_name)
                     continue
 
                 if (
@@ -553,6 +598,12 @@ def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
             "Helper APK runtime packages were not merged: "
             + ", ".join(missing_runtime_prefixes)
         )
+    missing_app_families = sorted(set(REPLACEABLE_APP_RUNTIME_FAMILIES) - replaced_app_families)
+    if missing_app_families:
+        raise RuntimeError(
+            "Helper APK app runtime families were not merged: "
+            + ", ".join(missing_app_families)
+        )
     if copied + replaced == 0:
         raise RuntimeError("No Hy-MT2 runtime classes were found in the helper APK")
     print("Verified relocation of all ML Kit bootstrap classes:", ", ".join(sorted(bootstrap_replaced)))
@@ -622,8 +673,28 @@ def verify_helper_runtime_inventory(helper: Path, root: Path) -> None:
                     raise RuntimeError("Helper APK defines the same runtime class more than once: " + rel)
                 expected[rel] = source
 
+    # Include explicitly replaceable app runtime class families (currently
+    # HyMT2Runtime and its generated nested/continuation classes).
+    for family in REPLACEABLE_APP_RUNTIME_FAMILIES:
+        parent = Path(family).parent
+        stem = Path(family).name
+        for helper_dir in smali_dirs(helper):
+            package_dir = helper_dir / parent
+            if not package_dir.is_dir():
+                continue
+            candidates = []
+            exact = package_dir / (stem + ".smali")
+            if exact.is_file():
+                candidates.append(exact)
+            candidates.extend(package_dir.glob(stem + "$*.smali"))
+            for source in candidates:
+                rel = source.relative_to(helper_dir).as_posix()
+                if rel in expected and expected[rel].read_bytes() != source.read_bytes():
+                    raise RuntimeError("Helper APK defines app runtime class more than once: " + rel)
+                expected[rel] = source
+
     if not expected:
-        raise RuntimeError("Helper APK contains no matched ML Kit/GMS/AndroidX runtime classes")
+        raise RuntimeError("Helper APK contains no matched ML Kit/GMS/AndroidX/app runtime classes")
 
     missing: list[str] = []
     duplicate: list[str] = []
@@ -653,7 +724,13 @@ def verify_helper_runtime_inventory(helper: Path, root: Path) -> None:
 
     counts: dict[str, int] = {}
     for rel in expected:
-        prefix = next(p for p in REPLACEABLE_RUNTIME_PREFIXES if rel.startswith(p))
+        prefix = next((p for p in REPLACEABLE_RUNTIME_PREFIXES if rel.startswith(p)), None)
+        if prefix is None:
+            family = next(
+                f for f in REPLACEABLE_APP_RUNTIME_FAMILIES
+                if rel == f + ".smali" or rel.startswith(f + "$")
+            )
+            prefix = "app-family:" + family
         counts[prefix] = counts.get(prefix, 0) + 1
     print("Verified complete helper class inventories for matched runtime packages:")
     for prefix, count in sorted(counts.items()):
