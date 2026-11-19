@@ -477,7 +477,8 @@ $sourceText"""
         }
         val report = HyMT2PenaltyNative.applyCpuAffinity(mask)
         HyMT2Settings.recordAffinityReport(context, report)
-        return "mode=\${options.cpuAffinityMode}, requestedMask=\${if (mask == 0L) "system" else "0x\${mask.toULong().toString(16)}"}, result=$report"
+        val requestedMask = if (mask == 0L) "system" else "0x" + mask.toULong().toString(16)
+        return "mode=${options.cpuAffinityMode}, requestedMask=$requestedMask, result=$report"
     }
 
     private suspend fun ensureLoaded(context: Context): LlamaModel = modelMutex.withLock {
