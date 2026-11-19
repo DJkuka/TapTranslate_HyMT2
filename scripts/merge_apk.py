@@ -1826,21 +1826,21 @@ def patch_language_pack_manager_click(base: Path) -> None:
         insert_at = method.rfind(anchor)
         if insert_at < 0:
             raise RuntimeError("Could not find primary Settings callback return")
-        code = f'''    invoke-virtual {{p0}}, Landroidx/fragment/app/Fragment;->requireView()Landroid/view/View;
+        code = f'''    invoke-virtual {p0}, Landroidx/fragment/app/Fragment;->requireView()Landroid/view/View;
 
     move-result-object v1
 
     const v2, {LANGUAGE_PACK_ROW_ID}
 
-    invoke-virtual {{v1, v2}}, Landroid/view/View;->findViewById(I)Landroid/view/View;
+    invoke-virtual {v1, v2}, Landroid/view/View;->findViewById(I)Landroid/view/View;
 
     move-result-object v1
 
     new-instance v2, Lcom/tap_to_translate/snap_translate/hymt2/LanguagePackManagerSettingsClickListener;
 
-    invoke-direct {{v2, p0}}, Lcom/tap_to_translate/snap_translate/hymt2/LanguagePackManagerSettingsClickListener;-><init>(Lmh/p;)V
+    invoke-direct {v2, p0}, Lcom/tap_to_translate/snap_translate/hymt2/LanguagePackManagerSettingsClickListener;-><init>(Lmh/p;)V
 
-    invoke-virtual {{v1, v2}}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+    invoke-virtual {v1, v2}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
 
 '''
         method = method[:insert_at] + code + method[insert_at:]
@@ -1859,7 +1859,7 @@ def patch_language_pack_manager_click(base: Path) -> None:
 
 .method public constructor <init>(Lmh/p;)V
     .locals 0
-    invoke-direct {{p0}}, Ljava/lang/Object;-><init>()V
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
     iput-object p1, p0, Lcom/tap_to_translate/snap_translate/hymt2/LanguagePackManagerSettingsClickListener;->a:Lmh/p;
     return-void
 .end method
@@ -1867,12 +1867,12 @@ def patch_language_pack_manager_click(base: Path) -> None:
 .method public final onClick(Landroid/view/View;)V
     .locals 3
     iget-object v0, p0, Lcom/tap_to_translate/snap_translate/hymt2/LanguagePackManagerSettingsClickListener;->a:Lmh/p;
-    invoke-virtual {{v0}}, Landroidx/fragment/app/Fragment;->requireContext()Landroid/content/Context;
+    invoke-virtual {v0}, Landroidx/fragment/app/Fragment;->requireContext()Landroid/content/Context;
     move-result-object v0
     new-instance v1, Landroid/content/Intent;
     const-class v2, Lcom/tap_to_translate/snap_translate/hymt2/LanguagePackManagerActivity;
-    invoke-direct {{v1, v0, v2}}, Landroid/content/Intent;-><init>(Landroid/content/Context;Ljava/lang/Class;)V
-    invoke-virtual {{v0, v1}}, Landroid/content/Context;->startActivity(Landroid/content/Intent;)V
+    invoke-direct {v1, v0, v2}, Landroid/content/Intent;-><init>(Landroid/content/Context;Ljava/lang/Class;)V
+    invoke-virtual {v0, v1}, Landroid/content/Context;->startActivity(Landroid/content/Intent;)V
     return-void
 .end method
 ''', encoding="utf-8")
@@ -1950,7 +1950,7 @@ def patch_manifest(base: Path) -> None:
     if PROFILE_ACTIVITY not in text:
         activities.append(f'''        <activity android:name="{PROFILE_ACTIVITY}" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="Display profiles" />\n''')
     if LANGUAGE_PACK_MANAGER_ACTIVITY not in text:
-        activities.append(f'''        <activity android:name="{LANGUAGE_PACK_MANAGER_ACTIVITY}" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="Языковые пакеты" />\\n''')
+        activities.append(f'''        <activity android:name="{LANGUAGE_PACK_MANAGER_ACTIVITY}" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="Языковые пакеты" />\n''')
     if not activities:
         return
     if marker not in text:
