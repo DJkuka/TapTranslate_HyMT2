@@ -85,6 +85,15 @@ jobs:
             --helper build/isolated \
             --out build/legacy-translate-internals.txt
 
+      - name: Trace legacy translator and storage calls across all APK 219 DEX classes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/deep_trace_legacy_translate.py
+          python3 scripts/deep_trace_legacy_translate.py \
+            --base build/base219 \
+            --out build/deep-trace-legacy-translate.txt
+
       - name: Verify both reports exist and are non-empty
         if: always()
         shell: bash
@@ -92,9 +101,10 @@ jobs:
           set -euo pipefail
           test -s build/legacy-mlkit-manager-audit.txt
           test -s build/legacy-translate-internals.txt
+          test -s build/deep-trace-legacy-translate.txt
           test -s input/apk-sha256.txt
-          echo "Both reports generated:"
-          wc -l build/legacy-mlkit-manager-audit.txt build/legacy-translate-internals.txt
+          echo "All reports generated:"
+          wc -l build/legacy-mlkit-manager-audit.txt build/legacy-translate-internals.txt build/deep-trace-legacy-translate.txt
 
       - name: Upload audit report
         if: always()
@@ -104,6 +114,7 @@ jobs:
           path: |
             build/legacy-mlkit-manager-audit.txt
             build/legacy-translate-internals.txt
+            build/deep-trace-legacy-translate.txt
             input/apk-sha256.txt
           if-no-files-found: error
           retention-days: 14
