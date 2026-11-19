@@ -154,6 +154,9 @@ def main() -> int:
     emit(f"Fields absent from unchanged APK219 classes: {len(missing_fields)}")
     emit(f"Unresolved non-platform references: {len(unresolved)}")
     emit()
+    emit("=== TRAVERSED HELPER CLASSES ===")
+    for d in sorted(visited): emit(short(d))
+    emit()
     emit("=== MISSING CLASSES ===")
     for d in sorted(missing_classes): emit(short(d))
     emit()
@@ -185,12 +188,21 @@ def main() -> int:
     if task in base:
         source=base[task].read_text(encoding="utf-8", errors="replace")
         types=set()
-        for name in re.findall(r"L(pa/[^;]+;)",source): types.add("L"+name+";")
+        for name in re.findall(r"L(pa/[^;]+);",source): types.add("L"+name+";")
         for d in sorted(types):
             if d in base:
                 m,f,sup,impl=base_api[d]
                 emit(short(d)+" super="+str(sup)+" interfaces="+",".join(sorted(impl)))
                 for x in sorted(m): emit("  "+x)
+    emit()
+    emit("=== OLD TASK PARAMETER INTERFACE TYPE DEFINITIONS ===")
+    if task in base:
+        source=base[task].read_text(encoding="utf-8", errors="replace")
+        types=set("L"+name+";" for name in re.findall(r"L(pa/[^;]+);",source))
+        for d in sorted(types):
+            emit(short(d) + (": PRESENT IN APK219" if d in base else ": ABSENT IN APK219"))
+            if d in base:
+                for method in sorted(base_api[d][0]): emit("  " + method)
     emit()
     emit("=== INTERPRETATION ===")
     if missing_methods or missing_fields:
