@@ -1881,11 +1881,11 @@ def patch_language_pack_manager_click(base: Path) -> None:
         insert_at = method.rfind(anchor)
         if insert_at < 0:
             raise RuntimeError("Could not find primary Settings callback return")
-        code = f'''    invoke-virtual {p0}, Landroidx/fragment/app/Fragment;->requireView()Landroid/view/View;
+        code = '''    invoke-virtual {p0}, Landroidx/fragment/app/Fragment;->requireView()Landroid/view/View;
 
     move-result-object v1
 
-    const v2, {LANGUAGE_PACK_ROW_ID}
+    const v2, @LANGUAGE_PACK_ROW_ID@
 
     invoke-virtual {v1, v2}, Landroid/view/View;->findViewById(I)Landroid/view/View;
 
@@ -1897,7 +1897,7 @@ def patch_language_pack_manager_click(base: Path) -> None:
 
     invoke-virtual {v1, v2}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
 
-'''
+'''.replace("@LANGUAGE_PACK_ROW_ID@", LANGUAGE_PACK_ROW_ID)
         method = method[:insert_at] + code + method[insert_at:]
         text = text[:method_start] + method + text[method_end:]
         fragment.write_text(text, encoding="utf-8")
