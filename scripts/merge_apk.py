@@ -621,13 +621,13 @@ def patch_language_pack_manager_resources(base: Path) -> None:
         if candidate > 0x7f0affff:
             raise RuntimeError("No free public ID remains in the host id resource range")
         LANGUAGE_PACK_ROW_ID = f"0x{candidate:08x}"
-        anchor = f'    <public type="id" name="{PROFILE_ROW_ID_NAME}" id="{PROFILE_ROW_ID}" />\\n'
+        anchor = f'    <public type="id" name="{PROFILE_ROW_ID_NAME}" id="{PROFILE_ROW_ID}" />\n'
         if public_text.count(anchor) != 1:
             raise RuntimeError("Could not locate display-profiles public ID")
         public.write_text(
             public_text.replace(
                 anchor,
-                anchor + f'    <public type="id" name="{LANGUAGE_PACK_ROW_ID_NAME}" id="{LANGUAGE_PACK_ROW_ID}" />\\n',
+                anchor + f'    <public type="id" name="{LANGUAGE_PACK_ROW_ID_NAME}" id="{LANGUAGE_PACK_ROW_ID}" />\n',
                 1,
             ),
             encoding="utf-8",
