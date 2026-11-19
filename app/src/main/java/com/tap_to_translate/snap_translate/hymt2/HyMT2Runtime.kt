@@ -379,6 +379,7 @@ $sourceText"""
         if (existing != null && loadedSource == sourceKey) return@withLock existing
         if (existing != null) {
             HyMT2CpuAffinity.release(existing)
+            HyMT2CpuAffinity.release(existing)
             Llama.releaseModel(existing)
             loadedModel = null
             loadedSource = null
