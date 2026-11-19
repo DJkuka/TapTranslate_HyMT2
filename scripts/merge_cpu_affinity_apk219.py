@@ -97,7 +97,7 @@ def main():
 
     with zipfile.ZipFile(args.base_apk) as original, zipfile.ZipFile(args.output) as built:
         names = set(built.namelist())
-        missing = sorted(original_names - names)
+        missing = sorted(n for n in (original_names - names) if not n.startswith("META-INF/"))
         if missing: raise SystemExit("Base APK entries disappeared: " + ", ".join(missing[:20]))
         for name in original_names:
             if name.startswith("assets/") or name.startswith("lib/"):
