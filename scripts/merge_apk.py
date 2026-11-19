@@ -134,6 +134,9 @@ OCR_SETTINGS_ACTIVITY = "com.tap_to_translate.snap_translate.hymt2.OcrSettingsAc
 PROFILE_ACTIVITY = "com.tap_to_translate.snap_translate.hymt2.DisplayProfilesActivity"
 PROFILE_ROW_ID_NAME = "display_profiles_row"
 PROFILE_ROW_ID = "0x7f0a04f4"
+LANGUAGE_PACK_MANAGER_ACTIVITY = "com.tap_to_translate.snap_translate.hymt2.LanguagePackManagerActivity"
+LANGUAGE_PACK_ROW_ID_NAME = "language_pack_manager_row"
+LANGUAGE_PACK_ROW_ID = "0x7f0a04f5"
 PADDLE_OCR_NAME = "PP-OCRv6 (Comics)"
 MLKIT_OCR_NAME = "ML Kit (Device Text Recognition)"
 
@@ -570,6 +573,58 @@ def patch_ocr_resources(base: Path) -> None:
         raise RuntimeError("OCR settings row was not added to main settings layout")
     if OCR_ROW_ID_NAME not in ids.read_text(encoding="utf-8") or OCR_ROW_ID_NAME not in public.read_text(encoding="utf-8"):
         raise RuntimeError("OCR row resource ID registration is incomplete")
+
+
+
+
+def patch_language_pack_manager_resources(base: Path) -> None:
+    """Add Language Packs as a standalone row in the application's primary Settings screen."""
+    layout = base / "res/layout/fragment_settings.xml"
+    text = layout.read_text(encoding="utf-8")
+    if LANGUAGE_PACK_ROW_ID_NAME not in text:
+        anchor = '<LinearLayout android:gravity="start|center" android:orientation="horizontal" android:id="@id/fragment_setting_ll_voice_settings"'
+        if text.count(anchor) != 1:
+            raise RuntimeError("Could not locate the primary Settings insertion point for Language Packs")
+        row = f'''<LinearLayout android:gravity="start|center" android:orientation="horizontal" android:id="@id/{LANGUAGE_PACK_ROW_ID_NAME}" android:paddingLeft="15.0dip" android:paddingTop="15.0dip" android:paddingRight="15.0dip" android:paddingBottom="15.0dip" android:focusable="true" android:clickable="true" android:layout_width="fill_parent" android:layout_height="wrap_content" android:foreground="@drawable/fg_efftect">
+                <ImageView android:padding="5.0dip" android:layout_width="30.0dip" android:layout_height="30.0dip" android:layout_marginRight="10.0dip" android:src="@drawable/ic_download_svg" />
+                <TextView android:textSize="18.0dip" android:textColor="@color/cl_text_word" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Языковые пакеты · OCR и перевод" />
+            </LinearLayout>
+            <View android:background="@color/cl_underLine" android:layout_width="fill_parent" android:layout_height="1.0dip" android:layout_marginLeft="25.0dip" android:layout_marginRight="25.0dip" />
+            '''
+        text = text.replace(anchor, row + anchor, 1)
+        layout.write_text(text, encoding="utf-8")
+
+    ids = base / "res/values/ids.xml"
+    id_text = ids.read_text(encoding="utf-8")
+    if LANGUAGE_PACK_ROW_ID_NAME not in id_text:
+        anchor = f'    <item type="id" name="{PROFILE_ROW_ID_NAME}" />\n'
+        if id_text.count(anchor) != 1:
+            raise RuntimeError("Could not locate display-profiles ID in ids.xml")
+        ids.write_text(id_text.replace(anchor, anchor + f'    <item type="id" name="{LANGUAGE_PACK_ROW_ID_NAME}" />\n', 1), encoding="utf-8")
+
+    public = base / "res/values/public.xml"
+    public_text = public.read_text(encoding="utf-8")
+    if LANGUAGE_PACK_ROW_ID_NAME not in public_text:
+        if re.search(r'id="' + re.escape(LANGUAGE_PACK_ROW_ID) + r'"', public_text):
+            raise RuntimeError("Resource ID " + LANGUAGE_PACK_ROW_ID + " is already occupied")
+        anchor = f'    <public type="id" name="{PROFILE_ROW_ID_NAME}" id="{PROFILE_ROW_ID}" />\n'
+        if public_text.count(anchor) != 1:
+            raise RuntimeError("Could not locate display-profiles public ID")
+        public.write_text(
+            public_text.replace(
+                anchor,
+                anchor + f'    <public type="id" name="{LANGUAGE_PACK_ROW_ID_NAME}" id="{LANGUAGE_PACK_ROW_ID}" />\n',
+                1,
+            ),
+            encoding="utf-8",
+        )
+
+    if LANGUAGE_PACK_ROW_ID_NAME not in layout.read_text(encoding="utf-8"):
+        raise RuntimeError("Language Packs row was not inserted into primary Settings")
+    if LANGUAGE_PACK_ROW_ID_NAME not in ids.read_text(encoding="utf-8"):
+        raise RuntimeError("Language Packs row ID is missing from ids.xml")
+    if LANGUAGE_PACK_ROW_ID_NAME not in public.read_text(encoding="utf-8"):
+        raise RuntimeError("Language Packs row ID is missing from public.xml")
 
 
 
@@ -1756,6 +1811,80 @@ def patch_display_profiles_click(base: Path) -> None:
         raise RuntimeError("Display profile settings row has no click listener")
 
 
+
+def patch_language_pack_manager_click(base: Path) -> None:
+    """Wire the standalone Language Packs row to its dedicated Activity."""
+    fragment = base / "smali_classes3/mh/p.smali"
+    text = fragment.read_text(encoding="utf-8")
+    method_start = text.find(".method public final onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V")
+    method_end = text.find(".end method", method_start)
+    if method_start < 0 or method_end < 0:
+        raise RuntimeError("Could not isolate primary Settings onViewCreated for Language Packs")
+    method = text[method_start:method_end]
+    if "LanguagePackManagerSettingsClickListener" not in method:
+        anchor = "    return-void\n"
+        insert_at = method.rfind(anchor)
+        if insert_at < 0:
+            raise RuntimeError("Could not find primary Settings callback return")
+        code = f'''    invoke-virtual {{p0}}, Landroidx/fragment/app/Fragment;->requireView()Landroid/view/View;
+
+    move-result-object v1
+
+    const v2, {LANGUAGE_PACK_ROW_ID}
+
+    invoke-virtual {{v1, v2}}, Landroid/view/View;->findViewById(I)Landroid/view/View;
+
+    move-result-object v1
+
+    new-instance v2, Lcom/tap_to_translate/snap_translate/hymt2/LanguagePackManagerSettingsClickListener;
+
+    invoke-direct {{v2, p0}}, Lcom/tap_to_translate/snap_translate/hymt2/LanguagePackManagerSettingsClickListener;-><init>(Lmh/p;)V
+
+    invoke-virtual {{v1, v2}}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+
+'''
+        method = method[:insert_at] + code + method[insert_at:]
+        text = text[:method_start] + method + text[method_end:]
+        fragment.write_text(text, encoding="utf-8")
+
+    listener = base / "smali_classes5/com/tap_to_translate/snap_translate/hymt2/LanguagePackManagerSettingsClickListener.smali"
+    listener.parent.mkdir(parents=True, exist_ok=True)
+    listener.write_text('''.class public final Lcom/tap_to_translate/snap_translate/hymt2/LanguagePackManagerSettingsClickListener;
+.super Ljava/lang/Object;
+
+# interfaces
+.implements Landroid/view/View$OnClickListener;
+
+.field private final a:Lmh/p;
+
+.method public constructor <init>(Lmh/p;)V
+    .locals 0
+    invoke-direct {{p0}}, Ljava/lang/Object;-><init>()V
+    iput-object p1, p0, Lcom/tap_to_translate/snap_translate/hymt2/LanguagePackManagerSettingsClickListener;->a:Lmh/p;
+    return-void
+.end method
+
+.method public final onClick(Landroid/view/View;)V
+    .locals 3
+    iget-object v0, p0, Lcom/tap_to_translate/snap_translate/hymt2/LanguagePackManagerSettingsClickListener;->a:Lmh/p;
+    invoke-virtual {{v0}}, Landroidx/fragment/app/Fragment;->requireContext()Landroid/content/Context;
+    move-result-object v0
+    new-instance v1, Landroid/content/Intent;
+    const-class v2, Lcom/tap_to_translate/snap_translate/hymt2/LanguagePackManagerActivity;
+    invoke-direct {{v1, v0, v2}}, Landroid/content/Intent;-><init>(Landroid/content/Context;Ljava/lang/Class;)V
+    invoke-virtual {{v0, v1}}, Landroid/content/Context;->startActivity(Landroid/content/Intent;)V
+    return-void
+.end method
+''', encoding="utf-8")
+
+    fragment_text = fragment.read_text(encoding="utf-8")
+    start = fragment_text.find(".method public final onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V")
+    end = fragment_text.find(".end method", start)
+    if "LanguagePackManagerSettingsClickListener" not in fragment_text[start:end]:
+        raise RuntimeError("Language Packs main-settings row has no click listener")
+
+
+
 def patch_profile_host_notifier(base: Path) -> None:
     """Provide the same display-refresh event used by the host's style/font controls."""
     notifier = base / "smali_classes5/com/tap_to_translate/snap_translate/hymt2/DisplayProfilesHostNotifier.smali"
@@ -1820,6 +1949,8 @@ def patch_manifest(base: Path) -> None:
         activities.append(f'''        <activity android:name="{OCR_SETTINGS_ACTIVITY}" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="OCR settings" />\n''')
     if PROFILE_ACTIVITY not in text:
         activities.append(f'''        <activity android:name="{PROFILE_ACTIVITY}" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="Display profiles" />\n''')
+    if LANGUAGE_PACK_MANAGER_ACTIVITY not in text:
+        activities.append(f'''        <activity android:name="{LANGUAGE_PACK_MANAGER_ACTIVITY}" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="Языковые пакеты" />\\n''')
     if not activities:
         return
     if marker not in text:
@@ -2009,6 +2140,8 @@ def main() -> int:
     patch_floating_icon_z_order(base)
     patch_display_profiles(base)
     patch_display_profiles_click(base)
+    patch_language_pack_manager_resources(base)
+    patch_language_pack_manager_click(base)
     patch_profile_host_notifier(base)
     patch_profile_apply_hook(base)
     patch_manifest(base)
