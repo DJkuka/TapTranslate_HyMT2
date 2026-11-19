@@ -226,6 +226,8 @@ object HyMT2Runtime {
                         val model = ensureLoaded(appContext)
                         val options = HyMT2Settings.load(appContext)
                         val modelKind = selectedModelKind(appContext)
+                        val affinityReport = applyConfiguredCpuAffinity(appContext, options)
+                        Log.i(TAG, "CPU_AFFINITY_BEFORE_INFERENCE $affinityReport")
                         val loadedConfig = model.config
                         Log.i(TAG, "MODEL_CONFIG_ACTIVE kind=$modelKind context=${loadedConfig.contextSize} threads=${loadedConfig.threads} gpuLayers=${loadedConfig.gpuLayers} temperature=${loadedConfig.temperature} topP=${loadedConfig.topP} topK=${loadedConfig.topK} seed=${loadedConfig.seed}")
                         val isStqModel = modelKind == MODEL_KIND_STQ1
@@ -455,6 +457,29 @@ $sourceText"""
         Log.i(TAG, "Recent dialogue context cleared")
     }
 
+    private fun applyConfiguredCpuAffinity(context: Context, options: HyMT2Options): String {
+        val mask = when (options.cpuAffinityMode) {
+            HyMT2Settings.AFFINITY_PERFORMANCE -> {
+                var detected = 0L
+                val cpus = HyMT2PenaltyNative.cpuTopology()
+                for (i in 0 until cpus.length()) {
+                    val cpu = cpus.getJSONObject(i)
+                    val id = cpu.optInt("id", -1)
+                    if (id in 0..63 && cpu.optBoolean("online") &&
+                        cpu.optBoolean("allowed") && cpu.optBoolean("performance")) {
+                        detected = detected or (1L shl id)
+                    }
+                }
+                detected
+            }
+            HyMT2Settings.AFFINITY_CUSTOM -> options.cpuAffinityMask
+            else -> 0L
+        }
+        val report = HyMT2PenaltyNative.applyCpuAffinity(mask)
+        HyMT2Settings.recordAffinityReport(context, report)
+        return "mode=\${options.cpuAffinityMode}, requestedMask=\${if (mask == 0L) "system" else "0x\${mask.toULong().toString(16)}"}, result=$report"
+    }
+
     private suspend fun ensureLoaded(context: Context): LlamaModel = modelMutex.withLock {
         val selectedUri = selectedModelUri(context)
             ?: error("GGUF-файл Hy-MT2 не выбран. Выбери исходную модель через системный проводник.")
@@ -509,6 +534,9 @@ $sourceText"""
             val modelPath = "/proc/self/fd/$fdNumber"
             verifyProcFdPath(modelPath, stat.st_size)
             Log.i(TAG, "SAF descriptor ready and reopenable: fd=$fdNumber, size=${stat.st_size}, path=$modelPath; no model data copied")
+
+            val affinityReport = applyConfiguredCpuAffinity(context, options)
+            Log.i(TAG, "CPU_AFFINITY_BEFORE_MODEL_LOAD $affinityReport")
 
             val created = Llama.loadModel(
                 modelPath = modelPath,
