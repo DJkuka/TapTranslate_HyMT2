@@ -18,6 +18,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -53,6 +54,10 @@ class HyMT2SettingsActivity : Activity() {
     private lateinit var customStyleInput: EditText
     private lateinit var recentContextSwitch: Switch
     private lateinit var vulkanSwitch: Switch
+    private lateinit var affinityModeSpinner: Spinner
+    private lateinit var affinityCpuInfo: TextView
+    private lateinit var affinityCpuChecks: LinearLayout
+    private val affinityCpuBoxes = linkedMapOf<Int, CheckBox>()
 
     private var autoPicker = false
     private var pickerLaunched = false
@@ -154,6 +159,13 @@ class HyMT2SettingsActivity : Activity() {
         customStyleInput.minLines = 2
         customStyleInput.maxLines = 5
 
+        addSection(root, "ПРИВЯЗКА К ЯДРАМ CPU")
+        addText(root, "Ограничивает вычислительные потоки Hy-MT2 выбранными ядрами. Системный режим снимает ручное ограничение. Автоматический режим определяет производительный кластер по cpu_capacity или максимальной частоте.", 12f)
+        affinityModeSpinner = addSpinner(root, "Режим CPU affinity", listOf("Системный планировщик", "Только производительные ядра (авто)", "Ручной выбор ядер"))
+        affinityCpuInfo = addText(root, "Определение топологии CPU…", 12f)
+        affinityCpuChecks = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        root.addView(affinityCpuChecks, match())
+
         addSection(root, "УСКОРЕНИЕ GPU")
         vulkanSwitch = addSwitch(root, "Использовать Vulkan для Q4_K_M на Adreno 610", true)
         vulkanSwitch.isEnabled = HyMT2Settings.VULKAN_BACKEND_COMPILED
@@ -199,7 +211,13 @@ class HyMT2SettingsActivity : Activity() {
         glossaryInput.setText(options.glossary)
         customStyleInput.setText(options.customStyle)
         vulkanSwitch.isChecked = options.useVulkan
+        affinityModeSpinner.setSelection(when (options.cpuAffinityMode) {
+            HyMT2Settings.AFFINITY_PERFORMANCE -> 1
+            HyMT2Settings.AFFINITY_CUSTOM -> 2
+            else -> 0
+        })
         bindingControls = false
+        buildAffinityCpuControls(options.cpuAffinityMask)
         updateStats()
     }
 
@@ -233,9 +251,18 @@ class HyMT2SettingsActivity : Activity() {
                 customStyle = customStyleInput.text.toString(),
                 useVulkan = vulkanSwitch.isChecked,
                 performanceProfile = profileSpinner.selectedItem?.toString() ?: HyMT2Settings.profileChoices.last(),
+                cpuAffinityMode = when (affinityModeSpinner.selectedItemPosition) {
+                    1 -> HyMT2Settings.AFFINITY_PERFORMANCE
+                    2 -> HyMT2Settings.AFFINITY_CUSTOM
+                    else -> HyMT2Settings.AFFINITY_SYSTEM
+                },
+                cpuAffinityMask = affinityCpuBoxes.entries.fold(0L) { mask, entry ->
+                    if (entry.value.isChecked) mask or (1L shl entry.key) else mask
+                },
             )
             HyMT2Settings.save(this, options)
             val requiresReload = old.threads != options.threads ||
+                old.cpuAffinityMode != options.cpuAffinityMode || old.cpuAffinityMask != options.cpuAffinityMask ||
                 old.contextSize != options.contextSize ||
                 old.useVulkan != options.useVulkan || old.gpuLayers != options.gpuLayers ||
                 old.temperature != options.temperature || old.topP != options.topP ||
@@ -525,6 +552,52 @@ class HyMT2SettingsActivity : Activity() {
         loadButton.isEnabled = !importing && hasModel && !HyMT2Runtime.isLoaded()
         unloadButton.isEnabled = HyMT2Runtime.isLoaded()
         updateStats()
+    }
+
+    private fun buildAffinityCpuControls(savedMask: Long) {
+        try {
+            affinityCpuChecks.removeAllViews()
+            affinityCpuBoxes.clear()
+            val cpus = HyMT2PenaltyNative.cpuTopology()
+            val labels = mutableListOf<String>()
+            var fastMask = 0L
+            for (i in 0 until cpus.length()) {
+                val cpu = cpus.getJSONObject(i)
+                val id = cpu.optInt("id", -1)
+                if (id !in 0..63 || !cpu.optBoolean("online") || !cpu.optBoolean("allowed")) continue
+                val performance = cpu.optBoolean("performance")
+                if (performance) fastMask = fastMask or (1L shl id)
+                val freq = cpu.optLong("maxFreqKhz")
+                val label = "CPU $id · " + (if (performance) "производительное" else "энергоэффективное") +
+                    (if (freq > 0) " · \${freq / 1000} МГц" else "")
+                val check = CheckBox(this).apply {
+                    text = label
+                    isChecked = if (savedMask != 0L) (savedMask and (1L shl id)) != 0L else performance
+                }
+                affinityCpuBoxes[id] = check
+                affinityCpuChecks.addView(check)
+                labels += "CPU$id"
+            }
+            affinityCpuInfo.text = "Доступны: \${labels.joinToString()}\\nПроизводительные: " +
+                if (fastMask != 0L) maskLabel(fastMask) else "кластер не определён; авто-режим не будет угадывать"
+            refreshAffinityCpuVisibility()
+            affinityModeSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    refreshAffinityCpuVisibility()
+                }
+            }
+        } catch (t: Throwable) {
+            affinityCpuInfo.text = "Не удалось определить топологию CPU: \${t.message ?: t.javaClass.simpleName}"
+        }
+    }
+
+    private fun maskLabel(mask: Long): String =
+        (0..63).filter { (mask and (1L shl it)) != 0L }.joinToString(prefix = "{", postfix = "}")
+
+    private fun refreshAffinityCpuVisibility() {
+        if (!::affinityModeSpinner.isInitialized || !::affinityCpuChecks.isInitialized) return
+        affinityCpuChecks.visibility = if (affinityModeSpinner.selectedItemPosition == 2) View.VISIBLE else View.GONE
     }
 
     private fun updateStats() {
