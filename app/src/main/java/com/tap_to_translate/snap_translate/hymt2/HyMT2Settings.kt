@@ -21,6 +21,8 @@ data class HyMT2Options(
     val customStyle: String,
     val useVulkan: Boolean,
     val performanceProfile: String,
+    val cpuAffinityMode: String,
+    val cpuAffinityMask: Long,
 )
 
 data class HyMT2Stats(
@@ -39,6 +41,10 @@ object HyMT2Settings {
     // The integrated AAR contains both CPU/NEON and Vulkan backends.
     const val VULKAN_BACKEND_COMPILED = true
 
+    const val AFFINITY_SYSTEM = "system"
+    const val AFFINITY_PERFORMANCE = "performance"
+    const val AFFINITY_CUSTOM = "custom"
+    val cpuAffinityModes = listOf(AFFINITY_SYSTEM, AFFINITY_PERFORMANCE, AFFINITY_CUSTOM)
     val threadChoices = listOf(2, 3, 4, 6, 8)
     val gpuLayerChoices = listOf(0, 2, 4, 6, 8, 12, 16, 24)
     val contextChoices = listOf(256, 512, 1024, 2048, 3072, 4096, 6144, 8192)
@@ -94,6 +100,9 @@ object HyMT2Settings {
             // Vulkan is enabled by default with the tablet-tested 8-layer profile.
             useVulkan = VULKAN_BACKEND_COMPILED && p.getBoolean("use_vulkan", true),
             performanceProfile = p.getString("performance_profile", profileChoices[1]) ?: profileChoices[1],
+            cpuAffinityMode = p.getString("cpu_affinity_mode", AFFINITY_SYSTEM)
+                ?.takeIf { it in cpuAffinityModes } ?: AFFINITY_SYSTEM,
+            cpuAffinityMask = p.getLong("cpu_affinity_mask", 0L),
         )
     }
 
@@ -107,6 +116,10 @@ object HyMT2Settings {
         require(options.topP in 0.05f..1f) { "Top-P должна быть от 0,05 до 1" }
         require(options.topK in 1..100) { "Top-K должен быть от 1 до 100" }
         require(options.recentContextPairs in 0..4) { "Число предыдущих реплик должно быть от 0 до 4" }
+        require(options.cpuAffinityMode in cpuAffinityModes) { "Недопустимый режим привязки CPU" }
+        require(options.cpuAffinityMode != AFFINITY_CUSTOM || options.cpuAffinityMask != 0L) {
+            "В ручном режиме выбери хотя бы одно ядро CPU"
+        }
 
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putInt("threads", options.threads)
@@ -125,9 +138,22 @@ object HyMT2Settings {
             .putString("custom_style", options.customStyle.take(1000))
             .putBoolean("use_vulkan", options.useVulkan)
             .putString("performance_profile", options.performanceProfile)
+            .putString("cpu_affinity_mode", options.cpuAffinityMode)
+            .putLong("cpu_affinity_mask", options.cpuAffinityMask)
             .apply()
         Log.i(TAG, "Hy-MT2 settings saved: threads=${options.threads}, context=${options.contextSize}, maxTokens=${options.maxTokens}, Vulkan=${options.useVulkan}, gpuLayers=${options.gpuLayers}, repetitionPenalty=${options.repetitionPenalty}")
     }
+
+    fun recordAffinityReport(context: Context, report: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString("cpu_affinity_last_report", report.take(2000))
+            .apply()
+        Log.i(TAG, "CPU affinity applied: $report")
+    }
+
+    fun lastAffinityReport(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString("cpu_affinity_last_report", "") ?: ""
 
     fun recordTranslation(context: Context, durationMs: Long, tokensPerSecond: Double, outputChars: Int) {
         if (!tokensPerSecond.isFinite() || tokensPerSecond <= 0.0) return
