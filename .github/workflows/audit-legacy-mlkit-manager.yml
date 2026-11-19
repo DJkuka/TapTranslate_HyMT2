@@ -85,6 +85,17 @@ jobs:
             --helper build/isolated \
             --out build/legacy-translate-internals.txt
 
+      - name: Verify both reports exist and are non-empty
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s build/legacy-mlkit-manager-audit.txt
+          test -s build/legacy-translate-internals.txt
+          test -s input/apk-sha256.txt
+          echo "Both reports generated:"
+          wc -l build/legacy-mlkit-manager-audit.txt build/legacy-translate-internals.txt
+
       - name: Upload audit report
         if: always()
         uses: actions/upload-artifact@v4
@@ -94,5 +105,5 @@ jobs:
             build/legacy-mlkit-manager-audit.txt
             build/legacy-translate-internals.txt
             input/apk-sha256.txt
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 14
