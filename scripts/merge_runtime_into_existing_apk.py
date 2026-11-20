@@ -181,15 +181,41 @@ PRESERVED_CLASS_FAMILIES = (
 # copies of already-integrated Settings/OCR/UI classes and compiler-generated
 # lambdas that must remain exactly as APK 219 shipped them.
 APP_RUNTIME_CLASS_FAMILIES = (
+    # Updated dual-model Hy-MT2 runtime and all matching caller/settings classes.
     "com/tap_to_translate/snap_translate/hymt2/HyMT2Runtime",
+    "com/tap_to_translate/snap_translate/hymt2/HyMT2Options",
+    "com/tap_to_translate/snap_translate/hymt2/HyMT2Settings",
+    "com/tap_to_translate/snap_translate/hymt2/HyMT2SettingsActivity",
+    "com/tap_to_translate/snap_translate/hymt2/HyMT2PenaltyNative",
+    # Extended OCR settings UI, runtime bridge and matching configuration objects.
+    "com/tap_to_translate/snap_translate/hymt2/OcrSettingsActivity",
+    "com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrLiveBridge",
+    "com/paddle/ocr/PaddleOCRConfig",
+    "com/paddle/ocr/EngineConfig",
+    # New additions which are not present in the original APK 219.
     "com/tap_to_translate/snap_translate/hymt2/LanguagePackManagerActivity",
     "com/tap_to_translate/snap_translate/hymt2/TesseractLanguagePackStore",
 )
 
-# HyMT2Runtime must be rebuilt in lockstep with the helper's updated Llama JNI
-# wrapper and preserve the public ABI already called by APK 219.
 REPLACEABLE_APP_RUNTIME_FAMILIES = (
     "com/tap_to_translate/snap_translate/hymt2/HyMT2Runtime",
+    "com/tap_to_translate/snap_translate/hymt2/HyMT2Options",
+    "com/tap_to_translate/snap_translate/hymt2/HyMT2Settings",
+    "com/tap_to_translate/snap_translate/hymt2/HyMT2SettingsActivity",
+    "com/tap_to_translate/snap_translate/hymt2/HyMT2PenaltyNative",
+    "com/tap_to_translate/snap_translate/hymt2/OcrSettingsActivity",
+    "com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrLiveBridge",
+    "com/paddle/ocr/PaddleOCRConfig",
+    "com/paddle/ocr/EngineConfig",
+)
+
+ABI_CHECK_APP_RUNTIME_FAMILIES = (
+    "com/tap_to_translate/snap_translate/hymt2/HyMT2Runtime",
+    "com/tap_to_translate/snap_translate/hymt2/HyMT2Settings",
+    "com/tap_to_translate/snap_translate/hymt2/HyMT2SettingsActivity",
+    "com/tap_to_translate/snap_translate/hymt2/HyMT2PenaltyNative",
+    "com/tap_to_translate/snap_translate/hymt2/OcrSettingsActivity",
+    "com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrLiveBridge",
 )
 
 def run(cmd: list[str]) -> None:
@@ -489,7 +515,7 @@ def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
                     None,
                 )
                 if (
-                    replaceable_app_family is not None
+                    replaceable_app_family in ABI_CHECK_APP_RUNTIME_FAMILIES
                     and rel_name == replaceable_app_family + ".smali"
                     and existing
                 ):
@@ -497,7 +523,7 @@ def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
                         raise RuntimeError(
                             "Multiple base definitions found for app runtime class: " + rel_name
                         )
-                    verify_class_abi(existing[0], source, "HyMT2Runtime")
+                    verify_class_abi(existing[0], source, replaceable_app_family.rsplit("/", 1)[-1])
                 if rel_name.startswith("dev/ffmpegkit/llama/") and existing:
                     if len(existing) != 1:
                         raise RuntimeError(
@@ -620,12 +646,12 @@ def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
 
                 replaceable = family in REPLACEABLE_APP_RUNTIME_FAMILIES
                 if replaceable:
-                    if rel_name == family + ".smali" and existing:
+                    if family in ABI_CHECK_APP_RUNTIME_FAMILIES and rel_name == family + ".smali" and existing:
                         if len(existing) != 1:
                             raise RuntimeError(
                                 "Multiple base definitions found for app runtime class: " + rel_name
                             )
-                        verify_class_abi(existing[0], source, "HyMT2Runtime")
+                        verify_class_abi(existing[0], source, family.rsplit("/", 1)[-1])
                     target.parent.mkdir(parents=True, exist_ok=True)
                     for stale in existing:
                         stale.unlink()
@@ -1171,6 +1197,74 @@ def verify_preserved_payload(base_apk: Path, output_apk: Path) -> None:
 
     print("Verified APK 219 assets, original non-target DEX/native payload, Tesseract hooks, manager Activity and unsigned state.")
 
+def verify_dual_model_affinity_runtime(root: Path) -> None:
+    required_classes = {
+        "HyMT2Runtime": "com/tap_to_translate/snap_translate/hymt2/HyMT2Runtime.smali",
+        "HyMT2Settings": "com/tap_to_translate/snap_translate/hymt2/HyMT2Settings.smali",
+        "HyMT2SettingsActivity": "com/tap_to_translate/snap_translate/hymt2/HyMT2SettingsActivity.smali",
+        "HyMT2PenaltyNative": "com/tap_to_translate/snap_translate/hymt2/HyMT2PenaltyNative.smali",
+    }
+    contents: dict[str, str] = {}
+    for label, relative in required_classes.items():
+        path = locate_smali(root, relative)
+        if path is None:
+            raise RuntimeError(label + " is missing from final APK")
+        contents[label] = path.read_text(encoding="utf-8")
+
+    required_markers = {
+        "HyMT2Runtime": ("STQ1_0", "model_kind", "selectedModelKind", "setSelectedModelUri"),
+        "HyMT2Settings": ("cpu_affinity_mode", "cpu_affinity_mask", "cpu_affinity_last_report"),
+        "HyMT2SettingsActivity": ("1.25bit", "stq43", "kind=", "performance", "custom"),
+        "HyMT2PenaltyNative": ("nativeCpuTopologyJson", "nativeSetCpuAffinity"),
+    }
+    for label, markers in required_markers.items():
+        missing = [marker for marker in markers if marker not in contents[label]]
+        if missing:
+            raise RuntimeError(label + " is missing required model/affinity markers: " + ", ".join(missing))
+
+    if "setSelectedModelUri(Landroid/content/Context;Landroid/net/Uri;Ljava/lang/String;)V" not in contents["HyMT2Runtime"]:
+        raise RuntimeError("HyMT2Runtime does not expose the model-kind selection method")
+    print("Verified dual-model routing, STQ1_0 model classification and CPU affinity controls.")
+
+
+def verify_extended_ocr_settings(root: Path) -> None:
+    required_classes = {
+        "OcrSettingsActivity": "com/tap_to_translate/snap_translate/hymt2/OcrSettingsActivity.smali",
+        "PaddleOcrLiveBridge": "com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrLiveBridge.smali",
+        "PaddleOCRConfig": "com/paddle/ocr/PaddleOCRConfig.smali",
+        "EngineConfig": "com/paddle/ocr/EngineConfig.smali",
+    }
+    contents: dict[str, str] = {}
+    for label, relative in required_classes.items():
+        path = locate_smali(root, relative)
+        if path is None:
+            raise RuntimeError(label + " is missing from final APK")
+        contents[label] = path.read_text(encoding="utf-8")
+
+    required_ui = (
+        "detLimitSideLen", "detLimitType", "detImgMode", "detMaxCandidates",
+        "detUseDilation", "detScoreMode", "recBatchSize", "ortThreads",
+    )
+    required_runtime = (
+        "ocr_det_limit_side_len", "ocr_det_limit_type", "ocr_det_img_mode",
+        "ocr_det_max_candidates", "ocr_det_use_dilation", "ocr_det_score_mode",
+        "ocr_rec_batch_size", "ocr_ort_threads",
+    )
+    for label, source, markers in (
+        ("OcrSettingsActivity", contents["OcrSettingsActivity"], required_ui),
+        ("PaddleOcrLiveBridge", contents["PaddleOcrLiveBridge"], required_runtime),
+    ):
+        missing = [marker for marker in markers if marker not in source]
+        if missing:
+            raise RuntimeError(label + " is missing extended OCR settings: " + ", ".join(missing))
+
+    if "detMaxCandidates" not in contents["PaddleOCRConfig"] or "recBatchSize" not in contents["PaddleOCRConfig"]:
+        raise RuntimeError("PaddleOCRConfig does not expose extended detector/recognizer parameters")
+    if "numThreads" not in contents["EngineConfig"]:
+        raise RuntimeError("EngineConfig does not expose ONNX Runtime thread control")
+    print("Verified extended PP-OCRv6 controls and parameter application.")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-apk", required=True, type=Path)
@@ -1204,6 +1298,8 @@ def main() -> int:
     relocated_runtime_classes = copy_runtime_smali(helper, base)
     verify_original_smali_inventory(original_smali_inventory, base, relocated_runtime_classes)
     verify_helper_runtime_inventory(helper, base)
+    verify_dual_model_affinity_runtime(base)
+    verify_extended_ocr_settings(base)
     integrate_language_pack_manager(base)
     verify_region_editor_fix(base)
     verify_mlkit_model_manager_classes(base)
@@ -1228,6 +1324,8 @@ def main() -> int:
     verify_region_editor_fix(final_decoded)
     verify_original_smali_inventory(original_smali_inventory, final_decoded, relocated_runtime_classes)
     verify_helper_runtime_inventory(helper, final_decoded)
+    verify_dual_model_affinity_runtime(final_decoded)
+    verify_extended_ocr_settings(final_decoded)
     verify_mlkit_model_manager_classes(final_decoded)
     print("Base APK SHA-256:", actual_sha)
     print("Unsigned output SHA-256:", sha256(args.output))

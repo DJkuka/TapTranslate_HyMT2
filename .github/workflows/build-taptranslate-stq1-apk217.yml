@@ -4,7 +4,7 @@ name: Build TapTranslate STQ1_0 on verified APK 219
 on:
   workflow_dispatch:
   push:
-    branches: [ stq1_0-apk219-final, stq1_0-apk219-standalone-parity ]
+    branches: [ stq1_0-apk219-final, stq1_0-apk219-standalone-parity, cpu-affinity-apk219-two-model-test ]
 
 permissions:
   contents: read
@@ -195,7 +195,7 @@ jobs:
             -PvulkanAarNativeDir="$VULKAN_AAR_NATIVE_DIR" \
             :app:assembleDebug
 
-      - name: Merge only the STQ runtime into APK 219
+      - name: Merge dual-model runtime, CPU affinity and extended OCR into APK 219
         run: |
           python3 -m py_compile scripts/merge_runtime_into_existing_apk.py
           python3 scripts/merge_runtime_into_existing_apk.py \
@@ -203,22 +203,22 @@ jobs:
             --helper-apk app/build/outputs/apk/debug/app-debug.apk \
             --apktool tools/apktool.jar \
             --work build/merge-apk219 \
-            --output build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_unsigned.apk \
+            --output build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_CPUAffinity_OCR_unsigned.apk \
             --zipalign "$ANDROID_HOME/build-tools/35.0.0/zipalign"
 
       - name: Validate unsigned APK and native backend payload
         run: |
           set -euo pipefail
-          unzip -t build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_unsigned.apk | tail -n 2
-          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -p 4 build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_unsigned.apk
-          sha256sum build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_unsigned.apk
-          ls -lh build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_unsigned.apk
+          unzip -t build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_CPUAffinity_OCR_unsigned.apk | tail -n 2
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -p 4 build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_CPUAffinity_OCR_unsigned.apk
+          sha256sum build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_CPUAffinity_OCR_unsigned.apk
+          ls -lh build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_CPUAffinity_OCR_unsigned.apk
 
       - name: Upload experimental unsigned APK
         uses: actions/upload-artifact@v4
         with:
-          name: TapTranslate-STQ1_0-APK219-unsigned
-          path: build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_unsigned.apk
+          name: TapTranslate-STQ1_0-APK219-CPUAffinity-OCR-unsigned
+          path: build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_STQ1_0_APK219_CPUAffinity_OCR_unsigned.apk
           if-no-files-found: error
           retention-days: 14
 
