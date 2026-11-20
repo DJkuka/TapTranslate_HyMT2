@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import zipfile
+import re
 from pathlib import Path
 
 BASE_SHA256 = "0e0d30f30a98fa427a62d23c6fe670e9bd9781287da2515b1b8139f9332e82eb"
@@ -605,6 +606,46 @@ def snapshot_smali_inventory(root: Path) -> dict[tuple[str, str], str]:
     return snapshot
 
 
+def integrate_hymt2_double_tap_cancel(root: Path) -> None:
+    # The original floating-icon double-tap listener is obfuscated as lb/b in APK 219.
+    # Call the app-owned runtime hook without changing registers or host listener behavior.
+    relative = "lb/b.smali"
+    path = locate_smali(root, relative)
+    if path is None:
+        raise RuntimeError("APK 219 floating-icon gesture listener lb/b.smali is missing")
+    source = path.read_text(encoding="utf-8")
+    signature = re.compile(r"(?m)^\\.method [^\\n]*\\bonDoubleTap\\(Landroid/view/MotionEvent;\\)Z\\s*$")
+    match = signature.search(source)
+    if match is None:
+        raise RuntimeError("Could not locate floating-icon onDoubleTap(MotionEvent)Z handler")
+    end = source.find(".end method", match.end())
+    if end < 0:
+        raise RuntimeError("Floating-icon onDoubleTap handler has no .end method")
+    method = source[match.start():end]
+    invocation = "    invoke-static {}, Lcom/tap_to_translate/snap_translate/hymt2/HyMT2Runtime;->cancelActiveTranslation()V"
+    if invocation not in method:
+        locals_match = re.search(r"(?m)^\\s*\\.(?:locals|registers)\\s+\\d+\\s*$", method)
+        if locals_match is None:
+            raise RuntimeError("Floating-icon onDoubleTap handler has no register declaration")
+        insert_at = match.start() + locals_match.end()
+        source = source[:insert_at] + "\\n" + invocation + source[insert_at:]
+        path.write_text(source, encoding="utf-8")
+    verify_hymt2_double_tap_cancel_hook(root)
+    print("Integrated Hy-MT2 cancellation into the floating-icon double-tap listener.")
+
+
+def verify_hymt2_double_tap_cancel_hook(root: Path) -> None:
+    path = locate_smali(root, "lb/b.smali")
+    if path is None:
+        raise RuntimeError("APK 219 floating-icon gesture listener is missing")
+    source = path.read_text(encoding="utf-8")
+    signature = re.compile(r"(?ms)^\\.method [^\\n]*\\bonDoubleTap\\(Landroid/view/MotionEvent;\\)Z\\s*$.*?^\\.end method")
+    match = signature.search(source)
+    invocation = "invoke-static {}, Lcom/tap_to_translate/snap_translate/hymt2/HyMT2Runtime;->cancelActiveTranslation()V"
+    if match is None or invocation not in match.group(0):
+        raise RuntimeError("Floating-icon double-tap does not request Hy-MT2 cancellation")
+
+
 def verify_original_smali_inventory(
     snapshot: dict[tuple[str, str], str],
     root: Path,
@@ -613,11 +654,11 @@ def verify_original_smali_inventory(
     # All original host classes must remain byte-identical in their original
     # DEX, except classes intentionally relocated to the appended helper DEXes
     # and the two Tesseract hooks inserted by this integration.
-    allowed_host_hooks: set[str] = set()
+    allowed_host_hooks: set[tuple[str, str]] = {("smali_classes2", "lb/b.smali")}
     missing: list[str] = []
     changed: list[str] = []
     for (dex_name, rel), expected_hash in snapshot.items():
-        if rel in relocated_classes or rel in allowed_host_hooks:
+        if rel in relocated_classes or (dex_name, rel) in allowed_host_hooks:
             continue
         path = root / dex_name / rel
         if not path.is_file():
@@ -899,10 +940,12 @@ def main() -> int:
     verify_region_editor_fix(base)
     original_smali_inventory = snapshot_smali_inventory(base)
     relocated_runtime_classes = copy_runtime_smali(helper, base)
+    integrate_hymt2_double_tap_cancel(base)
     verify_sdk_class_preservation(relocated_runtime_classes)
     verify_original_smali_inventory(original_smali_inventory, base, relocated_runtime_classes)
     verify_helper_runtime_inventory(helper, base)
     verify_dual_model_affinity_runtime(base)
+    verify_hymt2_double_tap_cancel_hook(base)
     verify_extended_ocr_settings(base)
     # No language-pack manager or Tesseract hooks are needed for this integration.
     verify_region_editor_fix(base)
@@ -930,6 +973,7 @@ def main() -> int:
     verify_original_smali_inventory(original_smali_inventory, final_decoded, relocated_runtime_classes)
     verify_helper_runtime_inventory(helper, final_decoded)
     verify_dual_model_affinity_runtime(final_decoded)
+    verify_hymt2_double_tap_cancel_hook(final_decoded)
     verify_extended_ocr_settings(final_decoded)
     # ML Kit/Firebase/GMS remain exactly as supplied by APK 219.
     print("Base APK SHA-256:", actual_sha)
