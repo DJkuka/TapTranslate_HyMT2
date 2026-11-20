@@ -83,14 +83,11 @@ object HyMT2Runtime {
 
     private fun clearHostResult(host: Any) {
         try {
-            val cls = host.javaClass
-            cls.getField("d").set(host, "")
-            val usePrimary = cls.getField("b").getBoolean(host)
-            val callback = cls.getField("a").get(host)
-            val method = if (usePrimary) "a" else "f"
-            val targetMethod = callback.javaClass.getMethod(method, String::class.java)
-            targetMethod.isAccessible = true
-            targetMethod.invoke(callback, "")
+            // Clear only the cached host field. Calling the app callback with an empty
+            // string is interpreted as a real UI update by some host states and can
+            // interfere with the later asynchronous result delivery.
+            host.javaClass.getField("d").set(host, "")
+            Log.i(TAG, "Cleared previous host result field without invoking the UI callback")
         } catch (t: Throwable) {
             // Clearing a previous result is best-effort; it must never block a new translation.
             Log.w(TAG, "Cannot clear previous Hy-MT2 result before new inference", t)
@@ -424,7 +421,8 @@ object HyMT2Runtime {
                         }
                     }
 
-                    mainHandler.post { deliverResult(host, result, sourceText) }
+                    val resultPosted = mainHandler.post { deliverResult(host, result, sourceText) }
+                    Log.i(TAG, "RESULT_DISPATCH_QUEUED chars=${result.length} posted=$resultPosted")
                 } catch (t: Throwable) {
                     if (t is CancellationException) {
                         Log.i(TAG, "Hy-MT2 translation cancelled cleanly; no fallback result will be delivered")
@@ -679,7 +677,9 @@ $sourceText"""
             val method = if (usePrimary) "a" else "f"
             val targetMethod = callback.javaClass.getMethod(method, String::class.java)
             targetMethod.isAccessible = true
+            Log.i(TAG, "RESULT_DELIVERY_START chars=${translated.length} usePrimary=$usePrimary callback=${callback.javaClass.name} method=$method")
             targetMethod.invoke(callback, translated)
+            Log.i(TAG, "RESULT_DELIVERY_OK chars=${translated.length}")
         } catch (t: Throwable) {
             Log.e(TAG, "Cannot deliver Hy-MT2 result to app callback", t)
             fallbackToGoogleOffline(host, originalSource)
