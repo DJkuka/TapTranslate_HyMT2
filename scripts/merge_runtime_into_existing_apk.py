@@ -856,10 +856,19 @@ def verify_dual_model_affinity_runtime(root: Path) -> None:
         contents[label] = path.read_text(encoding="utf-8")
 
     required_markers = {
-        "HyMT2Runtime": ("STQ1_0", "model_kind", "selectedModelKind", "setSelectedModelUri"),
+        "HyMT2Runtime": (
+            "STQ1_0", "model_kind", "selectedModelKind", "setSelectedModelUri",
+            "cancelActiveTranslation", "translationCancelRequested", "clearHostResult",
+        ),
         "HyMT2Settings": ("cpu_affinity_mode", "cpu_affinity_mask", "cpu_affinity_last_report"),
-        "HyMT2SettingsActivity": ("1.25bit", "stq43", "kind=", "performance", "custom"),
-        "HyMT2PenaltyNative": ("nativeCpuTopologyJson", "nativeSetCpuAffinity"),
+        "HyMT2SettingsActivity": (
+            "1.25bit", "stq43", "kind=", "performance", "custom",
+            "currentFreqKhz", "currentFreqSource",
+        ),
+        "HyMT2PenaltyNative": (
+            "nativeCpuTopologyJson", "nativeSetCpuAffinity",
+            "nativeInstallAbortCallback", "nativeSetAbortRequested",
+        ),
     }
     for label, markers in required_markers.items():
         missing = [marker for marker in markers if marker not in contents[label]]
