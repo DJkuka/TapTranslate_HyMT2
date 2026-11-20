@@ -12,6 +12,7 @@
 #include <vector>
 #include <sched.h>
 #include <unistd.h>
+#include <atomic>
 
 #include "llama.h"
 
@@ -29,6 +30,12 @@ struct LlamaCtx {
 };
 
 namespace {
+std::atomic<bool> g_abort_requested{false};
+
+bool llama_abort_callback(void *) {
+    return g_abort_requested.load(std::memory_order_relaxed);
+}
+
 std::string from_jstring(JNIEnv *env, jstring value) {
     if (!value) return {};
     const char *chars = env->GetStringUTFChars(value, nullptr);
@@ -303,6 +310,21 @@ std::string apply_cpu_affinity_json(uint64_t requested_mask) {
 
 extern "C" {
 
+JNIEXPORT jboolean JNICALL
+Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeInstallAbortCallback(
+        JNIEnv *env, jobject, jlong handle) {
+    LlamaCtx *context = get_context(handle);
+    if (!context) return JNI_FALSE;
+    llama_set_abort_callback(context->ctx, llama_abort_callback, nullptr);
+    return JNI_TRUE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeSetAbortRequested(
+        JNIEnv *, jobject, jboolean requested) {
+    g_abort_requested.store(requested == JNI_TRUE, std::memory_order_relaxed);
+}
+
 JNIEXPORT jint JNICALL
 Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCountPromptTokens(
         JNIEnv *env, jobject, jlong handle, jstring prompt, jstring system) {
@@ -359,6 +381,11 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
     const int prompt_decode_result = llama_decode(context->ctx, batch);
     const int64_t prompt_end_us = llama_time_us();
     if (prompt_decode_result != 0) {
+        if (g_abort_requested.load(std::memory_order_relaxed)) {
+            llama_sampler_free(sampler);
+            LOGI("GENERATION_CANCELLED during prompt decode");
+            return env->NewStringUTF(R"json({"text":"","error":"cancelled"})json");
+        }
         LOGE("PROMPT_DECODE_FAILED rc=%d elapsed_ms=%lld",
              prompt_decode_result,
              static_cast<long long>((prompt_end_us - prompt_decode_start_us) / 1000));
@@ -375,6 +402,11 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
     bool stopped_on_eog = false;
     bool stopped_on_bos = false;
     for (; generated < max_tokens; ++generated) {
+        if (g_abort_requested.load(std::memory_order_relaxed)) {
+            llama_sampler_free(sampler);
+            LOGI("GENERATION_CANCELLED generated=%d output_bytes=%zu", generated, output.size());
+            return env->NewStringUTF(R"json({"text":"","error":"cancelled"})json");
+        }
         const bool trace_token = generated < 4 || ((generated + 1) % 8 == 0);
         const int64_t sample_start_us = llama_time_us();
         if (trace_token) LOGI("SAMPLE_START index=%d", generated + 1);
@@ -426,6 +458,11 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
                  piece.size(), output.size());
         }
         if (token_decode_result != 0) {
+            if (g_abort_requested.load(std::memory_order_relaxed)) {
+                llama_sampler_free(sampler);
+                LOGI("GENERATION_CANCELLED during token decode index=%d", generated + 1);
+                return env->NewStringUTF(R"json({"text":"","error":"cancelled"})json");
+            }
             LOGE("TOKEN_DECODE_FAILED index=%d rc=%d", generated + 1, token_decode_result);
             ++generated; // Count the token already sampled and appended.
             break;
