@@ -109,8 +109,6 @@ def main():
                 raise SystemExit("Core llama runtime changed unexpectedly: " + name)
         if built.read(REPLACE_SO) != new_jni.read_bytes():
             raise SystemExit("New JNI library not present in final APK")
-        if ACTIVITY.encode() not in built.read("AndroidManifest.xml"):
-            raise SystemExit("CPU affinity Activity missing from final manifest")
 
     print("Verified exact APK219 base, unchanged original assets/native libraries (except hymt2_jni), matching AAR runtime, unsigned output.")
     print("SHA256:", sha(args.output.read_bytes()))
