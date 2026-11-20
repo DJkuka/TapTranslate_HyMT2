@@ -201,7 +201,15 @@ std::string mask_to_hex(uint64_t mask) {
 std::string cpu_topology_json() {
     const long configured = sysconf(_SC_NPROCESSORS_CONF);
     const int count = static_cast<int>(std::max(1L, std::min(64L, configured > 0 ? configured : 1L)));
-    struct CpuInfo { int id; bool online; bool allowed; long max_freq; long capacity; };
+    struct CpuInfo {
+        int id;
+        bool online;
+        bool allowed;
+        long max_freq;
+        long current_freq;
+        std::string current_freq_source;
+        long capacity;
+    };
     std::vector<CpuInfo> cpus;
     cpus.reserve(static_cast<size_t>(count));
     long max_freq = 0;
@@ -214,10 +222,16 @@ std::string cpu_topology_json() {
         const std::string base = "/sys/devices/system/cpu/cpu" + std::to_string(id) + "/";
         long freq = read_cpu_value(base + "cpufreq/cpuinfo_max_freq");
         if (freq <= 0) freq = read_cpu_value(base + "cpufreq/scaling_max_freq");
+        long current_freq = read_cpu_value(base + "cpufreq/cpuinfo_cur_freq");
+        std::string current_freq_source = current_freq > 0 ? "cpuinfo" : "";
+        if (current_freq <= 0) {
+            current_freq = read_cpu_value(base + "cpufreq/scaling_cur_freq");
+            if (current_freq > 0) current_freq_source = "scaling";
+        }
         const long capacity = read_cpu_value(base + "cpu_capacity");
         const bool online = is_cpu_online(id);
         const bool allowed = !have_allowed || CPU_ISSET(id, &allowed_set);
-        cpus.push_back({id, online, allowed, freq, capacity});
+        cpus.push_back({id, online, allowed, freq, current_freq, current_freq_source, capacity});
         if (online) {
             max_freq = std::max(max_freq, freq);
             max_capacity = std::max(max_capacity, capacity);
@@ -236,6 +250,8 @@ std::string cpu_topology_json() {
             << ",\"online\":" << (cpu.online ? "true" : "false")
             << ",\"allowed\":" << (cpu.allowed ? "true" : "false")
             << ",\"maxFreqKhz\":" << cpu.max_freq
+            << ",\"currentFreqKhz\":" << cpu.current_freq
+            << ",\"currentFreqSource\":\"" << cpu.current_freq_source << "\""
             << ",\"capacity\":" << cpu.capacity
             << ",\"performance\":" << (performance ? "true" : "false")
             << "}";
