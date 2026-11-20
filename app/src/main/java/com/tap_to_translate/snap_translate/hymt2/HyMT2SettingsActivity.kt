@@ -109,12 +109,6 @@ class HyMT2SettingsActivity : Activity() {
         loadButton = addButton(root, "2. Загрузить модель в RAM") { loadModel() }
         unloadButton = addButton(root, "Освободить память") { unloadModel() }
 
-        addSection(root, "ЯЗЫКОВЫЕ ПАКЕТЫ")
-        addText(root, "Загрузка, проверка и удаление отдельных языковых пакетов Tesseract OCR и Google ML Kit Offline Translate.", 13f)
-        addButton(root, "Открыть менеджер языковых пакетов") {
-            startActivity(Intent(this, LanguagePackManagerActivity::class.java))
-        }
-
         addSection(root, "ПРОИЗВОДИТЕЛЬНОСТЬ")
         addText(root, "Эти параметры влияют на скорость, расход RAM и длину доступного контекста. Изменение параметров загрузки потребует перезагрузить модель. Для ручной настройки сначала выбери профиль «Настраиваемый».", 13f)
         profileSpinner = addSpinner(root, "Профиль производительности", HyMT2Settings.profileChoices)
@@ -567,9 +561,19 @@ class HyMT2SettingsActivity : Activity() {
                 if (id !in 0..63 || !cpu.optBoolean("online") || !cpu.optBoolean("allowed")) continue
                 val performance = cpu.optBoolean("performance")
                 if (performance) fastMask = fastMask or (1L shl id)
-                val freq = cpu.optLong("maxFreqKhz")
+                val currentFreq = cpu.optLong("currentFreqKhz")
+                val maxFreq = cpu.optLong("maxFreqKhz")
+                val currentFreqSource = cpu.optString("currentFreqSource")
+                val frequencyLabel = when {
+                    currentFreq > 0L -> {
+                        val approximate = currentFreqSource == "scaling"
+                        " · " + (if (approximate) "≈" else "") + "${currentFreq / 1000L} МГц"
+                    }
+                    maxFreq > 0L -> " · макс. ${maxFreq / 1000L} МГц"
+                    else -> ""
+                }
                 val label = "CPU $id · " + (if (performance) "производительное" else "энергоэффективное") +
-                    (if (freq > 0) " · \${freq / 1000} МГц" else "")
+                    frequencyLabel
                 val check = CheckBox(this).apply {
                     text = label
                     isChecked = if (savedMask != 0L) (savedMask and (1L shl id)) != 0L else performance
@@ -578,7 +582,7 @@ class HyMT2SettingsActivity : Activity() {
                 affinityCpuChecks.addView(check)
                 labels += "CPU$id"
             }
-            affinityCpuInfo.text = "Доступны: \${labels.joinToString()}\\nПроизводительные: " +
+            affinityCpuInfo.text = "Доступны: ${labels.joinToString()}\nПроизводительные: " +
                 if (fastMask != 0L) maskLabel(fastMask) else "кластер не определён; авто-режим не будет угадывать"
             refreshAffinityCpuVisibility()
             affinityModeSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
@@ -588,7 +592,7 @@ class HyMT2SettingsActivity : Activity() {
                 }
             }
         } catch (t: Throwable) {
-            affinityCpuInfo.text = "Не удалось определить топологию CPU: \${t.message ?: t.javaClass.simpleName}"
+            affinityCpuInfo.text = "Не удалось определить топологию CPU: ${t.message ?: t.javaClass.simpleName}"
         }
     }
 
