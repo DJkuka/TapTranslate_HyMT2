@@ -1,4 +1,5 @@
 name: Build CPU affinity integration on exact APK 219
+# Rebuild after the binary-manifest validation fix.
 
 on:
   workflow_dispatch:
