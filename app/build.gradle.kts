@@ -32,7 +32,12 @@ android {
 
     kotlinOptions { jvmTarget = "17" }
 
-    // CPU-affinity helper only needs the top-level Hy-MT2 runtime. The host APK
+    // Keep both Java and Kotlin compilation restricted to the staged Hy-MT2
+// sources. The original source tree also contains OCR implementations that are
+// already present in APK 219 and must not be rebuilt for this CPU-only patch.
+kotlin.sourceSets.getByName("main").kotlin.setSrcDirs(listOf("src/cpuAffinity/java"))
+
+// CPU-affinity helper only needs the top-level Hy-MT2 runtime. The host APK
     // already contains OCR classes and native OCR libraries; do not resolve or
     // package ONNX Runtime/OpenCV in this surgical CPU-only integration build.
     sourceSets.getByName("main").java.setSrcDirs(listOf("src/cpuAffinity/java"))
