@@ -15,62 +15,26 @@ BASE_SHA256 = "0e0d30f30a98fa427a62d23c6fe670e9bd9781287da2515b1b8139f9332e82eb"
 # Translate 17.0.3 / Common 18.11.0 use firebase.components.Component instead.
 # Replace all four registrar definitions together so MlKitInitProvider never
 # feeds an old id.a object into the new ComponentRuntime.
-REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES = {
-    "com/google/mlkit/common/internal/MlKitInitProvider.smali",
-    "com/google/mlkit/common/internal/MlKitComponentDiscoveryService.smali",
-    "com/google/mlkit/common/internal/CommonComponentRegistrar.smali",
-    "com/google/mlkit/nl/translate/NaturalLanguageTranslateRegistrar.smali",
-    "com/google/mlkit/vision/text/internal/TextRegistrar.smali",
-    "com/google/mlkit/vision/common/internal/VisionCommonRegistrar.smali",
-}
+REPLACEABLE_MLKIT_BOOTSTRAP_CLASSES: set[str] = set()
 
 # The newer TextRegistrar and VisionCommonRegistrar must be accompanied by the
 # exact newer ML Kit Vision implementation they were compiled against. Replace
 # colliding classes within these prefixes and copy the new classes into classes5.
-REPLACEABLE_MLKIT_PACKAGE_PREFIXES = (
-    # Keep the complete ML Kit public and implementation APIs on the helper's
-    # matched Translate 17.0.3 / Common 18.11.0 / Vision versions.
-    "com/google/mlkit/common/",
-    "com/google/mlkit/nl/translate/",
-    "com/google/mlkit/vision/",
-    "com/google/android/gms/internal/mlkit_common/",
-    "com/google/android/gms/internal/mlkit_translate/",
-    "com/google/android/gms/internal/mlkit_vision_common/",
-    "com/google/android/gms/internal/mlkit_vision_text_common/",
-    # The new JNI .so and its Java wrapper are a single matched runtime unit.
-    "dev/ffmpegkit/llama/",
-)
+REPLACEABLE_MLKIT_PACKAGE_PREFIXES: tuple[str, ...] = ()
 
 # Google Play Services core is a versioned runtime family. Keep its classes
 # aligned with the helper instead of mixing old APK 219 definitions with
 # play-services-base/basement from the ML Kit dependency graph.
-REPLACEABLE_GOOGLE_PLAY_SERVICES_PREFIXES = (
-    "com/google/android/gms/common/",
-    "com/google/android/gms/dynamic/",
-    "com/google/android/gms/dynamite/",
-    "com/google/android/gms/internal/base/",
-    "com/google/android/gms/internal/common/",
-    "com/google/android/gms/internal/tasks/",
-    "com/google/android/gms/tasks/",
-)
+REPLACEABLE_GOOGLE_PLAY_SERVICES_PREFIXES: tuple[str, ...] = ()
 
 # These AndroidX APIs are part of the helper's resolved Google Play Services
 # dependency graph. Replace matching definitions as a set and copy the full
 # helper inventory for each package.
-REPLACEABLE_ANDROIDX_PREFIXES = (
-    "androidx/activity/",
-    "androidx/arch/core/",
-    "androidx/collection/",
-    "androidx/core/",
-    "androidx/fragment/",
-    "androidx/lifecycle/",
-    "androidx/savedstate/",
-)
+REPLACEABLE_ANDROIDX_PREFIXES: tuple[str, ...] = ()
 
 REPLACEABLE_RUNTIME_PREFIXES = (
-    REPLACEABLE_MLKIT_PACKAGE_PREFIXES
-    + REPLACEABLE_GOOGLE_PLAY_SERVICES_PREFIXES
-    + REPLACEABLE_ANDROIDX_PREFIXES
+    "dev/ffmpegkit/llama/",
+    "com/paddle/ocr/",
 )
 
 # Keep APK 219's existing Firebase/DataTransport implementation used by
@@ -78,65 +42,21 @@ REPLACEABLE_RUNTIME_PREFIXES = (
 # The language-pack manager does not require an ONNX Runtime upgrade. Copy a
 # helper class only when the host does not already provide that class.
 HOST_PREFERRED_MLKIT_TRANSITIVE_PREFIXES = (
-    "com/google/firebase/components/",
-    "com/google/firebase/encoders/",
+    "com/google/firebase/",
     "com/google/android/datatransport/",
-    # Existing APK 219 OCR runtimes are independent of ML Kit pack management.
-    # Preserve their complete implementations instead of mixing a second SDK.
+    "com/google/android/gms/",
+    "com/google/mlkit/",
+    "androidx/",
     "ai/onnxruntime/",
-    "com/paddle/ocr/",
+    "org/opencv/",
 )
 
 RUNTIME_PREFIXES = (
-    # The APK already contains some ML Kit internals, but not the public
-    # RemoteModelManager APIs used by the language-pack manager.
-    "com/google/mlkit/common",
-    "com/google/mlkit/nl/translate",
-    # Matched modern OCR registrars and their complete Vision implementation.
-    "com/google/mlkit/vision",
-    # ML Kit Common 18.11.0 bootstrap and telemetry transitive dependencies.
-    "com/google/firebase/components",
-    # Firebase API packages are separate from firebase.components and are needed
-    # by the generated ML Kit 18.11 component-discovery provider lambda.
-    "com/google/firebase/inject",
-    "com/google/firebase/events",
-    "com/google/firebase/dynamicloading",
-    "com/google/firebase/encoders",
-    "com/google/android/datatransport",
-    # TranslateLanguage references implementation classes in this internal package.
-    # Transitive Google Play Services runtime required by ML Kit Common 18.11.0.
-    "com/google/android/gms/common",
-    "com/google/android/gms/dynamic",
-    "com/google/android/gms/dynamite",
-    "com/google/android/gms/internal/base",
-    "com/google/android/gms/internal/common",
-    "com/google/android/gms/tasks",
-    "com/google/android/gms/internal/tasks",
-    "com/google/android/gms/internal/mlkit_common",
-    "com/google/android/gms/internal/mlkit_translate",
-    "com/google/android/gms/internal/mlkit_vision_common",
-    "com/google/android/gms/internal/mlkit_vision_text_common",
-    # Llama JNI Java bindings must stay matched with the helper's native runtime.
-    # DataTransport's generated Factory classes implement javax.inject.Provider.
-    # APK 219 has the Factory implementation dependency missing, so include this
-    # small API package from the matched helper runtime.
-    "javax/inject",
+    # Only the llama Java JNI wrapper and the app-owned Paddle OCR pipeline
+    # are replaced. ML Kit, Firebase, GMS, AndroidX, ONNX and OpenCV are
+    # provided by the verified APK 219 base.
     "dev/ffmpegkit/llama",
-    "kotlinx",
-    "kotlin",
-    "org/jetbrains/annotations",
-    "ai/onnxruntime",
     "com/paddle/ocr",
-    # APK 219 already ships OpenCV 4.5.3 for OCR. The pack manager does not
-    # use OpenCV; do not import a second copy from the helper APK.
-    # AndroidX runtime dependencies resolved by the isolated ML Kit helper.
-    "androidx/activity",
-    "androidx/arch/core",
-    "androidx/collection",
-    "androidx/core",
-    "androidx/fragment",
-    "androidx/lifecycle",
-    "androidx/savedstate",
 )
 
 REPLACEABLE_NATIVE = {
@@ -181,20 +101,13 @@ PRESERVED_CLASS_FAMILIES = (
 # copies of already-integrated Settings/OCR/UI classes and compiler-generated
 # lambdas that must remain exactly as APK 219 shipped them.
 APP_RUNTIME_CLASS_FAMILIES = (
-    # Updated dual-model Hy-MT2 runtime and all matching caller/settings classes.
     "com/tap_to_translate/snap_translate/hymt2/HyMT2Runtime",
     "com/tap_to_translate/snap_translate/hymt2/HyMT2Options",
     "com/tap_to_translate/snap_translate/hymt2/HyMT2Settings",
     "com/tap_to_translate/snap_translate/hymt2/HyMT2SettingsActivity",
     "com/tap_to_translate/snap_translate/hymt2/HyMT2PenaltyNative",
-    # Extended OCR settings UI, runtime bridge and matching configuration objects.
     "com/tap_to_translate/snap_translate/hymt2/OcrSettingsActivity",
     "com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrLiveBridge",
-    "com/paddle/ocr/PaddleOCRConfig",
-    "com/paddle/ocr/EngineConfig",
-    # New additions which are not present in the original APK 219.
-    "com/tap_to_translate/snap_translate/hymt2/LanguagePackManagerActivity",
-    "com/tap_to_translate/snap_translate/hymt2/TesseractLanguagePackStore",
 )
 
 REPLACEABLE_APP_RUNTIME_FAMILIES = (
@@ -205,8 +118,6 @@ REPLACEABLE_APP_RUNTIME_FAMILIES = (
     "com/tap_to_translate/snap_translate/hymt2/HyMT2PenaltyNative",
     "com/tap_to_translate/snap_translate/hymt2/OcrSettingsActivity",
     "com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrLiveBridge",
-    "com/paddle/ocr/PaddleOCRConfig",
-    "com/paddle/ocr/EngineConfig",
 )
 
 ABI_CHECK_APP_RUNTIME_FAMILIES = (
@@ -397,9 +308,15 @@ def verify_class_abi(host: Path, helper: Path, label: str) -> None:
             + ", ".join(missing_interfaces)
         )
 
+    def is_generated_bridge(signature: str, flags: set[str]) -> bool:
+        method_name = signature.split("(", 1)[0]
+        return "synthetic" in flags or method_name.startswith("$r8$lambda$")
+
     missing_methods = sorted(
         signature for signature, flags in host_methods.items()
-        if "private" not in flags and signature not in helper_methods
+        if "private" not in flags
+        and not is_generated_bridge(signature, flags)
+        and signature not in helper_methods
     )
     if missing_methods:
         raise RuntimeError(
@@ -409,6 +326,7 @@ def verify_class_abi(host: Path, helper: Path, label: str) -> None:
     incompatible_methods = sorted(
         signature for signature, flags in host_methods.items()
         if "private" not in flags
+        and not is_generated_bridge(signature, flags)
         and signature in helper_methods
         and ("static" in flags) != ("static" in helper_methods[signature])
     )
@@ -553,7 +471,7 @@ def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
                         replaced_runtime_prefixes.add(replaceable_prefix)
                     if replaceable_app_family is not None:
                         replaced_app_families.add(replaceable_app_family)
-                    print("Placed matched ML Kit/GMS/AndroidX/app runtime class in", target_root.name + ":", rel_name)
+                    print("Placed selected runtime class in", target_root.name + ":", rel_name)
                     continue
 
                 if (
@@ -711,7 +629,7 @@ def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
         )
     if copied + replaced == 0:
         raise RuntimeError("No Hy-MT2 runtime classes were found in the helper APK")
-    print("Verified relocation of all ML Kit bootstrap classes:", ", ".join(sorted(bootstrap_replaced)))
+    print("No ML Kit bootstrap classes were replaced:", ", ".join(sorted(bootstrap_replaced)))
     print(f"Runtime DEX merge: {copied} added, {replaced} relocated, {skipped_identical} identical host classes retained.")
     print("Appended helper DEX partitions:", ", ".join(path.name for path in target_roots.values()))
     return relocated_classes
@@ -734,7 +652,7 @@ def verify_original_smali_inventory(
     # All original host classes must remain byte-identical in their original
     # DEX, except classes intentionally relocated to the appended helper DEXes
     # and the two Tesseract hooks inserted by this integration.
-    allowed_host_hooks = {"ca/b2.smali", "vh/a.smali"}
+    allowed_host_hooks: set[str] = set()
     missing: list[str] = []
     changed: list[str] = []
     for (dex_name, rel), expected_hash in snapshot.items():
@@ -837,10 +755,10 @@ def verify_helper_runtime_inventory(helper: Path, root: Path) -> None:
             )
             prefix = "app-family:" + family
         counts[prefix] = counts.get(prefix, 0) + 1
-    print("Verified complete helper class inventories for matched runtime packages:")
+    print("Verified helper class inventories for selected runtime packages:")
     for prefix, count in sorted(counts.items()):
         print(f"  {prefix}: {count} classes")
-    print(f"Verified {len(expected)} matched ML Kit/GMS/AndroidX class definitions byte-for-byte.")
+    print(f"Verified {len(expected)} selected runtime class definitions byte-for-byte.")
 
 
 def verify_mlkit_model_manager_classes(root: Path) -> None:
@@ -1067,44 +985,9 @@ def copy_native_libraries(helper: Path, base: Path) -> None:
     print("Verified STQ1_0 CPU + Q4_K_M Vulkan native library set.")
 
 def copy_new_assets_and_services(helper: Path, base: Path) -> None:
-    helper_assets = helper / "assets"
-    added_assets = 0
-    if helper_assets.is_dir():
-        for source in helper_assets.rglob("*"):
-            if not source.is_file():
-                continue
-            rel = source.relative_to(helper_assets)
-            destination = base / "assets" / rel
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if destination.exists():
-                if destination.read_bytes() != source.read_bytes():
-                    raise RuntimeError("Helper asset conflicts with APK 219: " + rel.as_posix())
-                continue
-            shutil.copy2(source, destination)
-            added_assets += 1
-
-    helper_services = helper / "unknown/META-INF/services"
-    base_services = base / "unknown/META-INF/services"
-    merged_services = 0
-    if helper_services.is_dir():
-        base_services.mkdir(parents=True, exist_ok=True)
-        for source in helper_services.rglob("*"):
-            if not source.is_file():
-                continue
-            rel = source.relative_to(helper_services)
-            destination = base_services / rel
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if destination.exists():
-                old = destination.read_text(encoding="utf-8", errors="ignore")
-                new = source.read_text(encoding="utf-8", errors="ignore")
-                lines = list(dict.fromkeys(
-                    line for line in (old + "\n" + new).splitlines() if line.strip()
-                ))
-                destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            else:
-                shutil.copy2(source, destination)
-            merged_services += 1
-    print(f"Preserved APK 219 assets; added {added_assets} new helper assets and merged {merged_services} service files.")
+    # The new runtime uses model files and OCR assets already present in APK 219.
+    # Keep all host META-INF/services descriptors byte-identical as well.
+    print("Preserving APK 219 assets and META-INF service registrations unchanged.")
 
 def verify_preserved_payload(base_apk: Path, output_apk: Path) -> None:
     with zipfile.ZipFile(base_apk) as original, zipfile.ZipFile(output_apk) as built:
@@ -1129,36 +1012,8 @@ def verify_preserved_payload(base_apk: Path, output_apk: Path) -> None:
             if name not in new_names or original.read(name) != built.read(name):
                 raise RuntimeError("Unrelated APK 219 native library changed: " + name)
 
-        # APK 219 ca/b2 is in classes2.dex; vh/a is in classes3.dex.
-        # Both are intentionally rebuilt because each receives one Tesseract hook.
-        hook_symbols_by_dex = {
-            "classes2.dex": (b"beforeLanguageCheck",),
-            "classes3.dex": (b"persistDownloadedPack",),
-        }
-        target_hook_dexes = set(hook_symbols_by_dex)
-
-        # DEX bytes are expected to change when matched runtime classes are
-        # relocated out of the original DEX partitions. Their class-by-class
-        # preservation is checked from decoded smali inventories before and
-        # after packaging. Here only require every original DEX entry to survive.
-        for name in old_names:
-            if not (name.startswith("classes") and name.endswith(".dex")):
-                continue
-            if name not in new_names:
-                raise RuntimeError("Original APK 219 DEX disappeared during runtime merge: " + name)
-
-        for dex_name, symbols in hook_symbols_by_dex.items():
-            if dex_name not in old_names or dex_name not in new_names:
-                raise RuntimeError("APK 219 Tesseract host DEX is missing: " + dex_name)
-            if original.read(dex_name) == built.read(dex_name):
-                raise RuntimeError("Expected Tesseract hook did not modify " + dex_name)
-            merged_dex = built.read(dex_name)
-            for symbol in symbols:
-                if symbol not in merged_dex:
-                    raise RuntimeError(
-                        "Final " + dex_name + " is missing Tesseract hook: "
-                        + symbol.decode("ascii")
-                    )
+        # Host DEX entries remain present; new selected runtime classes are
+        # appended to later DEX partitions without injecting host hooks.
 
         dex_names = sorted(
             name for name in new_names
@@ -1166,12 +1021,6 @@ def verify_preserved_payload(base_apk: Path, output_apk: Path) -> None:
         )
         if not dex_names:
             raise RuntimeError("Final APK contains no DEX files")
-        if not any(
-            b"LanguagePackManagerActivity" in built.read(name)
-            for name in dex_names
-        ):
-            raise RuntimeError("LanguagePackManagerActivity is missing from all final DEX files")
-
         if "AndroidManifest.xml" not in new_names:
             raise RuntimeError("Final APK has no AndroidManifest.xml")
         manifest = built.read("AndroidManifest.xml")
@@ -1195,7 +1044,7 @@ def verify_preserved_payload(base_apk: Path, output_apk: Path) -> None:
         if signatures:
             raise RuntimeError("Final APK unexpectedly contains signing files: " + ", ".join(signatures))
 
-    print("Verified APK 219 assets, original non-target DEX/native payload, Tesseract hooks, manager Activity and unsigned state.")
+    print("Verified APK 219 assets, original DEX/native payload and unsigned state.")
 
 def verify_dual_model_affinity_runtime(root: Path) -> None:
     required_classes = {
@@ -1300,9 +1149,9 @@ def main() -> int:
     verify_helper_runtime_inventory(helper, base)
     verify_dual_model_affinity_runtime(base)
     verify_extended_ocr_settings(base)
-    integrate_language_pack_manager(base)
+    # No language-pack manager or Tesseract hooks are needed for this integration.
     verify_region_editor_fix(base)
-    verify_mlkit_model_manager_classes(base)
+    # ML Kit/Firebase/GMS remain exactly as supplied by APK 219.
     copy_native_libraries(helper, base)
     copy_new_assets_and_services(helper, base)
 
@@ -1326,7 +1175,7 @@ def main() -> int:
     verify_helper_runtime_inventory(helper, final_decoded)
     verify_dual_model_affinity_runtime(final_decoded)
     verify_extended_ocr_settings(final_decoded)
-    verify_mlkit_model_manager_classes(final_decoded)
+    # ML Kit/Firebase/GMS remain exactly as supplied by APK 219.
     print("Base APK SHA-256:", actual_sha)
     print("Unsigned output SHA-256:", sha256(args.output))
     print(f"Unsigned APK created: {args.output} ({args.output.stat().st_size} bytes)")
