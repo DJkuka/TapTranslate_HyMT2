@@ -37,11 +37,6 @@ android {
     // package ONNX Runtime/OpenCV in this surgical CPU-only integration build.
     sourceSets.getByName("main").java.filter.exclude("com/tap_to_translate/snap_translate/hymt2/ocr/**", "com/paddle/ocr/**")
 
-kotlin.sourceSets.getByName("main").kotlin.exclude(
-    "com/tap_to_translate/snap_translate/hymt2/ocr/**",
-    "com/paddle/ocr/**"
-)
-
     buildTypes {
         debug { isMinifyEnabled = false }
         release { isMinifyEnabled = false }
@@ -61,6 +56,13 @@ kotlin.sourceSets.getByName("main").kotlin.exclude(
         }
     }
 }
+
+// Kotlin has its own source filter; the Android Java source filter above does not
+// automatically exclude Kotlin files from the Kotlin compilation task.
+kotlin.sourceSets.getByName("main").kotlin.exclude(
+    "com/tap_to_translate/snap_translate/hymt2/ocr/**",
+    "com/paddle/ocr/**"
+)
 
 dependencies {
     implementation(files("libs/llama-android-vulkan.aar"))
