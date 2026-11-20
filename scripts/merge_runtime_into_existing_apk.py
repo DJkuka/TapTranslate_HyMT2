@@ -175,71 +175,6 @@ def verify_base_features(base: Path) -> None:
         raise RuntimeError("APK 219 is missing the Добавить панель editor control in its resources")
     print("Verified APK 219 editor, add-panel control, display profiles, selection gesture and settings classes.")
 
-def integrate_language_pack_manager(base: Path) -> None:
-    # The helper manifest is intentionally not merged wholesale. Register only
-    # the new manager Activity in the verified APK 219 manifest.
-    manifest_path = base / "AndroidManifest.xml"
-    manifest = manifest_path.read_text(encoding="utf-8")
-    activity = (
-        '        <activity android:name="com.tap_to_translate.snap_translate.hymt2.LanguagePackManagerActivity" '
-        'android:exported="false" android:configChanges="orientation|screenSize|keyboardHidden" />\n'
-    )
-    if "LanguagePackManagerActivity" not in manifest:
-        if "</application>" not in manifest:
-            raise RuntimeError("APK 219 manifest has no application closing tag")
-        manifest = manifest.replace("</application>", activity + "    </application>", 1)
-        manifest_path.write_text(manifest, encoding="utf-8")
-
-    # Restore a saved traineddata file before the original host decides to
-    # start another network download.
-    availability = locate_smali(base, "ca/b2.smali")
-    if availability is None:
-        raise RuntimeError("APK 219 Tesseract availability check ca/b2.smali is missing")
-    source = availability.read_text(encoding="utf-8")
-    signature = ".method public static l(Ljava/lang/String;)Z"
-    start = source.find(signature)
-    if start < 0:
-        raise RuntimeError("Could not locate ca/b2.l(String) Tesseract availability method")
-    locals_start = source.find(".locals", start)
-    if locals_start < 0:
-        raise RuntimeError("ca/b2.l(String) has no local-register declaration")
-    body_start = source.find("\n", locals_start) + 1
-    if "TesseractLanguagePackStore;->beforeLanguageCheck" not in source[start:]:
-        source = source[:body_start] + (
-            "    invoke-static {p0}, Lcom/tap_to_translate/snap_translate/hymt2/TesseractLanguagePackStore;->beforeLanguageCheck(Ljava/lang/String;)V\n\n"
-        ) + source[body_start:]
-        availability.write_text(source, encoding="utf-8")
-
-    # Persist the completed host download to the SAF folder. The hook is
-    # placed only on the successful path after Content-Length validation.
-    downloader = locate_smali(base, "vh/a.smali")
-    if downloader is None:
-        raise RuntimeError("APK 219 Tesseract downloader vh/a.smali is missing")
-    source = downloader.read_text(encoding="utf-8")
-    marker = "    :catch_4\n    invoke-virtual {v5}, Ljava/net/HttpURLConnection;->disconnect()V"
-    if "TesseractLanguagePackStore;->persistDownloadedPack" not in source:
-        if marker not in source:
-            raise RuntimeError("Could not locate successful Tesseract download completion in vh/a.smali")
-        hook = (
-            "    move-object/from16 v0, v16\n"
-            "    invoke-virtual {v0}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;\n"
-            "    move-result-object v0\n"
-            "    invoke-static {v3, v0}, Lcom/tap_to_translate/snap_translate/hymt2/TesseractLanguagePackStore;->persistDownloadedPack(Ljava/lang/String;Ljava/lang/String;)V\n\n"
-        )
-        source = source.replace(marker, "    :catch_4\n" + hook + "    invoke-virtual {v5}, Ljava/net/HttpURLConnection;->disconnect()V", 1)
-        downloader.write_text(source, encoding="utf-8")
-
-    # Fail fast if either host hook or the Activity registration was not applied.
-    manifest = manifest_path.read_text(encoding="utf-8")
-    if "LanguagePackManagerActivity" not in manifest:
-        raise RuntimeError("LanguagePackManagerActivity was not registered in APK 219 manifest")
-    if "TesseractLanguagePackStore;->beforeLanguageCheck" not in availability.read_text(encoding="utf-8"):
-        raise RuntimeError("Tesseract restore hook was not installed")
-    if "TesseractLanguagePackStore;->persistDownloadedPack" not in downloader.read_text(encoding="utf-8"):
-        raise RuntimeError("Tesseract download persistence hook was not installed")
-    print("Integrated language-pack manager Activity and both Tesseract host hooks.")
-
-
 def verify_region_editor_fix(root: Path) -> None:
     rel = "com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor.smali"
     editor = locate_smali(root, rel)
@@ -418,10 +353,9 @@ def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
                 # so checking only for a copy in another DEX is insufficient.
                 rel_name = rel.as_posix()
 
-                # Replace the exact ML Kit initialization/registrar classes and
-                # every class in the helper's matched ML Kit, Google Play Services
-                # core, and AndroidX runtime packages. This prevents old host
-                # definitions from shadowing methods/classes expected by the helper.
+                # Only the explicitly selected JNI and app-owned OCR package
+                # prefixes are eligible for replacement. SDK package classes
+                # from APK 219 are protected by verify_sdk_class_preservation().
                 replaceable_prefix = next(
                     (prefix for prefix in REPLACEABLE_RUNTIME_PREFIXES
                      if rel_name.startswith(prefix)),
@@ -632,10 +566,34 @@ def copy_runtime_smali(helper: Path, base: Path) -> set[str]:
         )
     if copied + replaced == 0:
         raise RuntimeError("No Hy-MT2 runtime classes were found in the helper APK")
-    print("No ML Kit bootstrap classes were replaced:", ", ".join(sorted(bootstrap_replaced)))
+    print("No APK 219 ML Kit bootstrap classes were replaced.")
     print(f"Runtime DEX merge: {copied} added, {replaced} relocated, {skipped_identical} identical host classes retained.")
     print("Appended helper DEX partitions:", ", ".join(path.name for path in target_roots.values()))
     return relocated_classes
+
+
+def verify_sdk_class_preservation(relocated_classes: set[str]) -> None:
+    protected_prefixes = (
+        "com/google/mlkit/",
+        "com/google/firebase/",
+        "com/google/android/gms/",
+        "androidx/",
+        "ai/onnxruntime/",
+        "org/opencv/",
+    )
+    changed = sorted(
+        rel for rel in relocated_classes
+        if rel.startswith(protected_prefixes)
+    )
+    if changed:
+        raise RuntimeError(
+            "Integration attempted to replace APK 219 SDK classes: "
+            + ", ".join(changed[:60])
+        )
+    print(
+        "Verified SDK replacement boundary: ML Kit, Firebase, GMS, AndroidX, "
+        "ONNX Runtime and OpenCV remain APK 219 implementations."
+    )
 
 
 def snapshot_smali_inventory(root: Path) -> dict[tuple[str, str], str]:
@@ -720,7 +678,7 @@ def verify_helper_runtime_inventory(helper: Path, root: Path) -> None:
                 expected[rel] = source
 
     if not expected:
-        raise RuntimeError("Helper APK contains no matched ML Kit/GMS/AndroidX/app runtime classes")
+        raise RuntimeError("Helper APK contains no selected app/runtime classes")
 
     missing: list[str] = []
     duplicate: list[str] = []
@@ -762,204 +720,6 @@ def verify_helper_runtime_inventory(helper: Path, root: Path) -> None:
     for prefix, count in sorted(counts.items()):
         print(f"  {prefix}: {count} classes")
     print(f"Verified {len(expected)} selected runtime class definitions byte-for-byte.")
-
-
-def verify_mlkit_model_manager_classes(root: Path) -> None:
-    # The verified APK 219 manifest has MlKitInitProvider. The manager must reuse
-    # that initialized singleton, never call MlKit.initialize() a second time.
-    activity = locate_smali(
-        root,
-        "com/tap_to_translate/snap_translate/hymt2/LanguagePackManagerActivity.smali",
-    )
-    if activity is None:
-        raise RuntimeError("LanguagePackManagerActivity is missing from the APK")
-    activity_source = activity.read_text(encoding="utf-8")
-    if "Lcom/google/mlkit/common/MlKit;->initialize(Landroid/content/Context;)V" in activity_source:
-        raise RuntimeError("LanguagePackManagerActivity must not manually initialize ML Kit; APK 219 has MlKitInitProvider")
-
-    status = locate_smali(root, "com/google/android/gms/common/api/Status.smali")
-    if status is None:
-        raise RuntimeError("Google Play Services Status class is missing")
-    status_source = status.read_text(encoding="utf-8")
-    if ".method public constructor <init>(ILjava/lang/String;)V" not in status_source:
-        raise RuntimeError("Matched play-services-base Status(int, String) constructor is missing")
-
-    provider = locate_smali(
-        root,
-        "com/google/mlkit/common/internal/MlKitInitProvider.smali",
-    )
-    if provider is None:
-        raise RuntimeError("ML Kit 18.11 MlKitInitProvider is missing")
-    provider_source = provider.read_text(encoding="utf-8")
-    if "Lgf/g;->d(" in provider_source:
-        raise RuntimeError("Legacy APK 219 MlKitInitProvider implementation was not replaced")
-    if not (
-        "Lcom/google/mlkit/common/sdkinternal/MlKitContext;->" in provider_source
-        or "Lcom/google/mlkit/common/MlKit;->initialize(" in provider_source
-    ):
-        raise RuntimeError(
-            "MlKitInitProvider does not call the ML Kit 18.11 initialization path"
-        )
-
-    required = (
-        "com/google/mlkit/common/internal/MlKitInitProvider.smali",
-        "com/google/mlkit/common/internal/MlKitComponentDiscoveryService.smali",
-        # MlKitInitProvider calls ComponentDiscovery before it can initialize MlKitContext.
-        "com/google/firebase/components/ComponentDiscovery.smali",
-        "com/google/firebase/components/ComponentRegistrar.smali",
-        "com/google/firebase/components/Component.smali",
-        "com/google/firebase/components/Component$Builder.smali",
-        "com/google/firebase/components/ComponentContainer.smali",
-        "com/google/firebase/components/ComponentFactory.smali",
-        "com/google/firebase/components/Dependency.smali",
-        "com/google/firebase/components/ComponentRuntime.smali",
-        # Interfaces used by the generated ComponentDiscovery lambda and registrars.
-        "com/google/firebase/inject/Provider.smali",
-        "com/google/firebase/inject/Deferred.smali",
-        "com/google/firebase/inject/Deferred$DeferredHandler.smali",
-        "com/google/firebase/events/Event.smali",
-        "com/google/firebase/events/EventHandler.smali",
-        "com/google/firebase/events/Publisher.smali",
-        "com/google/firebase/events/Subscriber.smali",
-        "com/google/firebase/dynamicloading/ComponentLoader.smali",
-        # ML Kit Common telemetry dependencies are resolved from these namespaces.
-        "com/google/firebase/encoders/Encoder.smali",
-        "com/google/android/datatransport/TransportFactory.smali",
-        # Required superclass interface of DataTransport's generated Factory.
-        "javax/inject/Provider.smali",
-        "javax/inject/Inject.smali",
-        "javax/inject/Named.smali",
-        "javax/inject/Qualifier.smali",
-        "javax/inject/Scope.smali",
-        "javax/inject/Singleton.smali",
-        # Exact androidx.collection:collection:1.1.0 class inventory observed
-        # in the passing isolated APK. Require every class, including nested
-        # MapCollections and iterator classes, not only ArraySet's direct helpers.
-        "androidx/collection/ArrayMap$1.smali",
-        "androidx/collection/ArrayMap.smali",
-        "androidx/collection/ArraySet$1.smali",
-        "androidx/collection/ArraySet.smali",
-        "androidx/collection/CircularArray.smali",
-        "androidx/collection/CircularIntArray.smali",
-        "androidx/collection/ContainerHelpers.smali",
-        "androidx/collection/LongSparseArray.smali",
-        "androidx/collection/LruCache.smali",
-        "androidx/collection/MapCollections$ArrayIterator.smali",
-        "androidx/collection/MapCollections$EntrySet.smali",
-        "androidx/collection/MapCollections$KeySet.smali",
-        "androidx/collection/MapCollections$MapIterator.smali",
-        "androidx/collection/MapCollections$ValuesCollection.smali",
-        "androidx/collection/MapCollections.smali",
-        "androidx/collection/SimpleArrayMap.smali",
-        "androidx/collection/SparseArrayCompat.smali",
-        "com/google/mlkit/common/internal/CommonComponentRegistrar.smali",
-        "com/google/mlkit/nl/translate/NaturalLanguageTranslateRegistrar.smali",
-        "com/google/mlkit/vision/text/internal/TextRegistrar.smali",
-        "com/google/mlkit/vision/common/internal/VisionCommonRegistrar.smali",
-        "com/google/mlkit/common/model/RemoteModelManager.smali",
-        "com/google/mlkit/common/model/DownloadConditions.smali",
-        "com/google/mlkit/common/model/DownloadConditions$Builder.smali",
-        "com/google/mlkit/common/model/RemoteModel.smali",
-        "com/google/mlkit/nl/translate/TranslateRemoteModel.smali",
-        "com/google/mlkit/nl/translate/TranslateRemoteModel$Builder.smali",
-        "com/google/mlkit/nl/translate/TranslateLanguage.smali",
-        # TranslateLanguage.<clinit> in ML Kit Translate 17.0.3 references this class.
-        "com/google/android/gms/internal/mlkit_common/zza.smali",
-        "com/google/android/gms/internal/mlkit_common/zzaf.smali",
-        "com/google/android/gms/internal/mlkit_common/zzah.smali",
-        "com/google/android/gms/internal/mlkit_common/zzai.smali",
-        "com/google/android/gms/internal/mlkit_common/zzav.smali",
-        "com/google/android/gms/internal/mlkit_common/zzaw.smali",
-        "com/google/android/gms/internal/mlkit_common/zzh.smali",
-        "com/google/android/gms/internal/mlkit_common/zzi.smali",
-        "com/google/android/gms/internal/mlkit_common/zzlm.smali",
-        "com/google/android/gms/internal/mlkit_common/zzlo.smali",
-        "com/google/android/gms/internal/mlkit_common/zzmh.smali",
-        "com/google/android/gms/internal/mlkit_common/zzmj.smali",
-        "com/google/android/gms/internal/mlkit_common/zzmm.smali",
-        "com/google/android/gms/internal/mlkit_common/zzmn.smali",
-        "com/google/android/gms/internal/mlkit_common/zzmp.smali",
-        "com/google/android/gms/internal/mlkit_common/zzmu.smali",
-        "com/google/android/gms/internal/mlkit_common/zzmv.smali",
-        "com/google/android/gms/internal/mlkit_common/zzmw.smali",
-        "com/google/android/gms/internal/mlkit_common/zzna.smali",
-        "com/google/android/gms/internal/mlkit_common/zzne.smali",
-        "com/google/android/gms/internal/mlkit_common/zzq.smali",
-        "com/google/android/gms/internal/mlkit_common/zzr.smali",
-        "com/google/android/gms/internal/mlkit_common/zzrr.smali",
-        "com/google/android/gms/internal/mlkit_common/zzry.smali",
-        "com/google/android/gms/internal/mlkit_common/zzsh.smali",
-        "com/google/android/gms/internal/mlkit_common/zzsi.smali",
-        "com/google/android/gms/internal/mlkit_common/zzsj.smali",
-        "com/google/android/gms/internal/mlkit_common/zzsk.smali",
-        "com/google/android/gms/internal/mlkit_common/zzss.smali",
-        "com/google/android/gms/internal/mlkit_common/zzu.smali",
-        # ML Kit Common RemoteModelManager requires Google Play Services Basement.
-        "com/google/android/gms/common/internal/Preconditions.smali",
-        "com/google/android/gms/internal/base/zau.smali",
-        "com/google/android/gms/tasks/TaskExecutors.smali",
-        "com/google/android/gms/tasks/zzu.smali",
-        "com/google/android/gms/internal/tasks/zza.smali",
-        "com/google/android/gms/internal/mlkit_translate/zzw.smali",
-
-    )
-    missing = [rel for rel in required if locate_smali(root, rel) is None]
-    if missing:
-        raise RuntimeError(
-            "ML Kit language-manager API classes are missing from the APK: "
-            + ", ".join(missing)
-        )
-
-    # The name of a compiler-generated lambda class is not a stable API:
-    # depending on the toolchain it may be ComponentDiscovery$Lambda$1,
-    # ComponentDiscovery$Lambda$1 or another synthetic variant. Verify the
-    # behaviorally relevant contract instead of hard-coding one filename.
-    provider_lambda_classes = []
-    for directory in smali_dirs(root):
-        component_dir = directory / "com/google/firebase/components"
-        if not component_dir.is_dir():
-            continue
-        for candidate in component_dir.glob("ComponentDiscovery*.smali"):
-            candidate_source = candidate.read_text(encoding="utf-8")
-            if ".implements Lcom/google/firebase/inject/Provider;" in candidate_source:
-                provider_lambda_classes.append(candidate.relative_to(root).as_posix())
-
-    if not provider_lambda_classes:
-        raise RuntimeError(
-            "Firebase ComponentDiscovery provider lambda is missing: "
-            "no generated ComponentDiscovery*.smali implements firebase.inject.Provider"
-        )
-    # Every registrar named by MlKitComponentDiscoveryService must return the
-    # modern Component class. Do not confuse this with Firebase's separate
-    # ComponentDiscoveryService, whose legacy runtime remains untouched.
-    mlkit_registrars = (
-        "com/google/mlkit/common/internal/CommonComponentRegistrar.smali",
-        "com/google/mlkit/nl/translate/NaturalLanguageTranslateRegistrar.smali",
-        "com/google/mlkit/vision/text/internal/TextRegistrar.smali",
-        "com/google/mlkit/vision/common/internal/VisionCommonRegistrar.smali",
-    )
-    for rel in mlkit_registrars:
-        registrar = locate_smali(root, rel)
-        if registrar is None:
-            raise RuntimeError("Required modern ML Kit registrar is missing: " + rel)
-        registrar_source = registrar.read_text(encoding="utf-8")
-        if "Lcom/google/firebase/components/Component;" not in registrar_source:
-            raise RuntimeError("ML Kit registrar does not return modern Component objects: " + rel)
-        if "Lid/a;" in registrar_source:
-            raise RuntimeError("Legacy id.a Component reference remains in ML Kit registrar: " + rel)
-
-    text_source = locate_smali(root, mlkit_registrars[2]).read_text(encoding="utf-8")
-    vision_source = locate_smali(root, mlkit_registrars[3]).read_text(encoding="utf-8")
-    if 'com.google.android.gms:play-services-mlkit-text-recognition-common@@19.1.0' not in text_source:
-        raise RuntimeError("TextRegistrar is not the matched 19.1.0 implementation")
-    if 'com.google.mlkit:vision-common@@17.3.0' not in vision_source:
-        raise RuntimeError("VisionCommonRegistrar is not the matched 17.3.0 implementation")
-
-    print(
-        "Verified Firebase ComponentDiscovery provider lambda:",
-        ", ".join(sorted(provider_lambda_classes)),
-    )
-    print("Verified ML Kit manager APIs and builder classes in the APK.")
 
 
 def copy_native_libraries(helper: Path, base: Path) -> None:
@@ -1027,17 +787,8 @@ def verify_preserved_payload(base_apk: Path, output_apk: Path) -> None:
         if "AndroidManifest.xml" not in new_names:
             raise RuntimeError("Final APK has no AndroidManifest.xml")
         manifest = built.read("AndroidManifest.xml")
-        # AndroidManifest.xml is binary AXML in the final APK. Apktool/aapt may
-        # encode its string pool as UTF-8 or UTF-16, so check all valid encodings
-        # rather than treating a UTF-8-only miss as a missing Activity.
-        activity_name = "LanguagePackManagerActivity"
-        encoded_names = (
-            activity_name.encode("utf-8"),
-            activity_name.encode("utf-16le"),
-            activity_name.encode("utf-16be"),
-        )
-        if not any(value in manifest for value in encoded_names):
-            raise RuntimeError("LanguagePackManagerActivity is not registered in final manifest")
+        if not manifest:
+            raise RuntimeError("Final APK AndroidManifest.xml is empty")
 
         signatures = [
             name for name in new_names
@@ -1148,6 +899,7 @@ def main() -> int:
     verify_region_editor_fix(base)
     original_smali_inventory = snapshot_smali_inventory(base)
     relocated_runtime_classes = copy_runtime_smali(helper, base)
+    verify_sdk_class_preservation(relocated_runtime_classes)
     verify_original_smali_inventory(original_smali_inventory, base, relocated_runtime_classes)
     verify_helper_runtime_inventory(helper, base)
     verify_dual_model_affinity_runtime(base)
@@ -1174,6 +926,7 @@ def main() -> int:
         shutil.rmtree(final_decoded)
     run(["java", "-jar", str(args.apktool), "d", "-f", "-o", str(final_decoded), str(args.output)])
     verify_region_editor_fix(final_decoded)
+    verify_sdk_class_preservation(relocated_runtime_classes)
     verify_original_smali_inventory(original_smali_inventory, final_decoded, relocated_runtime_classes)
     verify_helper_runtime_inventory(helper, final_decoded)
     verify_dual_model_affinity_runtime(final_decoded)
