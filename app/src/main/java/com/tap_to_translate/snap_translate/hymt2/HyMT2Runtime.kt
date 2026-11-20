@@ -81,6 +81,22 @@ object HyMT2Runtime {
         }
     }
 
+    private fun clearHostResult(host: Any) {
+        try {
+            val cls = host.javaClass
+            cls.getField("d").set(host, "")
+            val usePrimary = cls.getField("b").getBoolean(host)
+            val callback = cls.getField("a").get(host)
+            val method = if (usePrimary) "a" else "f"
+            val targetMethod = callback.javaClass.getMethod(method, String::class.java)
+            targetMethod.isAccessible = true
+            targetMethod.invoke(callback, "")
+        } catch (t: Throwable) {
+            // Clearing a previous result is best-effort; it must never block a new translation.
+            Log.w(TAG, "Cannot clear previous Hy-MT2 result before new inference", t)
+        }
+    }
+
     @JvmStatic
     fun modelFile(context: Context): File {
         val base = context.getExternalFilesDir("models") ?: File(context.filesDir, "models")
@@ -241,6 +257,7 @@ object HyMT2Runtime {
             return
         }
 
+        mainHandler.post { clearHostResult(host) }
         try {
             scope.launch {
                 try {
