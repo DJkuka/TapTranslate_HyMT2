@@ -195,6 +195,7 @@ object HyMT2Runtime {
 
     @JvmStatic
     fun unload(callback: (String) -> Unit) {
+        cancelActiveTranslation()
         try {
             scope.launch {
                 val message = try {
@@ -350,6 +351,7 @@ object HyMT2Runtime {
                                     )
                                     throw t
                                 }
+                                ensureTranslationNotCancelled()
                                 val generationElapsedMs = SystemClock.elapsedRealtime() - generationStartedAt
                                 Log.i(
                                     TAG,
@@ -382,6 +384,7 @@ object HyMT2Runtime {
                         if (translatedBlocks.size != sourceBlocks.size) {
                             error("Нарушено соответствие OCR-блоков: вход=${sourceBlocks.size}, выход=${translatedBlocks.size}")
                         }
+                        ensureTranslationNotCancelled()
                         val translated = translatedBlocks.joinToString("\n")
                         val elapsedMs = (SystemClock.elapsedRealtime() - translationStartedAt).coerceAtLeast(1L)
                         val aggregateTokensPerSecond = if (generatedTimeMs > 0L) {
