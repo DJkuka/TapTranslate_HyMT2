@@ -30,6 +30,18 @@ object HyMT2PenaltyNative {
 
     external fun nativeCpuTopologyJson(): String
 
+    private external fun nativeInstallAbortCallback(handle: Long): Boolean
+
+    private external fun nativeSetAbortRequested(requested: Boolean)
+
+    fun installAbortCallback(model: LlamaModel) {
+        check(nativeInstallAbortCallback(handle(model))) { "Не удалось установить callback отмены llama.cpp" }
+    }
+
+    fun setAbortRequested(requested: Boolean) {
+        nativeSetAbortRequested(requested)
+    }
+
     external fun nativeSetCpuAffinity(mask: Long): String
 
     fun cpuTopology(): org.json.JSONArray =
