@@ -614,7 +614,7 @@ def integrate_hymt2_double_tap_cancel(root: Path) -> None:
     if path is None:
         raise RuntimeError("APK 219 floating-icon gesture listener lb/b.smali is missing")
     source = path.read_text(encoding="utf-8")
-    signature = re.compile(r"(?m)^\\.method [^\\n]*\\bonDoubleTap\\(Landroid/view/MotionEvent;\\)Z\\s*$")
+    signature = re.compile(r"(?m)^\.method [^\n]*\bonDoubleTap\(Landroid/view/MotionEvent;\)Z\s*$")
     match = signature.search(source)
     if match is None:
         raise RuntimeError("Could not locate floating-icon onDoubleTap(MotionEvent)Z handler")
@@ -624,11 +624,11 @@ def integrate_hymt2_double_tap_cancel(root: Path) -> None:
     method = source[match.start():end]
     invocation = "    invoke-static {}, Lcom/tap_to_translate/snap_translate/hymt2/HyMT2Runtime;->cancelActiveTranslation()V"
     if invocation not in method:
-        locals_match = re.search(r"(?m)^\\s*\\.(?:locals|registers)\\s+\\d+\\s*$", method)
+        locals_match = re.search(r"(?m)^\s*\.(?:locals|registers)\s+\d+\s*$", method)
         if locals_match is None:
             raise RuntimeError("Floating-icon onDoubleTap handler has no register declaration")
         insert_at = match.start() + locals_match.end()
-        source = source[:insert_at] + "\\n" + invocation + source[insert_at:]
+        source = source[:insert_at] + "\n" + invocation + source[insert_at:]
         path.write_text(source, encoding="utf-8")
     verify_hymt2_double_tap_cancel_hook(root)
     print("Integrated Hy-MT2 cancellation into the floating-icon double-tap listener.")
@@ -639,7 +639,7 @@ def verify_hymt2_double_tap_cancel_hook(root: Path) -> None:
     if path is None:
         raise RuntimeError("APK 219 floating-icon gesture listener is missing")
     source = path.read_text(encoding="utf-8")
-    signature = re.compile(r"(?ms)^\\.method [^\\n]*\\bonDoubleTap\\(Landroid/view/MotionEvent;\\)Z\\s*$.*?^\\.end method")
+    signature = re.compile(r"(?ms)^\.method [^\n]*\bonDoubleTap\(Landroid/view/MotionEvent;\)Z\s*$.*?^\.end method")
     match = signature.search(source)
     invocation = "invoke-static {}, Lcom/tap_to_translate/snap_translate/hymt2/HyMT2Runtime;->cancelActiveTranslation()V"
     if match is None or invocation not in match.group(0):
