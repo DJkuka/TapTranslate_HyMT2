@@ -121,12 +121,15 @@ REPLACEABLE_APP_RUNTIME_FAMILIES = (
 )
 
 ABI_CHECK_APP_RUNTIME_FAMILIES = (
+    # These classes are entry points retained for calls from APK 219 code.
     "com/tap_to_translate/snap_translate/hymt2/HyMT2Runtime",
     "com/tap_to_translate/snap_translate/hymt2/HyMT2Settings",
     "com/tap_to_translate/snap_translate/hymt2/HyMT2SettingsActivity",
-    "com/tap_to_translate/snap_translate/hymt2/HyMT2PenaltyNative",
     "com/tap_to_translate/snap_translate/hymt2/OcrSettingsActivity",
     "com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrLiveBridge",
+    # HyMT2PenaltyNative is replaced together with HyMT2Runtime and its
+    # continuations. Its old suspend complete() method is an internal call
+    # from the old runtime, not an external APK 219 API.
 )
 
 def run(cmd: list[str]) -> None:
