@@ -35,7 +35,7 @@ android {
     // CPU-affinity helper only needs the top-level Hy-MT2 runtime. The host APK
     // already contains OCR classes and native OCR libraries; do not resolve or
     // package ONNX Runtime/OpenCV in this surgical CPU-only integration build.
-    sourceSets.getByName("main").java.filter.exclude("com/tap_to_translate/snap_translate/hymt2/ocr/**", "com/paddle/ocr/**")
+    sourceSets.getByName("main").java.setSrcDirs(listOf("src/cpuAffinity/java"))
 
     buildTypes {
         debug { isMinifyEnabled = false }
@@ -56,13 +56,6 @@ android {
         }
     }
 }
-
-// Kotlin has its own source filter; the Android Java source filter above does not
-// automatically exclude Kotlin files from the Kotlin compilation task.
-kotlin.sourceSets.getByName("main").kotlin.exclude(
-    "com/tap_to_translate/snap_translate/hymt2/ocr/**",
-    "com/paddle/ocr/**"
-)
 
 dependencies {
     implementation(files("libs/llama-android-vulkan.aar"))
