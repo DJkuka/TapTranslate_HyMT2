@@ -25,6 +25,8 @@ import java.util.Locale
 import java.util.ArrayDeque
 import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.CancellationException
 import kotlin.math.min
 
 /** Runtime bridge called from the original app's translation dispatcher (yh.f). */
@@ -44,6 +46,9 @@ object HyMT2Runtime {
     private val inferenceMutex = Mutex()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val fallbackNoticeShown = AtomicBoolean(false)
+    private val activeTranslationId = AtomicLong(0L)
+    private val nextTranslationId = AtomicLong(1L)
+    private val translationCancelRequested = AtomicBoolean(false)
     private data class HistoryEntry(
         val sourceLanguage: String,
         val targetLanguage: String,
@@ -60,6 +65,22 @@ object HyMT2Runtime {
     @Volatile private var loadedDescriptor: ParcelFileDescriptor? = null
 
     /** Path of the old copied model, used only to display its location for manual cleanup. */
+    /** Stop the currently active Hy-MT2 generation without cancelling queued requests. */
+    @JvmStatic
+    fun cancelActiveTranslation() {
+        if (activeTranslationId.get() == 0L) return
+        if (translationCancelRequested.compareAndSet(false, true)) {
+            HyMT2PenaltyNative.setAbortRequested(true)
+            Log.i(TAG, "Cancellation requested for active Hy-MT2 translation id=${activeTranslationId.get()}")
+        }
+    }
+
+    private fun ensureTranslationNotCancelled() {
+        if (translationCancelRequested.get()) {
+            throw CancellationException("Hy-MT2 translation cancelled by user")
+        }
+    }
+
     @JvmStatic
     fun modelFile(context: Context): File {
         val base = context.getExternalFilesDir("models") ?: File(context.filesDir, "models")
@@ -223,6 +244,11 @@ object HyMT2Runtime {
             scope.launch {
                 try {
                     val result = inferenceMutex.withLock {
+                        val translationId = nextTranslationId.getAndIncrement()
+                        activeTranslationId.set(translationId)
+                        translationCancelRequested.set(false)
+                        HyMT2PenaltyNative.setAbortRequested(false)
+                        try {
                         val model = ensureLoaded(appContext)
                         val options = HyMT2Settings.load(appContext)
                         val modelKind = selectedModelKind(appContext)
@@ -291,6 +317,7 @@ object HyMT2Runtime {
                                         "repetitionPenalty=$appliedRepetitionPenalty modelKind=$modelKind"
                                 )
                                 val generationStartedAt = SystemClock.elapsedRealtime()
+                                ensureTranslationNotCancelled()
                                 val completion = try {
                                     if (isStqModel) {
                                         // Use the original llama-android completion entry point, not
@@ -312,6 +339,9 @@ object HyMT2Runtime {
                                         )
                                     }
                                 } catch (t: Throwable) {
+                                    if (translationCancelRequested.get()) {
+                                        throw CancellationException("Hy-MT2 generation cancelled")
+                                    }
                                     Log.e(
                                         TAG,
                                         "GENERATION_EXCEPTION block=${index + 1}/${sourceBlocks.size} " +
@@ -366,10 +396,20 @@ object HyMT2Runtime {
                             translated.length,
                         )
                         translated
+                        } finally {
+                            activeTranslationId.compareAndSet(translationId, 0L)
+                            HyMT2PenaltyNative.setAbortRequested(false)
+                            translationCancelRequested.set(false)
+                            Log.i(TAG, "Hy-MT2 translation lifecycle closed id=$translationId")
+                        }
                     }
 
                     mainHandler.post { deliverResult(host, result, sourceText) }
                 } catch (t: Throwable) {
+                    if (t is CancellationException) {
+                        Log.i(TAG, "Hy-MT2 translation cancelled cleanly; no fallback result will be delivered")
+                        return@launch
+                    }
                     Log.e(TAG, "Hy-MT2 translation failed; falling back to ML Kit", t)
                     mainHandler.post {
                         showFallbackNotice(appContext, "Ошибка Hy-MT2. Для этого фрагмента используется Google Offline Translate.")
@@ -543,6 +583,7 @@ $sourceText"""
                 modelPath = modelPath,
                 config = targetConfig,
             )
+            HyMT2PenaltyNative.installAbortCallback(created)
             loadedSource = sourceKey
             loadedModelKind = modelKind
             loadedModel = created
