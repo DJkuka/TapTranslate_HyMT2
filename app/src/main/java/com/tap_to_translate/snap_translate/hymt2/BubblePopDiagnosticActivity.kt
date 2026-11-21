@@ -275,6 +275,7 @@ class BubblePopDiagnosticActivity : Activity() {
             var mask: Mat? = null
             var boundary: Mat? = null
             var splitMask: Mat? = null
+            var instanceMap: Mat? = null
             var overlay: Bitmap? = null
             try {
                 val model = File(cacheDir, "bubblepop_model_fp16.onnx")
@@ -292,11 +293,22 @@ class BubblePopDiagnosticActivity : Activity() {
                 boundary = segmenter.getBoundaryMap(mat)
                 val split = BubblePopWatershedSplitter.split(mat, mask, boundary)
                 splitMask = split.mask
+                instanceMap = split.instances
 
+                // Extract each labeled instance separately. Finding contours on the
+                // union mask would reconnect diagonally touching watershed regions.
                 val contours = ArrayList<MatOfPoint>()
                 val hierarchy = Mat()
-                Imgproc.findContours(splitMask, contours, hierarchy, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+                val instanceMask = Mat()
+                for (instanceId in 1..split.instanceCount) {
+                    Core.compare(instanceMap, Scalar(instanceId.toDouble()), instanceMask, Core.CMP_EQ)
+                    val localContours = ArrayList<MatOfPoint>()
+                    Imgproc.findContours(instanceMask, localContours, hierarchy,
+                        Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+                    contours.addAll(localContours)
+                }
                 hierarchy.release()
+                instanceMask.release()
                 val resultBitmap = original.copy(Bitmap.Config.ARGB_8888, true)
                 val canvas = Canvas(resultBitmap)
                 val palette = intArrayOf(
@@ -339,6 +351,7 @@ class BubblePopDiagnosticActivity : Activity() {
                 overlay?.recycle()
                 main.post { status.text = "Ошибка watershed: ${t.javaClass.simpleName}: ${t.message}" }
             } finally {
+                instanceMap?.release()
                 splitMask?.release()
                 boundary?.release()
                 mask?.release()
