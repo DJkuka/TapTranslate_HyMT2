@@ -25,6 +25,7 @@ import org.opencv.core.MatOfPoint
 import org.opencv.core.Scalar
 import org.opencv.imgproc.Imgproc
 import com.tap_to_translate.snap_translate.hymt2.ocr.BubblePopSegmenter
+import com.tap_to_translate.snap_translate.hymt2.ocr.BubblePopWatershedSplitter
 import com.paddle.ocr.util.OpenCVUtils
 import java.io.File
 import java.io.FileOutputStream
