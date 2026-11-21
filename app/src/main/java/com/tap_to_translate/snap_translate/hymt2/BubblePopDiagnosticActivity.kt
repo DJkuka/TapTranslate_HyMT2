@@ -17,6 +17,7 @@ import android.widget.Button
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import org.opencv.android.Utils
@@ -39,6 +40,10 @@ import kotlin.math.roundToInt
 class BubblePopDiagnosticActivity : Activity() {
     private lateinit var preview: ImageView
     private lateinit var status: TextView
+    private lateinit var settingsPanel: LinearLayout
+    private val diagnosticPrefs by lazy {
+        getSharedPreferences("bubblepop_diagnostic_settings", MODE_PRIVATE)
+    }
     private var source: Bitmap? = null
     private val main = Handler(Looper.getMainLooper())
 
@@ -60,6 +65,18 @@ class BubblePopDiagnosticActivity : Activity() {
             text = "Выбери страницу комикса. Модель выделит маски речевых баблов и покажет их контуры. Результат используется только для диагностики и не меняет перевод."
             textSize = 14f
         })
+        root.addView(Button(this).apply {
+            text = "Параметры разделения (можно менять на лету)"
+            setOnClickListener { settingsPanel.visibility =
+                if (settingsPanel.visibility == ViewGroup.GONE) ViewGroup.VISIBLE else ViewGroup.GONE }
+        })
+        settingsPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = ViewGroup.GONE
+            setPadding(8, 8, 8, 8)
+        }
+        addDiagnosticSettings(settingsPanel)
+        root.addView(settingsPanel)
         root.addView(Button(this).apply {
             text = "Выбрать изображение"
             setOnClickListener {
@@ -91,6 +108,78 @@ class BubblePopDiagnosticActivity : Activity() {
         preview = ImageView(this).apply { adjustViewBounds = true; scaleType = ImageView.ScaleType.FIT_CENTER }
         root.addView(preview, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
+
+    private fun addDiagnosticSettings(panel: LinearLayout) {
+        panel.addView(TextView(this).apply {
+            text = "Настройки Boundary-only (кнопка «по карте границ»)"
+            textSize = 16f
+        })
+        addSetting(panel, "Порог boundary, старт", "boundary_start", 80, 240, 176)
+        addSetting(panel, "Минимальная площадь исходного компонента", "boundary_min_component", 100, 5000, 700)
+        addSetting(panel, "Минимальная площадь части", "boundary_min_part", 20, 1000, 120)
+        addSetting(panel, "Сохранение исходной маски, %", "boundary_retained", 50, 100, 82)
+        addSetting(panel, "Сглаживание перемычки (нечётный kernel)", "boundary_kernel", 1, 15, 3)
+        addSetting(panel, "Число частей: максимум", "boundary_max_parts", 2, 8, 4)
+        panel.addView(TextView(this).apply {
+            text = "Настройки Geometry watershed (соседняя кнопка)"
+            textSize = 16f
+            setPadding(0, 18, 0, 0)
+        })
+        addSetting(panel, "Порог объединения пиков, ×100", "watershed_saddle", 30, 110, 78)
+        panel.addView(Button(this).apply {
+            text = "Сбросить параметры"
+            setOnClickListener {
+                diagnosticPrefs.edit().clear().apply()
+                recreate()
+            }
+        })
+    }
+
+    private fun addSetting(
+        panel: LinearLayout, title: String, key: String,
+        minValue: Int, maxValue: Int, defaultValue: Int
+    ) {
+        val label = TextView(this).apply { textSize = 13f }
+        val seek = SeekBar(this).apply {
+            max = maxValue - minValue
+            progress = (diagnosticPrefs.getInt(key, defaultValue) - minValue).coerceIn(0, max)
+        }
+        fun updateLabel(value: Int) {
+            label.text = "$title: $value"
+        }
+        updateLabel(minValue + seek.progress)
+        seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val value = minValue + progress
+                updateLabel(value)
+                diagnosticPrefs.edit().putInt(key, value).apply()
+            }
+            override fun onStartTrackingTouch(bar: SeekBar?) {}
+            override fun onStopTrackingTouch(bar: SeekBar?) {}
+        })
+        panel.addView(label)
+        panel.addView(seek)
+    }
+
+    private fun boundaryOptions(): BubblePopBoundarySplitter.Options {
+        val d = BubblePopBoundarySplitter.Options.defaults()
+        return BubblePopBoundarySplitter.Options(
+            diagnosticPrefs.getInt("boundary_start", d.boundaryThresholdStart),
+            d.boundaryThresholdStep,
+            d.boundaryThresholdAttempts,
+            diagnosticPrefs.getInt("boundary_min_component", d.minComponentArea),
+            diagnosticPrefs.getInt("boundary_min_part", d.minPartArea),
+            d.minPartAreaFraction,
+            diagnosticPrefs.getInt("boundary_max_parts", d.maxParts),
+            diagnosticPrefs.getInt("boundary_retained", (d.minRetainedFraction * 100).toInt()) / 100.0,
+            diagnosticPrefs.getInt("boundary_kernel", d.closeKernelSize)
+        )
+    }
+
+    private fun watershedOptions(): BubblePopWatershedSplitter.Options =
+        BubblePopWatershedSplitter.Options(
+            diagnosticPrefs.getInt("watershed_saddle", 78) / 100.0
+        )
 
     @Deprecated("Legacy document picker for compatibility")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -296,7 +385,7 @@ class BubblePopDiagnosticActivity : Activity() {
                 Utils.bitmapToMat(inputBitmap, mat)
                 mask = segmenter.getMask(mat, null)
                 boundary = segmenter.getBoundaryMap(mat)
-                result = BubblePopBoundarySplitter.split(mask, boundary)
+                result = BubblePopBoundarySplitter.split(mask, boundary, boundaryOptions())
 
                 val instanceMask = Mat()
                 val hierarchy = Mat()
@@ -410,7 +499,7 @@ class BubblePopDiagnosticActivity : Activity() {
                 // Two model passes for now: preserve the baseline API and compare raw outputs.
                 mask = segmenter.getMask(mat, null)
                 boundary = segmenter.getBoundaryMap(mat)
-                val split = BubblePopWatershedSplitter.split(mat, mask, boundary)
+                val split = BubblePopWatershedSplitter.split(mat, mask, boundary, watershedOptions())
                 splitMask = split.mask
                 instanceMap = split.instances
 
