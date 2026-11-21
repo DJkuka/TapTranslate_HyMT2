@@ -111,7 +111,7 @@ class BubblePopDiagnosticActivity : Activity() {
 
     private fun addDiagnosticSettings(panel: LinearLayout) {
         panel.addView(TextView(this).apply {
-            text = "Настройки Boundary-only (кнопка «по карте границ»)"
+            text = "Настройки разделения: boundary + геометрия (кнопка «по карте границ»)"
             textSize = 16f
         })
         addSetting(panel, "Порог boundary, старт", "boundary_start", 80, 240, 176)
@@ -440,7 +440,7 @@ class BubblePopDiagnosticActivity : Activity() {
                 main.post {
                     if (!isFinishing) {
                         preview.setImageBitmap(finalBitmap)
-                        status.text = "Boundary-only: исходных областей $inputCount, итоговых областей $outputCount, разделено: $splitCount. Порог boundary: ${if (threshold < 0) "не применялся" else threshold}. Контуров: $contourCount. Вершин: $points. Время: ${elapsedMs} мс."
+                        status.text = "Boundary + geometry: исходных областей $inputCount, итоговых областей $outputCount, разделено: $splitCount. Порог boundary: ${if (threshold < 0) "не применялся" else threshold}. Контуров: $contourCount. Вершин: $points. Время: ${elapsedMs} мс."
                     } else {
                         finalBitmap.recycle()
                     }
