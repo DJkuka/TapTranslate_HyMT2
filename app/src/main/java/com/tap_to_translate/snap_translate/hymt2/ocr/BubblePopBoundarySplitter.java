@@ -674,7 +674,33 @@ public final class BubblePopBoundarySplitter {
                 stats.concavityRejectedNoDefects++;
                 return null;
             }
+            // OpenCV convexityDefects requires hull vertex indices in strictly
+            // increasing contour order. convexHull(returnPoints=false) returns
+            // the hull in cyclic order, which is not necessarily monotonic.
+            // Passing that cyclic order can trigger a native OpenCV error and,
+            // on some Android builds, a SIGSEGV instead of a safe Java exception.
             Imgproc.convexHull(contour, hull, false);
+            int[] hullIndices = hull.toArray();
+            if (hullIndices.length < 3) {
+                stats.concavityRejectedNoDefects++;
+                trace.outcome = "convex_hull_too_small";
+                return null;
+            }
+            Arrays.sort(hullIndices);
+            boolean validHull = true;
+            for (int k = 0; k < hullIndices.length; k++) {
+                if (hullIndices[k] < 0 || hullIndices[k] >= contour.rows()
+                        || (k > 0 && hullIndices[k] == hullIndices[k - 1])) {
+                    validHull = false;
+                    break;
+                }
+            }
+            if (!validHull) {
+                stats.concavityRejectedNoDefects++;
+                trace.outcome = "convex_hull_indices_invalid";
+                return null;
+            }
+            hull.fromArray(hullIndices);
             try {
                 Imgproc.convexityDefects(contour, hull, defects);
             } catch (RuntimeException invalidHull) {
