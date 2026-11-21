@@ -1,4 +1,5 @@
 name: Build Tap Translate 1.125 FontFit AutoFill + Hy-MT2 Vulkan
+# Rebuild requested for the BubblePop watershed diagnostic APK.
 
 on:
   workflow_dispatch:
