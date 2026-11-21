@@ -148,11 +148,14 @@ jobs:
           unzip -l "$helper" | grep -F "assets/models/bubblepop/model_fp16.onnx"
           unzip -l "$helper" | grep -F "assets/models/bubblepop/LICENSE.bubble-pop"
           mkdir -p build/bubblepop-helper-check
-          while IFS= read -r dex; do
+          mapfile -t dex_files < <(unzip -Z1 "$helper" | grep -E '^classes([0-9]+)?[.]dex$')
+          test "${#dex_files[@]}" -gt 0
+          : > build/bubblepop-helper-check/dex-strings.txt
+          for dex in "${dex_files[@]}"; do
             unzip -p "$helper" "$dex" | strings -a
-          done < <(unzip -Z1 "$helper" | grep -E '^classes([0-9]+)?\\.dex$') > build/bubblepop-helper-check/dex-strings.txt
-          grep -F "BubblePopDiagnosticActivity" build/bubblepop-helper-check/dex-strings.txt
-          grep -F "BubblePopSegmenter" build/bubblepop-helper-check/dex-strings.txt
+          done > build/bubblepop-helper-check/dex-strings.txt
+          grep -Fq "BubblePopDiagnosticActivity" build/bubblepop-helper-check/dex-strings.txt
+          grep -Fq "BubblePopSegmenter" build/bubblepop-helper-check/dex-strings.txt
           echo "BubblePop model assets and compiled diagnostic classes verified without Apktool decompilation."
 
       - name: Merge Hy-MT2 runtime into the original Tap Translate APK
