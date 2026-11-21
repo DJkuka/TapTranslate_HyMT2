@@ -857,7 +857,7 @@ public final class RtDetrLiveBridge {
             if (region == null || region.getMaskData() == null) return false;
             Rect overlayBounds = readOverlayBounds(overlay);
             if (overlayBounds == null) return false;
-            return BubbleTextLayout.draw(canvas, region.getMaskData(), region.getMaskWidth(),
+            return BubbleTextLayout.draw(canvas, region.maskDataView(), region.getMaskWidth(),
                     region.getMaskHeight(), region.getBounds(), overlayBounds, text, paint,
                     minTextSize, maxTextSize, padding);
         } catch (Throwable error) {

@@ -74,6 +74,8 @@ public final class DetectedRegion {
     public byte[] getMaskData() {
         return maskData == null ? null : Arrays.copyOf(maskData, maskData.length);
     }
+    /** Package-private read-only view for the live renderer; callers must not modify it. */
+    byte[] maskDataView() { return maskData; }
     public int getMaskWidth() { return maskWidth; }
     public int getMaskHeight() { return maskHeight; }
 }
