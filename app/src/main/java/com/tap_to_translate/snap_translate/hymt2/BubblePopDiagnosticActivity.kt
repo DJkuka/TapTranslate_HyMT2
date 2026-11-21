@@ -71,6 +71,10 @@ class BubblePopDiagnosticActivity : Activity() {
             text = "Найти контуры баблов"
             setOnClickListener { runSegmentation() }
         })
+        root.addView(Button(this).apply {
+            text = "Показать карту границ"
+            setOnClickListener { runBoundaryDiagnostic() }
+        })
         status = TextView(this).apply { text = "Изображение не выбрано."; textSize = 13f }
         root.addView(status)
         preview = ImageView(this).apply { adjustViewBounds = true; scaleType = ImageView.ScaleType.FIT_CENTER }
@@ -172,6 +176,69 @@ class BubblePopDiagnosticActivity : Activity() {
             } finally {
                 contours.forEach { it.release() }
                 mask?.release()
+                mat?.release()
+                segmenter?.close()
+                if (!inputBitmap.isRecycled) inputBitmap.recycle()
+            }
+        }
+    }
+
+    
+    /** Displays the raw boundary-head probability map without changing segmentation. */
+    private fun runBoundaryDiagnostic() {
+        val original = source ?: run {
+            Toast.makeText(this, "Сначала выбери изображение", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val inputBitmap = try {
+            original.copy(Bitmap.Config.ARGB_8888, false)
+        } catch (t: Throwable) {
+            status.text = "Не удалось подготовить копию изображения: ${t.message}"
+            return
+        } ?: run {
+            status.text = "Не удалось создать копию изображения."
+            return
+        }
+        status.text = "Построение карты границ BubblePop…"
+        thread(name = "BubblePopBoundaryDiagnostic") {
+            val startedAt = SystemClock.elapsedRealtime()
+            var segmenter: BubblePopSegmenter? = null
+            var mat: Mat? = null
+            var boundary: Mat? = null
+            var rgba: Mat? = null
+            var overlay: Bitmap? = null
+            try {
+                val model = File(cacheDir, "bubblepop_model_fp16.onnx")
+                if (!model.exists() || model.length() < 100_000) {
+                    assets.open("models/bubblepop/model_fp16.onnx").use { input ->
+                        FileOutputStream(model).use { output -> input.copyTo(output) }
+                    }
+                }
+                check(OpenCVUtils.init(applicationContext)) { "OpenCV initialization failed" }
+                segmenter = BubblePopSegmenter(model.absolutePath)
+                mat = Mat()
+                Utils.bitmapToMat(inputBitmap, mat)
+                boundary = segmenter.getBoundaryMap(mat)
+                rgba = Mat()
+                Imgproc.cvtColor(boundary, rgba, Imgproc.COLOR_GRAY2RGBA)
+                overlay = Bitmap.createBitmap(rgba.cols(), rgba.rows(), Bitmap.Config.ARGB_8888)
+                Utils.matToBitmap(rgba, overlay!!)
+                val elapsedMs = SystemClock.elapsedRealtime() - startedAt
+                val result = overlay
+                main.post {
+                    if (!isFinishing && result != null) {
+                        preview.setImageBitmap(result)
+                        status.text = "Карта границ модели. Белые участки показывают уверенность boundary-канала; это ещё не разделённые баблы. Время: ${elapsedMs} мс."
+                    } else {
+                        result?.recycle()
+                    }
+                }
+            } catch (t: Throwable) {
+                overlay?.recycle()
+                main.post { status.text = "Ошибка карты границ: ${t.javaClass.simpleName}: ${t.message}" }
+            } finally {
+                boundary?.release()
+                rgba?.release()
                 mat?.release()
                 segmenter?.close()
                 if (!inputBitmap.isRecycled) inputBitmap.recycle()
