@@ -24,6 +24,7 @@ import org.opencv.core.MatOfPoint
 import org.opencv.core.Scalar
 import org.opencv.imgproc.Imgproc
 import com.tap_to_translate.snap_translate.hymt2.ocr.BubblePopSegmenter
+import com.paddle.ocr.util.OpenCVUtils
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.concurrent.thread
@@ -118,6 +119,7 @@ class BubblePopDiagnosticActivity : Activity() {
                         FileOutputStream(model).use { output -> input.copyTo(output) }
                     }
                 }
+                check(OpenCVUtils.init(applicationContext)) { "OpenCV initialization failed" }
                 segmenter = BubblePopSegmenter(model.absolutePath)
                 mat = Mat()
                 Utils.bitmapToMat(original, mat)
@@ -144,7 +146,6 @@ class BubblePopDiagnosticActivity : Activity() {
                     }
                     canvas.drawPath(path, paint)
                 }
-                val elapsed = System.currentTimeMillis()
                 main.post {
                     preview.setImageBitmap(overlay)
                     status.text = "Найдено контуров: ${contours.size}. Всего вершин: $totalPoints. Красные линии показывают внешние границы масок. Время включает запуск модели."
