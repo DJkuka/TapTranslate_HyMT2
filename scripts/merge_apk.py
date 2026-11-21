@@ -450,21 +450,25 @@ def patch_free_text_alpha_renderers(base: Path) -> None:
             if method.count(anchor) != 1:
                 raise RuntimeError("Could not uniquely find fill alpha operation in " + rel)
             method = method.replace(anchor, replacement, 1)
+            min_register, max_register = ("v3", "v4") if owner == "f" else ("v2", "v3")
             shape_hook = """    move-object/from16 v23, v1
     move-object/from16 v24, v11
     move-object/from16 v25, v13
     iget-object v26, v0, Lrh/OWNER;->g:Landroid/text/TextPaint;
-    move/from16 v27, v3
-    move/from16 v28, v4
+    move/from16 v27, MIN_REGISTER
+    move/from16 v28, MAX_REGISTER
     const/4 v29, 0x4
     invoke-static/range {v23 .. v29}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->drawBubbleText(Landroid/graphics/Canvas;Ljava/lang/Object;Ljava/lang/CharSequence;Landroid/text/TextPaint;FFI)Z
     move-result v23
     if-nez v23, :goto_0
 """
-            shape_hook = shape_hook.replace("OWNER", owner)
-            marker = "    :cond_8\n"
+            shape_hook = (shape_hook.replace("OWNER", owner)
+                          .replace("MIN_REGISTER", min_register)
+                          .replace("MAX_REGISTER", max_register))
+            marker = (f"    iget v4, v0, Lrh/{owner};->m:F\n" if owner == "f"
+                      else f"    iget v3, v0, Lrh/{owner};->m:F\n")
             if method.count(marker) != 1:
-                raise RuntimeError("Could not locate unique text-layout entry in " + rel)
+                raise RuntimeError("Could not locate unique max-font register in " + rel)
             method = method.replace(marker, marker + shape_hook + "\n", 1)
             text = text[:start] + method + text[end:]
             path.write_text(text, encoding="utf-8")
@@ -1198,19 +1202,3 @@ def patch_screenshot_button(base: Path) -> None:
             'android:layout_width="32.0dip" android:layout_height="32.0dip" '
             'android:layout_marginRight="10.0dip" android:src="@drawable/ic_screenshot_camera" '
             'android:alpha="0.5" />'
-        )
-        xml_text, count = pattern.subn(lambda match: match.group(1) + "\n" + button, xml_text, count=1)
-        if count != 1:
-            raise RuntimeError("Could not find OCR icon in container_widget.xml")
-        layout.write_text(xml_text, encoding="utf-8")
-
-    ids = base / "res/values/ids.xml"
-    ids_text = ids.read_text(encoding="utf-8")
-    if button_id not in ids_text:
-        anchor = '    <item type="id" name="container_widget_iv_ocr" />\n'
-        if ids_text.count(anchor) != 1:
-            raise RuntimeError("Could not register screenshot button in ids.xml")
-        ids.write_text(ids_text.replace(anchor, anchor + f'    <item type="id" name="{button_id}" />\n', 1), encoding="utf-8")
-
-    public = base / "res/values/public.xml"
-    public_text = public.read_text(encoding="utf-8")
