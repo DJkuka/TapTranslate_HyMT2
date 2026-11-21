@@ -3,7 +3,7 @@ name: Build Tap Translate 1.125 FontFit AutoFill + Hy-MT2 Vulkan
 on:
   workflow_dispatch:
   push:
-    branches: [ main, vulkan-v12-integration, ocr-hybrid-prototype, ocr-paddle-prototype, ocr-region-editing, ocr-region-geometry, ocr-region-gesture-presets ]
+    branches: [ main, vulkan-v12-integration, ocr-hybrid-prototype, ocr-paddle-prototype, ocr-region-editing, ocr-region-geometry, ocr-region-gesture-presets, bubblepop-diagnostic ]
 
 permissions:
   contents: write
@@ -89,7 +89,7 @@ jobs:
           test "$(stat -c%s "$model")" -eq 11120765
 
       - name: Fetch pinned PP-OCRv6 small ONNX models and verify hashes
-        if: github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing' || github.ref == 'refs/heads/ocr-region-geometry' || github.ref == 'refs/heads/ocr-region-gesture-presets'
+        if: github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing' || github.ref == 'refs/heads/ocr-region-geometry' || github.ref == 'refs/heads/ocr-region-gesture-presets' || github.ref == 'refs/heads/bubblepop-diagnostic'
         shell: bash
         run: |
           set -euo pipefail
@@ -108,6 +108,20 @@ jobs:
           test -s app/src/main/assets/models/rec/inference.yml
           echo "PP-OCRv6 models and matching 18,708-character dictionary are ready."
 
+
+      - name: Fetch pinned BubblePop speech-balloon segmentation model
+        if: github.ref == 'refs/heads/bubblepop-diagnostic'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/src/main/assets/models/bubblepop
+          base="https://raw.githubusercontent.com/xulihang/speech-balloon-segmentation/a6a5abae641891e80ef6eaf28d307c808ad5657d"
+          curl --fail --location --retry 4 --retry-all-errors "$base/models/model_fp16.onnx" -o app/src/main/assets/models/bubblepop/model_fp16.onnx
+          curl --fail --location --retry 4 --retry-all-errors "$base/LICENSE.bubble-pop" -o app/src/main/assets/models/bubblepop/LICENSE.bubble-pop
+          test "$(stat -c%s app/src/main/assets/models/bubblepop/model_fp16.onnx)" -gt 100000
+          sha256sum app/src/main/assets/models/bubblepop/model_fp16.onnx
+          echo "BubblePop model pinned to speech-balloon-segmentation commit a6a5abae641891e80ef6eaf28d307c808ad5657d"
+
       - name: Run OCR geometry and outer-ring colour unit tests
         run: gradle --no-daemon -PllamaRoot="$LLAMA_ROOT" -PvulkanAarNativeDir="$VULKAN_AAR_NATIVE_DIR" :app:testDebugUnitTest
 
@@ -123,6 +137,19 @@ jobs:
           unzip -l "$helper" | grep -F "lib/arm64-v8a/libonnxruntime.so"
           unzip -l "$helper" | grep -F "lib/arm64-v8a/libonnxruntime4j_jni.so"
           unzip -l "$helper" | grep -F "lib/arm64-v8a/libopencv_java4.so"
+
+
+      - name: Verify BubblePop diagnostic model and screen
+        if: github.ref == 'refs/heads/bubblepop-diagnostic'
+        shell: bash
+        run: |
+          set -euo pipefail
+          helper="app/build/outputs/apk/debug/app-debug.apk"
+          unzip -l "$helper" | grep -F "assets/models/bubblepop/model_fp16.onnx"
+          unzip -l "$helper" | grep -F "assets/models/bubblepop/LICENSE.bubble-pop"
+          java -jar tools/apktool.jar d -f -o build/bubblepop-helper-check "$helper"
+          test -s build/bubblepop-helper-check/smali_classes5/com/tap_to_translate/snap_translate/hymt2/BubblePopDiagnosticActivity.smali
+          test -s build/bubblepop-helper-check/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopSegmenter.smali
 
       - name: Merge Hy-MT2 runtime into the original Tap Translate APK
         run: |
@@ -308,6 +335,21 @@ jobs:
               raise SystemExit("PP-OCRv6 per-line geometry is missing from the live adapter")
           print("Paddle OCR, OpenCV, native bubble/free-text geometry, host child constructor and ML Kit fallback verified.")
           PY
+
+
+      - name: Verify BubblePop diagnostic in final unsigned APK
+        if: github.ref == 'refs/heads/bubblepop-diagnostic'
+        shell: bash
+        run: |
+          set -euo pipefail
+          decoded="build/bubblepop-final-check"
+          java -jar tools/apktool.jar d -f -o "$decoded" build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
+          test -s "$decoded/assets/models/bubblepop/model_fp16.onnx"
+          test -s "$decoded/assets/models/bubblepop/LICENSE.bubble-pop"
+          test -s "$decoded/smali_classes5/com/tap_to_translate/snap_translate/hymt2/BubblePopDiagnosticActivity.smali"
+          test -s "$decoded/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopSegmenter.smali"
+          grep -q "BubblePopDiagnosticActivity" "$decoded/AndroidManifest.xml"
+          echo "BubblePop model, license, diagnostic screen and manifest verified in final APK."
 
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
