@@ -16,6 +16,7 @@ import org.opencv.imgproc.Imgproc;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -39,14 +40,12 @@ public final class BubblePopLiveSegmenter implements AutoCloseable {
         File model = new File(context.getCodeCacheDir(), "bubblepop_model_fp16.onnx");
         if (!model.exists() || model.length() < 100_000L) {
             File temp = new File(model.getParentFile(), model.getName() + ".tmp");
-            try {
-                context.getAssets().open(MODEL_ASSET).use(input -> {
-                    try (FileOutputStream output = new FileOutputStream(temp)) {
-                        byte[] buffer = new byte[64 * 1024];
-                        int count;
-                        while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
-                    }
-                });
+            try (InputStream input = context.getAssets().open(MODEL_ASSET);
+                 FileOutputStream output = new FileOutputStream(temp)) {
+                byte[] buffer = new byte[64 * 1024];
+                int count;
+                while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+                output.getFD().sync();
                 if (model.exists() && !model.delete()) {
                     throw new IllegalStateException("Cannot replace cached BubblePop model");
                 }
