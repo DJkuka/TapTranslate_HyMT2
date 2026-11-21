@@ -29,12 +29,9 @@ public final class BubbleTextLayout {
                 || overlayBounds == null || source == null || paint == null
                 || source.length() == 0) return false;
 
+        // The mask has already been localized to this OCR overlay. Use its
+        // complete interior, not the source OCR rectangle, as the layout area.
         Rect area = new Rect(maskBounds);
-        int expandX = Math.max(12, overlayBounds.width() / 2);
-        int expandY = Math.max(16, overlayBounds.height());
-        Rect local = new Rect(overlayBounds);
-        local.inset(-expandX, -expandY);
-        if (!area.intersect(local)) return false;
         int inset = Math.max(2, padding);
         area.inset(inset, inset);
         if (area.width() < 4 || area.height() < 4) return false;
@@ -83,9 +80,18 @@ public final class BubbleTextLayout {
             if (offset >= text.length()) break;
             if (y + lineHeight > area.bottom) return null;
 
-            int[] run = widestCommonRun(mask, width, height, maskBounds, area,
-                    y, lineHeight, padding);
-            if (run == null || run[1] - run[0] < 2) return null;
+            int[] run = null;
+            int minimumRun = Math.max(4, (int) Math.ceil(paint.getTextSize() * 0.45f));
+            int scanStep = Math.max(1, lineHeight / 4);
+            while (y + lineHeight <= area.bottom) {
+                run = widestCommonRun(mask, width, height, maskBounds, area,
+                        y, lineHeight, padding);
+                if (run != null && run[1] - run[0] >= minimumRun) break;
+                // Ignore narrow tips/indentations at the edge of irregular balloons;
+                // start the next text line where a complete glyph band fits.
+                y += scanStep;
+            }
+            if (run == null || run[1] - run[0] < minimumRun) return null;
             float available = run[1] - run[0];
             int count = paint.breakText(text, offset, text.length(), true, available, null);
             if (count <= 0) return null;
