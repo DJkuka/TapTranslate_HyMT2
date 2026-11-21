@@ -481,6 +481,25 @@ class BubblePopDiagnosticActivity : Activity() {
                         canvas.drawCircle(trace.saddleX.toFloat(), trace.saddleY.toFloat(), 8f, tracePaint)
                     }
                 }
+                val concavityTraces = result!!.concavityTraces
+                val concavityPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style = Paint.Style.STROKE
+                    strokeWidth = max(4f, original.width / 300f)
+                }
+                for (trace in concavityTraces) {
+                    if (trace.x1 >= 0 && trace.x2 >= 0) {
+                        concavityPaint.color = if (trace.outcome == "accepted")
+                            0xFF00E5FF.toInt() else 0xFFFF9F0A.toInt()
+                        canvas.drawLine(trace.x1.toFloat(), trace.y1.toFloat(),
+                            trace.x2.toFloat(), trace.y2.toFloat(), concavityPaint)
+                        canvas.drawCircle(trace.x1.toFloat(), trace.y1.toFloat(), 7f, concavityPaint)
+                        canvas.drawCircle(trace.x2.toFloat(), trace.y2.toFloat(), 7f, concavityPaint)
+                    }
+                }
+                val concavityReport = concavityTraces.mapIndexed { index, trace ->
+                    "#${index + 1}: хорда (${trace.x1},${trace.y1})–(${trace.x2},${trace.y2}), " +
+                        "части ${trace.firstArea}/${trace.secondArea}, сохранено ${trace.retainedArea}; ${trace.outcome}"
+                }.joinToString("\\n")
                 val traceReport = geometryTraces.mapIndexed { index, trace ->
                     val centers = if (trace.firstX >= 0) {
                         val ratioText = if (trace.saddleRatio.isNaN()) "—"
@@ -514,7 +533,7 @@ class BubblePopDiagnosticActivity : Activity() {
                 main.post {
                     if (!isFinishing) {
                         preview.setImageBitmap(finalBitmap)
-                        status.text = "Boundary + geometry: исходных областей $inputCount, итоговых областей $outputCount, разделено: $splitCount. $boundaryInfo. ${result!!.geometrySummary}.\\nТрассировка попыток:\\n$traceReport\\nМетки: жёлтые круги — кандидаты центров; зелёный/голубой — выбранная пара; красный — седловая точка. Контуров: $contourCount. Вершин: $points. Время: ${elapsedMs} мс."
+                        status.text = "Boundary + geometry + concavity: исходных областей $inputCount, итоговых областей $outputCount, разделено: $splitCount. $boundaryInfo. ${result!!.geometrySummary}.\\nТрассировка попыток:\\n$traceReport\\nConcavity-кандидаты (оранжевый — отклонённая хорда, голубой — принятая):\\n$concavityReport\\nМетки: жёлтые круги — кандидаты центров; зелёный/голубой — выбранная пара; красный — седловая точка. Контуров: $contourCount. Вершин: $points. Время: ${elapsedMs} мс."
                     } else {
                         finalBitmap.recycle()
                     }
