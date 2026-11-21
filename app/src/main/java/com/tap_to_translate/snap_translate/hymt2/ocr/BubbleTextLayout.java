@@ -32,8 +32,9 @@ public final class BubbleTextLayout {
         // The mask has already been localized to this OCR overlay. Use its
         // complete interior, not the source OCR rectangle, as the layout area.
         Rect area = new Rect(maskBounds);
-        int inset = Math.max(2, padding);
-        area.inset(inset, inset);
+        int verticalInset = 2;
+        int horizontalPadding = Math.max(2, padding);
+        area.inset(verticalInset, verticalInset);
         if (area.width() < 4 || area.height() < 4) return false;
 
         float originalSize = paint.getTextSize();
@@ -43,7 +44,7 @@ public final class BubbleTextLayout {
             for (float size = upper; size >= lower - 0.01f; size -= 0.5f) {
                 paint.setTextSize(size);
                 List<Line> lines = layout(mask, maskWidth, maskHeight, maskBounds,
-                        area, source.toString(), paint, inset);
+                        area, source.toString(), paint, horizontalPadding);
                 if (lines != null && !lines.isEmpty()) {
                     android.graphics.Paint.FontMetrics fm = paint.getFontMetrics();
                     float usedTop = lines.get(0).baseline + fm.ascent;
