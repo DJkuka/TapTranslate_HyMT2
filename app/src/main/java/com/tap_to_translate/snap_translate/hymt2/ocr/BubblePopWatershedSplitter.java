@@ -189,7 +189,7 @@ public final class BubblePopWatershedSplitter {
             List<Peak> seeds = selectSeparatedPeaks(peaks, distanceData, boundaryData,
                     distance.cols(), distance.rows());
             if (seeds.size() < 2) {
-                return false;
+                return 0;
             }
 
             Mat markers = new Mat(component.rows(), component.cols(), CvType.CV_32SC1, new Scalar(0));
@@ -237,7 +237,7 @@ public final class BubblePopWatershedSplitter {
                 }
             }
             if (substantialRegions < 2) {
-                return false;
+                return 0;
             }
 
             // Preserve instance IDs until contour extraction. A binary union here
