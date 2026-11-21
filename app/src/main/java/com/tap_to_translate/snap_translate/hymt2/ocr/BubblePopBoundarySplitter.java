@@ -93,10 +93,16 @@ public final class BubblePopBoundarySplitter {
         public final int splitComponents;
         public final int boundaryThreshold;
         public final String geometrySummary;
+        public final int boundaryAttemptCount;
+        public final int boundaryAcceptedCount;
+        public final int boundaryMinThresholdTried;
+        public final int boundaryMaxThresholdTried;
 
         private Result(Mat mask, Mat instances, int instanceCount,
                        int inputComponents, int outputComponents,
-                       int splitComponents, int boundaryThreshold, String geometrySummary) {
+                       int splitComponents, int boundaryThreshold, String geometrySummary,
+                       int boundaryAttemptCount, int boundaryAcceptedCount,
+                       int boundaryMinThresholdTried, int boundaryMaxThresholdTried) {
             this.mask = mask;
             this.instances = instances;
             this.instanceCount = instanceCount;
@@ -105,6 +111,10 @@ public final class BubblePopBoundarySplitter {
             this.splitComponents = splitComponents;
             this.boundaryThreshold = boundaryThreshold;
             this.geometrySummary = geometrySummary;
+            this.boundaryAttemptCount = boundaryAttemptCount;
+            this.boundaryAcceptedCount = boundaryAcceptedCount;
+            this.boundaryMinThresholdTried = boundaryMinThresholdTried;
+            this.boundaryMaxThresholdTried = boundaryMaxThresholdTried;
         }
     }
 
@@ -136,6 +146,10 @@ public final class BubblePopBoundarySplitter {
         int splitCount = 0;
         int nextId = 1;
         int usedThreshold = -1;
+        int boundaryAttemptCount = 0;
+        int boundaryAcceptedCount = 0;
+        int boundaryMinThresholdTried = Integer.MAX_VALUE;
+        int boundaryMaxThresholdTried = -1;
         GeometryStats geometryStats = new GeometryStats();
 
         try {
@@ -183,9 +197,13 @@ public final class BubblePopBoundarySplitter {
                                 int threshold = options.boundaryThresholdStart
                                         - attempt * options.boundaryThresholdStep;
                                 if (threshold < 1) break;
+                                boundaryAttemptCount++;
+                                boundaryMinThresholdTried = Math.min(boundaryMinThresholdTried, threshold);
+                                boundaryMaxThresholdTried = Math.max(boundaryMaxThresholdTried, threshold);
                                 Candidate candidate = tryBoundarySplit(
                                         component, boundaryRoi, threshold, closeKernel, options);
                                 if (candidate != null) {
+                                    boundaryAcceptedCount++;
                                     accepted = candidate;
                                     usedThreshold = usedThreshold < 0
                                             ? threshold : Math.min(usedThreshold, threshold);
@@ -239,7 +257,10 @@ public final class BubblePopBoundarySplitter {
 
             int count = nextId - 1;
             return new Result(output, instances, count, inputCount - 1,
-                    count, splitCount, usedThreshold, geometryStats.summary(options));
+                    count, splitCount, usedThreshold, geometryStats.summary(options),
+                    boundaryAttemptCount, boundaryAcceptedCount,
+                    boundaryAttemptCount == 0 ? -1 : boundaryMinThresholdTried,
+                    boundaryMaxThresholdTried);
         } catch (Throwable error) {
             output.release();
             instances.release();
@@ -647,7 +668,10 @@ public final class BubblePopBoundarySplitter {
                     + ", части малы " + rejectedPartTooSmall
                     + ", потеря площади " + rejectedRetainedArea
                     + ", лучшая перемычка " + best
-                    + " / порог " + Math.round(options.geometryMaxSaddleRatio * 100.0) + "%";
+                    + " / порог " + Math.round(options.geometryMaxSaddleRatio * 100.0) + "%"
+                    + ", радиус центра ≥ " + options.geometryMinPeakRadius + " px"
+                    + ", расстояние между центрами ≥ " + options.geometryMinPeakDistance + " px"
+                    + ", boundary start = " + options.boundaryThresholdStart;
         }
     }
 
