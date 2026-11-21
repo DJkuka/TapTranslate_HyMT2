@@ -355,16 +355,19 @@ jobs:
           unzip -Z1 "$apk" > "$listing"
           grep -Fxq "assets/models/bubblepop/model_fp16.onnx" "$listing"
           grep -Fxq "assets/models/bubblepop/LICENSE.bubble-pop" "$listing"
+          mapfile -t dex_files < <(grep -E '^classes([0-9]+)?[.]dex$' "$listing")
+          test "${#dex_files[@]}" -gt 0
           mkdir -p build/bubblepop-final-check
           : > build/bubblepop-final-check/dex-strings.txt
-          while IFS= read -r dex; do
+          for dex in "${dex_files[@]}"; do
             unzip -p "$apk" "$dex" | strings -a
-          done < <(grep -E '^classes([0-9]+)?[.]dex
+          done > build/bubblepop-final-check/dex-strings.txt
           for symbol in BubblePopDiagnosticActivity BubblePopSegmenter BubblePopLiveSegmenter BubblePopBoundarySplitter ocr_bubblepop_live_enabled; do
             grep -Fq "$symbol" build/bubblepop-final-check/dex-strings.txt
           done
           grep -Fq "Использовать BubblePop в обычном переводе" build/bubblepop-final-check/dex-strings.txt
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump xmltree "$apk" AndroidManifest.xml | grep -Fq "BubblePopDiagnosticActivity"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump xmltree "$apk" AndroidManifest.xml > build/bubblepop-final-check/manifest.txt
+          grep -Fq "BubblePopDiagnosticActivity" build/bubblepop-final-check/manifest.txt
           echo "BubblePop model assets, compiled DEX classes, setting and manifest verified in final APK."
 
       - name: Upload unsigned APK
@@ -374,10 +377,3 @@ jobs:
           path: build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
           if-no-files-found: error
           retention-days: 14
- "$listing") > build/bubblepop-final-check/dex-strings.txt
-          for symbol in BubblePopDiagnosticActivity BubblePopSegmenter BubblePopLiveSegmenter BubblePopBoundarySplitter ocr_bubblepop_live_enabled; do
-            grep -Fq "$symbol" build/bubblepop-final-check/dex-strings.txt
-          done
-          grep -Fq "Использовать BubblePop в обычном переводе" build/bubblepop-final-check/dex-strings.txt
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump xmltree "$apk" AndroidManifest.xml | grep -Fq "BubblePopDiagnosticActivity"
-          echo "BubblePop model assets, compiled DEX classes, setting and manifest verified in final APK."
