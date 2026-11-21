@@ -84,16 +84,15 @@ object PaddleOcrLiveBridge {
         val a = previous.getBounds()
         val b = current.getBounds()
         val minHeight = minOf(a.height(), b.height()).coerceAtLeast(1)
-        val verticalOverlap = minOf(a.bottom, b.bottom) - maxOf(a.top, b.top)
-        val horizontalGap = maxOf(0, maxOf(a.left, b.left) - minOf(a.right, b.right))
         val verticalGap = maxOf(0, b.top - a.bottom)
         val horizontalOverlap = minOf(a.right, b.right) - maxOf(a.left, b.left)
-        val sameRow = verticalOverlap >= minHeight * 0.35 &&
-            horizontalGap <= minHeight * 1.25
-        val nextRow = verticalGap <= maxOf(18, (minHeight * 1.65).toInt()) &&
-            (horizontalOverlap >= minOf(a.width(), b.width()) * 0.12 ||
-                kotlin.math.abs(a.centerX() - b.centerX()) <= minHeight * 1.35)
-        return sameRow || nextRow
+        // Join vertically stacked lines of one paragraph, but never adjacent
+        // same-row detections: those may be text from two touching balloons
+        // inside one connected BubblePop mask.
+        val nextRow = verticalGap <= maxOf(12, (minHeight * 1.35).toInt()) &&
+            (horizontalOverlap >= minOf(a.width(), b.width()) * 0.20 ||
+                kotlin.math.abs(a.centerX() - b.centerX()) <= minHeight * 0.90)
+        return nextRow
     }
 
     private fun getEngine(context: Context): PaddleOCR {
