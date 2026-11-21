@@ -38,7 +38,6 @@ object PaddleOcrLiveBridge {
     @JvmStatic fun recognizeBlocking(
         context: Context?,
         source: Bitmap?,
-        detectedRegions: List<DetectedRegion>?,
         timeoutMs: Long
     ): List<PaddleOcrTextGroup>? {
         if (context == null || source == null || source.isRecycled) return null
@@ -50,13 +49,12 @@ object PaddleOcrLiveBridge {
             busy.set(false); Log.w(TAG, "frame copy failed", t); return null
         } ?: run { busy.set(false); return null }
         val app = context.applicationContext ?: context
-        val regions = detectedRegions?.toList() ?: emptyList()
         val future = java.util.concurrent.CompletableFuture<List<PaddleOcrTextGroup>>()
         executor.execute {
             try {
                 val ocr = getEngine(app)
                 val result = runBlocking { ocr.recognize(bitmap) }
-                future.complete(logAndAssemble(result, bitmap.width, bitmap.height, regions))
+                future.complete(logAndAssemble(result, bitmap.width, bitmap.height))
             } catch (t: Throwable) {
                 Log.e(TAG, "Paddle inference failed; ML Kit output remains unchanged", t)
                 future.completeExceptionally(t)
@@ -143,14 +141,15 @@ object PaddleOcrLiveBridge {
         }
     }
 
-    private fun logAndAssemble(result: OCRRunResult, width: Int, height: Int, regions: List<DetectedRegion>): List<PaddleOcrTextGroup> {
+    /**
+     * PP-OCRv6 owns text detection geometry. Bubble detectors must never decide
+     * which OCR lines belong to one translation block. Emit each PP-OCR detection
+     * with its own rectangle; the host's existing text-layout stage may assemble
+     * nearby lines using its own OCR geometry rules.
+     */
+    private fun logAndAssemble(result: OCRRunResult, width: Int, height: Int): List<PaddleOcrTextGroup> {
         Log.i(TAG, "frame=${width}x${height} lines=${result.lineCount} det_ms=${result.detectionTimeMs} rec_ms=${result.recognitionTimeMs} total_ms=${result.totalTimeMs}")
-        data class Line(val index: Int, val confidence: Float, val bounds: Rect, val text: String, val bubbleId: String?)
-        val bubbleRegions = regions.filter { it.kind == OcrRegionKind.BUBBLE_CONTAINER }
-        val bubbleBounds = bubbleRegions.map { it.bounds }.map {
-            BubbleRegionMatcher.Bounds(it.left, it.top, it.right, it.bottom)
-        }
-        val lines = result.results.mapIndexedNotNull { i, item ->
+        val groups = result.results.mapIndexedNotNull { i, item ->
             val text = item.text.replace('\n', ' ').replace('\r', ' ').take(200).trim()
             if (text.isEmpty()) {
                 Log.w(TAG, "skip empty OCR detection index=$i conf=${item.confidence}")
@@ -161,55 +160,23 @@ object PaddleOcrLiveBridge {
                 Log.w(TAG, "skip OCR detection with empty polygon index=$i text=$text")
                 return@mapIndexedNotNull null
             }
-            val l = floor(pts.minOf { it.x }.toDouble()).toInt().coerceIn(0, width)
-            val t = floor(pts.minOf { it.y }.toDouble()).toInt().coerceIn(0, height)
-            val r = ceil(pts.maxOf { it.x }.toDouble()).toInt().coerceIn(0, width)
-            val b = ceil(pts.maxOf { it.y }.toDouble()).toInt().coerceIn(0, height)
-            val rect = Rect(l, t, r, b)
-            if (rect.width() <= 0 || rect.height() <= 0) {
+            val left = floor(pts.minOf { it.x }.toDouble()).toInt().coerceIn(0, width)
+            val top = floor(pts.minOf { it.y }.toDouble()).toInt().coerceIn(0, height)
+            val right = ceil(pts.maxOf { it.x }.toDouble()).toInt().coerceIn(0, width)
+            val bottom = ceil(pts.maxOf { it.y }.toDouble()).toInt().coerceIn(0, height)
+            val bounds = Rect(left, top, right, bottom)
+            if (bounds.width() <= 0 || bounds.height() <= 0) {
                 Log.w(TAG, "skip OCR detection with empty bounds index=$i text=$text")
                 return@mapIndexedNotNull null
             }
-            val containerIndex = BubbleRegionMatcher.findBestContainer(l, t, r, b, bubbleBounds)
-            val bubbleId = if (containerIndex >= 0) bubbleRegions[containerIndex].id else null
-            Line(i, item.confidence, rect, text, bubbleId)
+            Log.i(TAG, "independent_text_block[${i}] conf=${item.confidence} bounds=${bounds.flattenToString()} text=${text}")
+            PaddleOcrTextGroup(
+                text, bounds, null, item.confidence.coerceIn(0f, 1f), 1,
+                listOf(PaddleOcrTextLine(text, bounds, item.confidence.coerceIn(0f, 1f)))
+            )
         }
-        val emptyResultCount = result.results.count {
-            it.text.replace('\n', ' ').replace('\r', ' ').isBlank()
-        }
-        if (emptyResultCount > 0) {
-            Log.w(TAG, "ignored empty OCR detections=${emptyResultCount}; valid_lines=${lines.size}")
-        }
-        lines.forEach { line ->
-            Log.i(TAG, "line[${line.index}] conf=${line.confidence} bubble=${line.bubbleId ?: "FREE_OR_UNMATCHED"} bounds=${line.bounds.flattenToString()} text=${line.text}")
-        }
-        val grouped = lines.filter { it.bubbleId != null }.groupBy { it.bubbleId!! }
-        val utteranceGroups = mutableListOf<PaddleOcrTextGroup>()
-        grouped.forEach { (bubbleId, bubbleLines) ->
-            val ordered = bubbleLines.sortedWith(compareBy<Line> { it.bounds.top }.thenBy { it.bounds.left })
-            val utterance = ordered.joinToString(" ") { it.text }.replace(Regex("\\s+"), " ").trim()
-            val union = Rect(ordered.first().bounds)
-            ordered.drop(1).forEach { union.union(it.bounds) }
-            val confidence = ordered.map { it.confidence }.average().toFloat().coerceIn(0f, 1f)
-            val lineModels = ordered.map { PaddleOcrTextLine(it.text, it.bounds, it.confidence) }
-            utteranceGroups.add(PaddleOcrTextGroup(
-                utterance, union, bubbleId, confidence, ordered.size, lineModels
-            ))
-            Log.i(TAG, "bubble_group id=${bubbleId} lines=${ordered.size} text=${utterance}")
-        }
-        // Free/unmatched text is deliberately kept as independent blocks. A later
-        // renderer can place these underneath bubble overlays without losing SFX/signage.
-        lines.filter { it.bubbleId == null }.forEach { line ->
-            utteranceGroups.add(PaddleOcrTextGroup(
-                line.text, line.bounds, null, line.confidence, 1,
-                listOf(PaddleOcrTextLine(line.text, line.bounds, line.confidence))
-            ))
-        }
-        val freeCount = lines.count { it.bubbleId == null }
-        Log.i(TAG, "grouping_summary bubbles=${grouped.size} grouped_lines=${lines.size - freeCount} free_or_unmatched=${freeCount} output_groups=${utteranceGroups.size}")
-        utteranceGroups.forEachIndexed { i, group ->
-            Log.i(TAG, "host_group[${i}] bubble=${group.bubbleId ?: "FREE"} lines=${group.lineCount} conf=${group.confidence} bounds=${group.bounds.flattenToString()} text=${group.text}")
-        }
-        return utteranceGroups
+        val skipped = result.results.size - groups.size
+        Log.i(TAG, "text_geometry_summary detections=${result.results.size} independent_blocks=${groups.size} skipped=${skipped} bubble_association=disabled")
+        return groups
     }
 }
