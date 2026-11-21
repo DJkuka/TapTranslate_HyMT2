@@ -26,8 +26,9 @@ import java.util.List;
  *  2. Inside large components, detect separated peaks of the distance transform.
  *  3. Keep only peak pairs with a narrow saddle and either strong boundary-head
  *     evidence or a very narrow geometric connection.
- *  4. Use those peaks as markers for OpenCV watershed. The watershed surface
- *     combines the original grayscale artwork and BubblePop's boundary map.
+ *  4. Use those peaks as markers for OpenCV watershed. Its terrain comes from
+ *     the inverse distance transform plus BubblePop boundary evidence; artwork
+ *     intensity is deliberately excluded so text strokes cannot create cuts.
  *  5. Accept a split only when at least two substantial foreground regions remain.
  *
  * The thresholds are intentionally conservative. A component that cannot be
@@ -205,7 +206,7 @@ public final class BubblePopWatershedSplitter {
                         new Scalar(i + 2), -1, Imgproc.LINE_8, 0);
             }
 
-            Mat watershedImage = buildWatershedImage(source, boundaryMap, rect);
+            Mat watershedImage = buildWatershedImage(component, boundaryMap, rect);
             try {
                 Imgproc.watershed(watershedImage, markers);
             } finally {
@@ -403,33 +404,43 @@ public final class BubblePopWatershedSplitter {
         return max;
     }
 
-    private static Mat buildWatershedImage(Mat source, Mat boundaryMap, Rect rect) {
-        Mat gray = new Mat();
-        if (source.channels() == 1) {
-            source.copyTo(gray);
-        } else if (source.channels() == 4) {
-            Imgproc.cvtColor(source, gray, Imgproc.COLOR_BGRA2GRAY);
-        } else {
-            Imgproc.cvtColor(source, gray, Imgproc.COLOR_BGR2GRAY);
-        }
-        Mat grayRoi = gray.submat(rect);
+    /**
+     * Builds a watershed terrain from mask geometry, never from comic artwork.
+     * The inverse distance transform creates basins around bubble centers and
+     * ridges at narrow necks; BubblePop boundary probabilities reinforce those
+     * ridges where the model has useful evidence.
+     */
+    private static Mat buildWatershedImage(Mat component, Mat boundaryMap, Rect rect) {
+        Mat distance = new Mat();
+        Mat inverseDistance = new Mat();
         Mat boundaryRoi = boundaryMap.submat(rect);
-        Mat combined = new Mat();
+        Mat boundary8 = new Mat();
+        Mat terrain = new Mat();
         Mat bgr = new Mat();
         try {
-            // Keep both the comic's ink outline and the model's predicted boundary
-            // visible to watershed. The boundary head has a higher weight.
-            Core.addWeighted(grayRoi, 0.55, boundaryRoi, 0.90, 0, combined);
-            Imgproc.cvtColor(combined, bgr, Imgproc.COLOR_GRAY2BGR);
+            Imgproc.distanceTransform(component, distance, Imgproc.DIST_L2, 5);
+            Core.normalize(distance, inverseDistance, 255.0, 0.0, Core.NORM_MINMAX, CvType.CV_8UC1);
+            if (boundaryRoi.depth() == CvType.CV_8U) {
+                boundaryRoi.copyTo(boundary8);
+            } else {
+                double scale = boundaryRoi.depth() == CvType.CV_32F
+                        || boundaryRoi.depth() == CvType.CV_64F ? 255.0 : 1.0;
+                boundaryRoi.convertTo(boundary8, CvType.CV_8UC1, scale);
+            }
+            // Inverse distance is the geometric terrain. Boundary evidence only
+            // strengthens likely cuts; text strokes and artwork intensity are absent.
+            Core.addWeighted(inverseDistance, 0.72, boundary8, 0.90, 0.0, terrain);
+            Imgproc.cvtColor(terrain, bgr, Imgproc.COLOR_GRAY2BGR);
             return bgr;
         } catch (Throwable t) {
             bgr.release();
             throw t;
         } finally {
-            gray.release();
-            grayRoi.release();
+            distance.release();
+            inverseDistance.release();
             boundaryRoi.release();
-            combined.release();
+            boundary8.release();
+            terrain.release();
         }
     }
 
