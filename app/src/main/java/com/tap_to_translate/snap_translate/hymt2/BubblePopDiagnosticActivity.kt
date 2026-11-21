@@ -83,7 +83,7 @@ class BubblePopDiagnosticActivity : Activity() {
             setOnClickListener { runBoundarySplitDiagnostic() }
         })
         root.addView(Button(this).apply {
-            text = "Старый эксперимент watershed (для сравнения)"
+            text = "Разделить по геометрии маски + boundary"
             setOnClickListener { runWatershedDiagnostic() }
         })
         status = TextView(this).apply { text = "Изображение не выбрано."; textSize = 13f }
@@ -386,7 +386,7 @@ class BubblePopDiagnosticActivity : Activity() {
             status.text = "Не удалось создать копию изображения."
             return
         }
-        status.text = "Экспериментальное разделение смежных баблов…"
+        status.text = "Геометрическое разделение смежных баблов (watershed)…"
         thread(name = "BubblePopWatershedDiagnostic") {
             val startedAt = SystemClock.elapsedRealtime()
             var segmenter: BubblePopSegmenter? = null
@@ -461,7 +461,7 @@ class BubblePopDiagnosticActivity : Activity() {
                 main.post {
                     if (!isFinishing) {
                         preview.setImageBitmap(finalBitmap)
-                        status.text = "Watershed: исходных областей $inputCount, после разделения $outputCount, разделено крупных областей: $splitCount. Контуров: ${contours.size}. Вершин: $points. Время: ${elapsedMs} мс. Цвета различают найденные области."
+                        status.text = "Geometry watershed: исходных областей $inputCount, после разделения $outputCount, разделено крупных областей: $splitCount. Контуров: ${contours.size}. Вершин: $points. Время: ${elapsedMs} мс. Рельеф строится по distance transform + boundary, яркость рисунка не используется."
                     } else {
                         finalBitmap.recycle()
                     }
