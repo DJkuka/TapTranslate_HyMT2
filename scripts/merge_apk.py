@@ -1913,6 +1913,13 @@ def copy_helper_payload(helper: Path, base: Path) -> None:
     for source in so_files:
         destination = out_lib / source.name
         if destination.exists() and destination.read_bytes() != source.read_bytes():
+            # The helper APK's ML Kit dependency may package a different
+            # libtranslate_jni.so. We do not merge the helper's com.google.mlkit
+            # classes; the host APK's ML Kit DEX must therefore stay paired with
+            # its original native library. Keep the host copy on this collision.
+            if source.name == "libtranslate_jni.so":
+                print("Preserving host ML Kit native library: libtranslate_jni.so")
+                continue
             if source.name not in replaceable:
                 raise RuntimeError(f"Unexpected native library collision: {source.name}")
             print(f"Replacing Hy-MT2 runtime library: {source.name}")
