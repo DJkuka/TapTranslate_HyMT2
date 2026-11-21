@@ -53,6 +53,14 @@ public final class BubblePopWatershedSplitter {
 
     private BubblePopWatershedSplitter() {}
 
+    public static final class Options {
+        public final double sameBubbleSaddleRatio;
+        public Options(double sameBubbleSaddleRatio) {
+            this.sameBubbleSaddleRatio = Math.max(0.10, Math.min(1.20, sameBubbleSaddleRatio));
+        }
+        public static Options defaults() { return new Options(SAME_BUBBLE_SADDLE_RATIO); }
+    }
+
     public static final class Result {
         public final Mat mask;
         public final Mat instances;
@@ -74,6 +82,12 @@ public final class BubblePopWatershedSplitter {
 
     /** Caller must release result.mask. */
     public static Result split(Mat source, Mat inputMask, Mat boundaryMap) {
+        return split(source, inputMask, boundaryMap, Options.defaults());
+    }
+
+    /** Caller must release result.mask. */
+    public static Result split(Mat source, Mat inputMask, Mat boundaryMap, Options options) {
+        if (options == null) options = Options.defaults();
         if (source == null || inputMask == null || boundaryMap == null
                 || source.empty() || inputMask.empty() || boundaryMap.empty()) {
             throw new IllegalArgumentException("source, mask and boundary map must be non-empty");
@@ -121,7 +135,7 @@ public final class BubblePopWatershedSplitter {
                 int producedInstances = 0;
                 if (area >= MIN_COMPONENT_AREA) {
                     producedInstances = trySplitComponent(
-                            source, boundaryMap, component, rect, output, instances, nextInstanceId);
+                            source, boundaryMap, component, rect, output, instances, nextInstanceId, options);
                 }
                 if (producedInstances > 1) {
                     splitCount++;
@@ -154,7 +168,7 @@ public final class BubblePopWatershedSplitter {
 
     private static int trySplitComponent(
             Mat source, Mat boundaryMap, Mat component, Rect rect,
-            Mat output, Mat instances, int firstInstanceId) {
+            Mat output, Mat instances, int firstInstanceId, Options options) {
         Mat distance = new Mat();
         Mat dilated = new Mat();
         Mat peakMask = new Mat();
@@ -193,7 +207,7 @@ public final class BubblePopWatershedSplitter {
             boundaryRoi.release();
 
             List<Peak> seeds = selectSeparatedPeaks(peaks, distanceData, boundaryData,
-                    component, distance.cols(), distance.rows());
+                    component, distance.cols(), distance.rows(), options);
             if (seeds.size() < 2) {
                 return 0;
             }
@@ -363,7 +377,7 @@ public final class BubblePopWatershedSplitter {
      */
     private static List<Peak> selectSeparatedPeaks(
             List<Peak> peaks, float[] distance, byte[] boundary, Mat component,
-            int width, int height) {
+            int width, int height, Options options) {
         int n = peaks.size();
         int[] parent = new int[n];
         for (int i = 0; i < n; i++) parent[i] = i;
@@ -383,7 +397,7 @@ public final class BubblePopWatershedSplitter {
 
                 boolean boundarySeparates = ratio <= MAX_BOUNDARY_SUPPORTED_SADDLE_RATIO
                         && boundaryStrength >= BOUNDARY_EVIDENCE;
-                boolean geometricallySeparate = ratio <= SAME_BUBBLE_SADDLE_RATIO;
+                boolean geometricallySeparate = ratio <= options.sameBubbleSaddleRatio;
                 if (!boundarySeparates && !geometricallySeparate) {
                     union(parent, i, j);
                 }
