@@ -448,13 +448,22 @@ class BubblePopDiagnosticActivity : Activity() {
                 val outputCount = result!!.outputComponents
                 val splitCount = result!!.splitComponents
                 val threshold = result!!.boundaryThreshold
+                val boundaryAttempts = result!!.boundaryAttemptCount
+                val boundaryAccepted = result!!.boundaryAcceptedCount
+                val boundaryMin = result!!.boundaryMinThresholdTried
+                val boundaryMax = result!!.boundaryMaxThresholdTried
+                val boundaryInfo = when {
+                    boundaryAttempts == 0 -> "Boundary-этап не запускался: нет компонентов нужной площади"
+                    threshold >= 0 -> "Boundary-этап: проверено $boundaryAttempts порогов ($boundaryMax…$boundaryMin), принято разделений: $boundaryAccepted, успешный порог: $threshold"
+                    else -> "Boundary-этап: проверено $boundaryAttempts порогов ($boundaryMax…$boundaryMin), принятых разделений: 0; далее использовалась геометрия"
+                }
                 val contourCount = contours.size
                 contours.forEach { it.release() }
                 contours.clear()
                 main.post {
                     if (!isFinishing) {
                         preview.setImageBitmap(finalBitmap)
-                        status.text = "Boundary + geometry: исходных областей $inputCount, итоговых областей $outputCount, разделено: $splitCount. Порог boundary: ${if (threshold < 0) "не применялся" else threshold}. ${result!!.geometrySummary}. Контуров: $contourCount. Вершин: $points. Время: ${elapsedMs} мс."
+                        status.text = "Boundary + geometry: исходных областей $inputCount, итоговых областей $outputCount, разделено: $splitCount. $boundaryInfo. ${result!!.geometrySummary}. Контуров: $contourCount. Вершин: $points. Время: ${elapsedMs} мс."
                     } else {
                         finalBitmap.recycle()
                     }
