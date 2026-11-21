@@ -198,44 +198,14 @@ public final class BubblePopBoundarySplitter {
                     labelRoi.release();
 
                     Candidate accepted = null;
+                    // Isolated diagnostic mode: use only contour-concavity splitting.
+                    // Boundary-head and distance-transform/center-based methods are
+                    // deliberately bypassed so their decisions cannot pre-empt or
+                    // interfere with this method during evaluation.
                     if (area >= options.minComponentArea) {
-                        Mat boundaryRoi = boundary8.submat(rect);
-                        try {
-                            for (int attempt = 0; attempt < options.boundaryThresholdAttempts; attempt++) {
-                                int threshold = options.boundaryThresholdStart
-                                        - attempt * options.boundaryThresholdStep;
-                                if (threshold < 1) break;
-                                boundaryAttemptCount++;
-                                boundaryMinThresholdTried = Math.min(boundaryMinThresholdTried, threshold);
-                                boundaryMaxThresholdTried = Math.max(boundaryMaxThresholdTried, threshold);
-                                Candidate candidate = tryBoundarySplit(
-                                        component, boundaryRoi, threshold, closeKernel, options);
-                                if (candidate != null) {
-                                    boundaryAcceptedCount++;
-                                    accepted = candidate;
-                                    usedThreshold = usedThreshold < 0
-                                            ? threshold : Math.min(usedThreshold, threshold);
-                                    break;
-                                }
-                            }
-
-                            // The model boundary head is supporting evidence, not a hard
-                            // prerequisite. If it has no continuous seam, look for a
-                            // geometrically narrow neck between two substantial lobes.
-                            if (accepted == null) {
-                                accepted = tryGeometricSplit(component, boundaryRoi, options,
-                                        geometryStats, x, y);
-                            }
-                            // Independent contour-concavity method: only runs when
-                            // boundary and distance-transform geometry did not split.
-                            if (accepted == null) {
-                                accepted = tryConcavitySplit(component, geometryStats, x, y,
-                                        options.minPartArea, options.minPartAreaFraction,
-                                        options.minRetainedFraction);
-                            }
-                        } finally {
-                            boundaryRoi.release();
-                        }
+                        accepted = tryConcavitySplit(component, geometryStats, x, y,
+                                options.minPartArea, options.minPartAreaFraction,
+                                options.minRetainedFraction);
                     }
 
                     if (accepted == null) {
