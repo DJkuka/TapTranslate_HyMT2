@@ -642,6 +642,7 @@ public final class RtDetrLiveBridge {
             }
 
             if (bubbleOverlays.isEmpty()) return;
+            partitionConnectedBubbleMasks(bubbleOverlays, regions);
             @SuppressWarnings("unchecked")
             List<Object> mutable = (List<Object>) overlayGroups;
             mutable.clear();
@@ -753,6 +754,86 @@ public final class RtDetrLiveBridge {
         int index = BubbleRegionMatcher.findBestContainer(
                 text.left, text.top, text.right, text.bottom, bubbles);
         return index >= 0 && index < ids.size() ? ids.get(index) : null;
+    }
+
+    /**
+     * A connected BubblePop mask may contain several touching/bridged balloons.
+     * Give each OCR overlay its own local Voronoi partition of that common mask,
+     * seeded by the overlay's center. OCR blocks remain independent and cannot
+     * consume the complete shared contour merely because their boxes overlap it.
+     */
+    private static void partitionConnectedBubbleMasks(
+            List<Object> overlays, List<DetectedRegion> regions) {
+        try {
+            java.util.IdentityHashMap<DetectedRegion, ArrayList<Object>> byRegion =
+                    new java.util.IdentityHashMap<>();
+            for (Object overlay : overlays) {
+                Rect bounds = readOverlayBounds(overlay);
+                if (bounds == null) continue;
+                DetectedRegion region = findBubbleRegion(bounds, regions);
+                if (region == null || region.getMaskData() == null) continue;
+                byRegion.computeIfAbsent(region, ignored -> new ArrayList<>()).add(overlay);
+            }
+            for (Map.Entry<DetectedRegion, ArrayList<Object>> entry : byRegion.entrySet()) {
+                DetectedRegion region = entry.getKey();
+                ArrayList<Object> members = entry.getValue();
+                if (members.size() < 2) continue;
+                Rect maskBounds = region.getBounds();
+                int width = region.getMaskWidth();
+                int height = region.getMaskHeight();
+                byte[] original = region.getMaskData();
+                ArrayList<Rect> seeds = new ArrayList<>();
+                for (Object member : members) seeds.add(readOverlayBounds(member));
+                for (int target = 0; target < members.size(); target++) {
+                    byte[] local = new byte[original.length];
+                    Rect seed = seeds.get(target);
+                    int sx = seed.centerX();
+                    int sy = seed.centerY();
+                    for (int y = 0; y < height; y++) {
+                        int gy = maskBounds.top + y;
+                        for (int x = 0; x < width; x++) {
+                            int offset = y * width + x;
+                            if (original[offset] == 0) continue;
+                            int gx = maskBounds.left + x;
+                            long own = distanceSquared(gx, gy, sx, sy);
+                            boolean nearest = true;
+                            for (int other = 0; other < seeds.size(); other++) {
+                                if (other == target) continue;
+                                Rect candidate = seeds.get(other);
+                                long distance = distanceSquared(
+                                        gx, gy, candidate.centerX(), candidate.centerY());
+                                if (distance < own || (distance == own && other < target)) {
+                                    nearest = false;
+                                    break;
+                                }
+                            }
+                            if (nearest) local[offset] = (byte) 0xFF;
+                        }
+                    }
+                    DetectedRegion localRegion = new DetectedRegion(
+                            region.getId() + ":overlay:" + target, region.getKind(),
+                            maskBounds, region.getConfidence(), region.getContour(),
+                            region.getMaskCoefficients(), local, width, height);
+                    OVERLAY_BUBBLE_MASKS.put(members.get(target), localRegion);
+                    Log.d(TAG, "local BubblePop mask assigned: overlay=" + target
+                            + "/" + members.size() + " pixels=" + countMaskPixels(local));
+                }
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "Connected BubblePop mask partition failed; original per-bubble masks retained", error);
+        }
+    }
+
+    private static long distanceSquared(int x, int y, int cx, int cy) {
+        long dx = (long) x - cx;
+        long dy = (long) y - cy;
+        return dx * dx + dy * dy;
+    }
+
+    private static int countMaskPixels(byte[] mask) {
+        int count = 0;
+        for (byte value : mask) if (value != 0) count++;
+        return count;
     }
 
     private static DetectedRegion findBubbleRegion(Rect text, List<DetectedRegion> regions) {
