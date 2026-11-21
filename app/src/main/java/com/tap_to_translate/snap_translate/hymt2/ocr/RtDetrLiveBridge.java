@@ -253,7 +253,7 @@ public final class RtDetrLiveBridge {
             // This method is reached from the host's dedicated OCR callback executor.
             // Wait only there (never on the UI thread); keep ML Kit intact on timeout/failure.
             List<PaddleOcrTextGroup> paddleGroups = PaddleOcrLiveBridge.recognizeBlocking(
-                    ignoredContext, source, regions, 15000L);
+                    ignoredContext, source, 15000L);
             if (paddleGroups != null && !paddleGroups.isEmpty()) {
                 int created = applyPaddleBubbleGroups(blocks, paddleGroups, regions);
                 Log.i(TAG, "Paddle host handoff completed: groups=" + paddleGroups.size()
