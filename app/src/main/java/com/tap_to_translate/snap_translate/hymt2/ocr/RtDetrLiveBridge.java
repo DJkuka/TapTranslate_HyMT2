@@ -113,11 +113,9 @@ public final class RtDetrLiveBridge {
                                     List<DetectedRegion> bubblePop = getBubblePopSegmenter(context).detect(snapshot);
                                     if (bubblePop != null && !bubblePop.isEmpty()) {
                                         ArrayList<DetectedRegion> merged = new ArrayList<>();
-                                        for (DetectedRegion region : result) {
-                                            if (region.getKind() != OcrRegionKind.BUBBLE_CONTAINER) {
-                                                merged.add(region);
-                                            }
-                                        }
+                                        if (result != null) merged.addAll(result);
+                                        // Keep RT-DETR's original regions intact. BubblePop
+                                        // contributes separate layout-only bubble geometry.
                                         merged.addAll(bubblePop);
                                         result = merged;
                                         Log.i(TAG, "BubblePop containers applied: " + bubblePop.size());
@@ -528,6 +526,9 @@ public final class RtDetrLiveBridge {
      */
     public static boolean allowGrouping(
             Object owner, Object blockListValue, int firstIndex, int secondIndex) {
+        // BubblePop is layout-only: never let its contours alter OCR paragraph
+        // assembly or split/merge recognized text blocks.
+        if (isBubblePopEnabled(resolveContext(owner))) return true;
         try {
             List<?> blocks;
             if (blockListValue instanceof List<?>) {
