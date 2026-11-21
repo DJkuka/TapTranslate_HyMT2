@@ -134,9 +134,10 @@ public class BubblePopSegmenter {
      */
     public Mat getMask(Mat bgr, List<?> boxes) {
         Mat mask = new Mat();
+        Mat boundary = new Mat();
         Mat confidence = new Mat();
         try {
-            predict(bgr, mask, confidence);
+            predict(bgr, mask, boundary, confidence);
             Mat result = keepInstances(mask, confidence);
             try {
                 if (boxes != null && !boxes.isEmpty()) {
@@ -156,12 +157,40 @@ public class BubblePopSegmenter {
                                     new Size(2 * shrink + 1, 2 * shrink + 1)));
                 }
                 return result;
-            } finally {
-                mask.release();
-                confidence.release();
+            } catch (Throwable t) {
+                result.release();
+                throw t;
             }
         } finally {
             mask.release();
+            boundary.release();
+            confidence.release();
+        }
+    }
+
+    /**
+     * Return the model's raw boundary-head probabilities as an 8-bit grayscale map.
+     * White pixels indicate stronger boundary predictions; no thresholding or
+     * instance splitting is applied here.
+     *
+     * @param bgr source image (CV_8UC1 / CV_8UC3 / CV_8UC4)
+     * @return CV_8UC1 grayscale probability map in source-image dimensions; caller releases
+     */
+    public Mat getBoundaryMap(Mat bgr) {
+        Mat mask = new Mat();
+        Mat boundary = new Mat();
+        Mat confidence = new Mat();
+        Mat output = new Mat();
+        try {
+            predict(bgr, mask, boundary, confidence);
+            boundary.convertTo(output, CvType.CV_8UC1, 255.0);
+            return output;
+        } catch (Throwable t) {
+            output.release();
+            throw t;
+        } finally {
+            mask.release();
+            boundary.release();
             confidence.release();
         }
     }
@@ -199,7 +228,7 @@ public class BubblePopSegmenter {
 
     // ------------------------------------------------------------------ inference
 
-    private void predict(Mat image, Mat maskOut, Mat confidenceOut) {
+    private void predict(Mat image, Mat maskOut, Mat boundaryOut, Mat confidenceOut) {
         int srcW = image.cols();
         int srcH = image.rows();
         Mat gray = new Mat();
@@ -276,6 +305,8 @@ public class BubblePopSegmenter {
             sigmoid(full);
             if (c == 0) {
                 full.copyTo(maskOut);
+            } else if (c == 1) {
+                full.copyTo(boundaryOut);
             } else if (c == 2) {
                 full.copyTo(confidenceOut);
             }
