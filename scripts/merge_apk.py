@@ -2047,8 +2047,10 @@ def main() -> int:
     patch_ocr_engine_picker(base)
     patch_dispatcher(base)
     patch_live_hybrid_ocr(base)
-    patch_free_text_alpha_renderers(base)
+    # Insert the host's fixed-font adjustment before extending renderer locals
+    # and adding the BubblePop shape-layout call.
     patch_fixed_font_size_renderers(base)
+    patch_free_text_alpha_renderers(base)
     patch_max_font_size(base)
     patch_home_ocr_quick_selector(base)
     patch_remove_nurik_attribution(base)
