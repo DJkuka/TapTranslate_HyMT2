@@ -345,24 +345,6 @@ jobs:
           PY
 
 
-      - name: Verify BubblePop diagnostic in final unsigned APK
-        if: github.ref == 'refs/heads/bubblepop-diagnostic'
-        shell: bash
-        run: |
-          set -euo pipefail
-          decoded="build/bubblepop-final-check"
-          java -jar tools/apktool.jar d -f -o "$decoded" build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
-          test -s "$decoded/assets/models/bubblepop/model_fp16.onnx"
-          test -s "$decoded/assets/models/bubblepop/LICENSE.bubble-pop"
-          find "$decoded"/smali* -path '*/com/tap_to_translate/snap_translate/hymt2/BubblePopDiagnosticActivity.smali' -print -quit | grep -q .
-          find "$decoded"/smali* -path '*/com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopSegmenter.smali' -print -quit | grep -q .
-          find "$decoded"/smali* -path '*/com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopLiveSegmenter.smali' -print -quit | grep -q .
-          find "$decoded"/smali* -path '*/com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopBoundarySplitter.smali' -print -quit | grep -q .
-          grep -R -q "ocr_bubblepop_live_enabled" "$decoded"/smali*
-          grep -R -q "Использовать BubblePop в обычном переводе" "$decoded"/smali*
-          grep -q "BubblePopDiagnosticActivity" "$decoded/AndroidManifest.xml"
-          echo "BubblePop model, license, diagnostic screen and manifest verified in final APK."
-
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
@@ -370,3 +352,26 @@ jobs:
           path: build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Verify BubblePop diagnostic in final unsigned APK
+        if: github.ref == 'refs/heads/bubblepop-diagnostic'
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk"
+          listing="build/bubblepop-apk-list.txt"
+          unzip -Z1 "$apk" > "$listing"
+          grep -Fxq "assets/models/bubblepop/model_fp16.onnx" "$listing"
+          grep -Fxq "assets/models/bubblepop/LICENSE.bubble-pop" "$listing"
+          mkdir -p build/bubblepop-final-check
+          : > build/bubblepop-final-check/dex-strings.txt
+          while IFS= read -r dex; do
+            unzip -p "$apk" "$dex" | strings -a
+          done < <(grep -E '^classes([0-9]+)?[.]dex
+ "$listing") > build/bubblepop-final-check/dex-strings.txt
+          for symbol in BubblePopDiagnosticActivity BubblePopSegmenter BubblePopLiveSegmenter BubblePopBoundarySplitter ocr_bubblepop_live_enabled; do
+            grep -Fq "$symbol" build/bubblepop-final-check/dex-strings.txt
+          done
+          grep -Fq "Использовать BubblePop в обычном переводе" build/bubblepop-final-check/dex-strings.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump xmltree "$apk" AndroidManifest.xml | grep -Fq "BubblePopDiagnosticActivity"
+          echo "BubblePop model assets, compiled DEX classes, setting and manifest verified in final APK."
