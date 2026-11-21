@@ -1,5 +1,5 @@
 name: Build Tap Translate 1.125 FontFit AutoFill + Hy-MT2 Vulkan
-# Rebuild requested for BubblePop boundary-head-only diagnostic APK.
+# Rebuild requested after importing boundary splitter in diagnostic activity.
 
 on:
   workflow_dispatch:
