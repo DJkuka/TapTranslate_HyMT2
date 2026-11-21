@@ -118,8 +118,16 @@ class BubblePopDiagnosticActivity : Activity() {
         addSetting(panel, "Минимальная площадь исходного компонента", "boundary_min_component", 100, 5000, 700)
         addSetting(panel, "Минимальная площадь части", "boundary_min_part", 20, 1000, 120)
         addSetting(panel, "Сохранение исходной маски, %", "boundary_retained", 50, 100, 82)
-        addSetting(panel, "Сглаживание перемычки (нечётный kernel)", "boundary_kernel", 1, 15, 3)
-        addSetting(panel, "Число частей: максимум", "boundary_max_parts", 2, 8, 4)
+        addSetting(panel, "Сглаживание карты boundary (только первый этап)", "boundary_kernel", 1, 15, 3)
+        addSetting(panel, "Максимум частей по boundary (только первый этап)", "boundary_max_parts", 2, 8, 4)
+        panel.addView(TextView(this).apply {
+            text = "Геометрическое разделение (та же первая кнопка)"
+            textSize = 15f
+            setPadding(0, 14, 0, 0)
+        })
+        addSetting(panel, "Допустимая ширина перемычки, % радиуса", "geometry_saddle_ratio", 45, 115, 92)
+        addSetting(panel, "Минимальный радиус центра пузыря, px", "geometry_peak_radius", 2, 15, 5)
+        addSetting(panel, "Минимальное расстояние между центрами, px", "geometry_peak_distance", 6, 50, 16)
         panel.addView(TextView(this).apply {
             text = "Настройки Geometry watershed (соседняя кнопка)"
             textSize = 16f
@@ -173,7 +181,13 @@ class BubblePopDiagnosticActivity : Activity() {
             d.minPartAreaFraction,
             diagnosticPrefs.getInt("boundary_max_parts", d.maxParts),
             diagnosticPrefs.getInt("boundary_retained", (d.minRetainedFraction * 100).toInt()) / 100.0,
-            diagnosticPrefs.getInt("boundary_kernel", d.closeKernelSize)
+            diagnosticPrefs.getInt("boundary_kernel", d.closeKernelSize),
+            diagnosticPrefs.getInt("geometry_saddle_ratio",
+                (d.geometryMaxSaddleRatio * 100).toInt()) / 100.0,
+            diagnosticPrefs.getInt("geometry_peak_radius",
+                d.geometryMinPeakRadius.toInt()).toDouble(),
+            diagnosticPrefs.getInt("geometry_peak_distance",
+                d.geometryMinPeakDistance.toInt()).toDouble()
         )
     }
 
@@ -440,7 +454,7 @@ class BubblePopDiagnosticActivity : Activity() {
                 main.post {
                     if (!isFinishing) {
                         preview.setImageBitmap(finalBitmap)
-                        status.text = "Boundary + geometry: исходных областей $inputCount, итоговых областей $outputCount, разделено: $splitCount. Порог boundary: ${if (threshold < 0) "не применялся" else threshold}. Контуров: $contourCount. Вершин: $points. Время: ${elapsedMs} мс."
+                        status.text = "Boundary + geometry: исходных областей $inputCount, итоговых областей $outputCount, разделено: $splitCount. Порог boundary: ${if (threshold < 0) "не применялся" else threshold}. ${result!!.geometrySummary}. Контуров: $contourCount. Вершин: $points. Время: ${elapsedMs} мс."
                     } else {
                         finalBitmap.recycle()
                     }
