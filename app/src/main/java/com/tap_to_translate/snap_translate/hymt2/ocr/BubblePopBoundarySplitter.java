@@ -356,7 +356,7 @@ public final class BubblePopBoundarySplitter {
                 peakKernel.release();
             }
             Core.compare(distance, dilated, peakMask, Core.CMP_GE);
-            Core.compare(distance, new Scalar(5.0), radiusMask, Core.CMP_GE);
+            Core.compare(distance, new Scalar(options.geometryMinPeakRadius), radiusMask, Core.CMP_GE);
             Core.bitwise_and(peakMask, radiusMask, peakMask);
 
             int peakCount = Imgproc.connectedComponentsWithStats(
