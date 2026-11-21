@@ -36,6 +36,9 @@ public final class RtDetrLiveBridge {
             Collections.synchronizedMap(new WeakHashMap<Object, List<DetectedRegion>>());
     private static final Map<Object, Boolean> OVERLAY_IS_BUBBLE =
             Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
+    /** Exact BubblePop instance mask associated with each rendered overlay. */
+    private static final Map<Object, DetectedRegion> OVERLAY_BUBBLE_MASKS =
+            Collections.synchronizedMap(new WeakHashMap<Object, DetectedRegion>());
     /** Identity markers for host blocks whose text geometry comes directly from PP-OCR. */
     private static final Map<Object, Boolean> PADDLE_TEXT_BLOCKS =
             Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
@@ -624,8 +627,18 @@ public final class RtDetrLiveBridge {
                         : freeTextScore == 0d && findBubbleContainer(bounds, regions) >= 0;
 
                 OVERLAY_IS_BUBBLE.put(group, Boolean.valueOf(isBubbleText));
-                if (isBubbleText) bubbleOverlays.add(group);
-                else underlays.add(group);
+                if (isBubbleText) {
+                    DetectedRegion bubbleMask = findBubbleRegion(bounds, regions);
+                    if (bubbleMask != null && bubbleMask.getMaskData() != null) {
+                        OVERLAY_BUBBLE_MASKS.put(group, bubbleMask);
+                    } else {
+                        OVERLAY_BUBBLE_MASKS.remove(group);
+                    }
+                    bubbleOverlays.add(group);
+                } else {
+                    OVERLAY_BUBBLE_MASKS.remove(group);
+                    underlays.add(group);
+                }
             }
 
             if (bubbleOverlays.isEmpty()) return;
@@ -740,6 +753,36 @@ public final class RtDetrLiveBridge {
         int index = BubbleRegionMatcher.findBestContainer(
                 text.left, text.top, text.right, text.bottom, bubbles);
         return index >= 0 && index < ids.size() ? ids.get(index) : null;
+    }
+
+    private static DetectedRegion findBubbleRegion(Rect text, List<DetectedRegion> regions) {
+        int index = findBubbleContainer(text, regions);
+        if (index < 0) return null;
+        int current = 0;
+        for (DetectedRegion region : regions) {
+            if (region.getKind() != OcrRegionKind.BUBBLE_CONTAINER) continue;
+            if (current++ == index) return region;
+        }
+        return null;
+    }
+
+    /** Invoked by both native overlay renderers before their rectangular StaticLayout fallback. */
+    public static boolean drawBubbleText(
+            android.graphics.Canvas canvas, Object overlay, CharSequence text,
+            android.text.TextPaint paint, float minTextSize, float maxTextSize, int padding) {
+        if (canvas == null || overlay == null || text == null || paint == null) return false;
+        try {
+            DetectedRegion region = OVERLAY_BUBBLE_MASKS.get(overlay);
+            if (region == null || region.getMaskData() == null) return false;
+            Rect overlayBounds = readOverlayBounds(overlay);
+            if (overlayBounds == null) return false;
+            return BubbleTextLayout.draw(canvas, region.getMaskData(), region.getMaskWidth(),
+                    region.getMaskHeight(), region.getBounds(), overlayBounds, text, paint,
+                    minTextSize, maxTextSize, padding);
+        } catch (Throwable error) {
+            Log.w(TAG, "Bubble-shaped text layout failed; rectangular host layout retained", error);
+            return false;
+        }
     }
 
     private static int findBubbleContainer(Rect text, List<DetectedRegion> regions) {
