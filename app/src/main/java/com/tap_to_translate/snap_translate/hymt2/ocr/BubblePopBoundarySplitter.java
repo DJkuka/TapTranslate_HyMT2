@@ -932,6 +932,12 @@ public final class BubblePopBoundarySplitter {
         int rejectedPartTooSmall;
         int rejectedRetainedArea;
         int accepted;
+        int concavityAttempts, concavityAccepted, concavityRejectedNoDefects, concavityRejectedGeometry;
+        double concavityBestDepth;
+        int concavityBestRetained, concavityBestAreaA, concavityBestAreaB;
+        int concavityFirstX = -1, concavityFirstY = -1, concavitySecondX = -1, concavitySecondY = -1;
+        int[] concavityLabels;
+        byte[] concavityMask;
         double bestSaddleRatio = Double.POSITIVE_INFINITY;
         int bestBoundary;
 
