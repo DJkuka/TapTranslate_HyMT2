@@ -750,52 +750,61 @@ def patch_picker_callbacks(base: Path) -> None:
 
 
 def patch_atomic_backport_shims(base: Path) -> None:
-    """Supply the two D8-generated CAS forwarding helpers referenced by coroutines."""
-    shims = {
-        "androidx/concurrent/futures/AbstractResolvableFuture$SafeAtomicHelper$$ExternalSyntheticBackportWithForwarding0.smali": '''.class public final Landroidx/concurrent/futures/AbstractResolvableFuture$SafeAtomicHelper$$ExternalSyntheticBackportWithForwarding0;
-.super Ljava/lang/Object;
-
-.method public static m(Ljava/util/concurrent/atomic/AtomicReferenceFieldUpdater;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z
-    .locals 1
-
-    invoke-virtual {p0, p1, p2, p3}, Ljava/util/concurrent/atomic/AtomicReferenceFieldUpdater;->compareAndSet(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z
-
-    move-result v0
-
-    return v0
-.end method
-''',
-        "androidx/lifecycle/LifecycleKt$ExternalSyntheticBackportWithForwarding0.smali": '''.class public final Landroidx/lifecycle/LifecycleKt$ExternalSyntheticBackportWithForwarding0;
-.super Ljava/lang/Object;
-
-.method public static m(Ljava/util/concurrent/atomic/AtomicReference;Ljava/lang/Object;Ljava/lang/Object;)Z
-    .locals 1
-
-    invoke-virtual {p0, p1, p2}, Ljava/util/concurrent/atomic/AtomicReference;->compareAndSet(Ljava/lang/Object;Ljava/lang/Object;)Z
-
-    move-result v0
-
-    return v0
-.end method
-''',
-    # Firebase/GMS uses the same D8 AtomicReference.compareAndSet backport.
-    # Build the name with chr(36) so the two literal '    }
-    for rel, content in shims.items():
-        # Reuse a definition already present in any host DEX; otherwise add one to classes5.
-        existing = [directory / rel for directory in base.glob("smali*") if directory.is_dir() and (directory / rel).exists()]
+    """Supply D8 CAS forwarding helpers referenced by merged coroutine/GMS code."""
+    dollar = chr(36)
+    definitions = [
+        (
+            "androidx/concurrent/futures/AbstractResolvableFuture$SafeAtomicHelper" + dollar + dollar + "ExternalSyntheticBackportWithForwarding0",
+            "Ljava/util/concurrent/atomic/AtomicReferenceFieldUpdater;",
+            "Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;",
+            "p0, p1, p2, p3",
+            "Ljava/util/concurrent/atomic/AtomicReferenceFieldUpdater;->compareAndSet(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z",
+        ),
+        (
+            "androidx/lifecycle/LifecycleKt" + dollar + "ExternalSyntheticBackportWithForwarding0",
+            "Ljava/util/concurrent/atomic/AtomicReference;",
+            "Ljava/lang/Object;Ljava/lang/Object;",
+            "p0, p1, p2",
+            "Ljava/util/concurrent/atomic/AtomicReference;->compareAndSet(Ljava/lang/Object;Ljava/lang/Object;)Z",
+        ),
+        (
+            "com/google/android/gms/common/api/internal/zap" + dollar + dollar + "ExternalSyntheticBackportWithForwarding0",
+            "Ljava/util/concurrent/atomic/AtomicReference;",
+            "Ljava/lang/Object;Ljava/lang/Object;",
+            "p0, p1, p2",
+            "Ljava/util/concurrent/atomic/AtomicReference;->compareAndSet(Ljava/lang/Object;Ljava/lang/Object;)Z",
+        ),
+    ]
+    for internal_name, receiver, args, registers, method_ref in definitions:
+        rel = internal_name + ".smali"
+        descriptor = "L" + internal_name + ";"
+        existing = []
+        for directory in base.glob("smali*"):
+            candidate = directory / rel
+            if directory.is_dir() and candidate.exists():
+                existing.append(candidate)
         if existing:
             print(f"D8 CAS backport shim already supplied by host: {rel}")
             continue
-        path = base / "smali_classes5" / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        source = (
+            ".class public final " + descriptor + "\\n"
+            ".super Ljava/lang/Object;\\n\\n"
+            ".method public static m(" + receiver + args + ")Z\\n"
+            "    .locals 1\\n\\n"
+            "    invoke-virtual {" + registers + "}, " + method_ref + "\\n\\n"
+            "    move-result v0\\n\\n"
+            "    return v0\\n"
+            ".end method\\n"
+        )
+        target = base / "smali_classes5" / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(source, encoding="utf-8")
         print(f"Added D8 CAS backport shim: {rel}")
 
-    # Audit that every referenced D8 synthetic class has a corresponding definition.
     descriptors: set[str] = set()
     references: set[str] = set()
-    ref_re = re.compile(r"L([^;\s]+ExternalSynthetic[^;\s]*);")
-    class_re = re.compile(r"^\.class\s+.*?\s(L[^;]+);", re.MULTILINE)
+    ref_re = re.compile(r"L([^;\\s]+ExternalSynthetic[^;\\s]*);")
+    class_re = re.compile(r"^\\.class\\s+.*?\\s(L[^;]+);", re.MULTILINE)
     for smali_root in base.glob("smali*"):
         if not smali_root.is_dir():
             continue
@@ -807,6 +816,7 @@ def patch_atomic_backport_shims(base: Path) -> None:
     if missing:
         raise RuntimeError("Unresolved D8 synthetic class references remain: " + ", ".join(missing))
     print(f"Verified all {len(references)} referenced D8 synthetic classes are present")
+
 
 def patch_settings_click(base: Path) -> None:
     # Attach the row click listener inside the actual primary Settings fragment.
