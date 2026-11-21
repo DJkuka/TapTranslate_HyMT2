@@ -353,22 +353,40 @@ jobs:
           apk="build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk"
           listing="build/bubblepop-apk-list.txt"
           unzip -Z1 "$apk" > "$listing"
-          grep -Fxq "assets/models/bubblepop/model_fp16.onnx" "$listing"
-          grep -Fxq "assets/models/bubblepop/LICENSE.bubble-pop" "$listing"
+
+          for asset in assets/models/bubblepop/model_fp16.onnx assets/models/bubblepop/LICENSE.bubble-pop; do
+            if ! grep -Fxq "$asset" "$listing"; then
+              echo "Missing BubblePop asset in final APK: $asset"
+              exit 1
+            fi
+          done
+          echo "BubblePop model and license assets: OK"
+
           mapfile -t dex_files < <(grep -E '^classes([0-9]+)?[.]dex$' "$listing")
-          test "${#dex_files[@]}" -gt 0
+          if [ "${#dex_files[@]}" -eq 0 ]; then
+            echo "No DEX files found in final APK"
+            exit 1
+          fi
           mkdir -p build/bubblepop-final-check
           : > build/bubblepop-final-check/dex-strings.txt
           for dex in "${dex_files[@]}"; do
             unzip -p "$apk" "$dex" | strings -a
           done > build/bubblepop-final-check/dex-strings.txt
+
           for symbol in BubblePopDiagnosticActivity BubblePopSegmenter BubblePopLiveSegmenter BubblePopBoundarySplitter ocr_bubblepop_live_enabled; do
-            grep -Fq "$symbol" build/bubblepop-final-check/dex-strings.txt
+            if ! grep -Fq "$symbol" build/bubblepop-final-check/dex-strings.txt; then
+              echo "Missing BubblePop DEX symbol: $symbol"
+              exit 1
+            fi
           done
-          grep -Fq "Использовать BubblePop в обычном переводе" build/bubblepop-final-check/dex-strings.txt
+          echo "BubblePop DEX classes and setting key: OK"
+
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump xmltree "$apk" AndroidManifest.xml > build/bubblepop-final-check/manifest.txt
-          grep -Fq "BubblePopDiagnosticActivity" build/bubblepop-final-check/manifest.txt
-          echo "BubblePop model assets, compiled DEX classes, setting and manifest verified in final APK."
+          if ! grep -Fq "BubblePopDiagnosticActivity" build/bubblepop-final-check/manifest.txt; then
+            echo "BubblePopDiagnosticActivity is missing from final AndroidManifest.xml"
+            exit 1
+          fi
+          echo "BubblePop manifest registration: OK"
 
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
