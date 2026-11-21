@@ -765,7 +765,21 @@ def patch_atomic_backport_shims(base: Path) -> None:
     return v0
 .end method
 ''',
-        "androidx/lifecycle/LifecycleKt$$ExternalSyntheticBackportWithForwarding0.smali": '''.class public final Landroidx/lifecycle/LifecycleKt$$ExternalSyntheticBackportWithForwarding0;
+        "androidx/lifecycle/LifecycleKt$ExternalSyntheticBackportWithForwarding0.smali": '''.class public final Landroidx/lifecycle/LifecycleKt$ExternalSyntheticBackportWithForwarding0;
+.super Ljava/lang/Object;
+
+.method public static m(Ljava/util/concurrent/atomic/AtomicReference;Ljava/lang/Object;Ljava/lang/Object;)Z
+    .locals 1
+
+    invoke-virtual {p0, p1, p2}, Ljava/util/concurrent/atomic/AtomicReference;->compareAndSet(Ljava/lang/Object;Ljava/lang/Object;)Z
+
+    move-result v0
+
+    return v0
+.end method
+''',
+        # Firebase/GMS uses the same D8 AtomicReference.compareAndSet backport.
+        "com/google/android/gms/common/api/internal/zap$ExternalSyntheticBackportWithForwarding0.smali": '''.class public final Lcom/google/android/gms/common/api/internal/zap$ExternalSyntheticBackportWithForwarding0;
 .super Ljava/lang/Object;
 
 .method public static m(Ljava/util/concurrent/atomic/AtomicReference;Ljava/lang/Object;Ljava/lang/Object;)Z
