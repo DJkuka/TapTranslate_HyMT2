@@ -375,7 +375,8 @@ public final class BubblePopWatershedSplitter {
             Peak a = peaks.get(i);
             for (int j = i + 1; j < n; j++) {
                 Peak b = peaks.get(j);
-                float saddle = widestPathSaddle(a, b, distance, mask, width, height);
+                float[] saddles = widestPathSaddles(a, distance, mask, width, height);
+                float saddle = saddles[b.y * width + b.x];
                 double ratio = saddle / Math.max(1.0, Math.min(a.radius, b.radius));
                 int boundaryStrength = maxBoundaryNear(boundary, bresenhamMidX(a, b),
                         bresenhamMidY(a, b), width, height, 5);
@@ -415,12 +416,14 @@ public final class BubblePopWatershedSplitter {
         return representatives;
     }
 
-    /** Maximin path: the minimum radius along the widest path between peaks. */
-    private static float widestPathSaddle(Peak start, Peak target, float[] distance,
-                                          byte[] mask, int width, int height) {
+    /**
+     * Maximin paths from one peak to every pixel. Run once per candidate peak,
+     * then reuse the saddle values for all peak pairs to bound diagnostic cost.
+     */
+    private static float[] widestPathSaddles(Peak start, float[] distance,
+                                              byte[] mask, int width, int height) {
         int total = width * height;
         int sourceIndex = start.y * width + start.x;
-        int targetIndex = target.y * width + target.x;
         float[] best = new float[total];
         java.util.Arrays.fill(best, -1f);
         PriorityQueue<PathNode> queue = new PriorityQueue<>(new Comparator<PathNode>() {
@@ -434,7 +437,6 @@ public final class BubblePopWatershedSplitter {
         while (!queue.isEmpty()) {
             PathNode current = queue.poll();
             if (current.capacity < best[current.index]) continue;
-            if (current.index == targetIndex) return current.capacity;
             int x = current.index % width;
             int y = current.index / width;
             for (int dy = -1; dy <= 1; dy++) {
@@ -452,7 +454,7 @@ public final class BubblePopWatershedSplitter {
                 }
             }
         }
-        return 0f;
+        return best;
     }
 
     private static int find(int[] parent, int x) {
