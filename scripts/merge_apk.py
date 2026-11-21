@@ -917,8 +917,7 @@ def patch_settings_click(base: Path) -> None:
     new-instance v1, Landroid/content/Intent;
     const-class v2, Lcom/tap_to_translate/snap_translate/hymt2/HyMT2SettingsActivity;
     invoke-direct {v1, v0, v2}, Landroid/content/Intent;-><init>(Landroid/content/Context;Ljava/lang/Class;)V
-    invoke-virtual {v0, v1}, Landroid/content/Context;->startActivity(Landroid/content/Intent;)V
-    return-void
+    invoke-virtual {v0, v1}, Landroid/content/Context;->startActivity(Landroid/content/Intent;)V    return-void
 .end method
 ''', encoding="utf-8")
 
@@ -1202,3 +1201,887 @@ def patch_screenshot_button(base: Path) -> None:
             'android:layout_width="32.0dip" android:layout_height="32.0dip" '
             'android:layout_marginRight="10.0dip" android:src="@drawable/ic_screenshot_camera" '
             'android:alpha="0.5" />'
+        )
+        xml_text, count = pattern.subn(lambda match: match.group(1) + "\n" + button, xml_text, count=1)
+        if count != 1:
+            raise RuntimeError("Could not find OCR icon in container_widget.xml")
+        layout.write_text(xml_text, encoding="utf-8")
+
+    ids = base / "res/values/ids.xml"
+    ids_text = ids.read_text(encoding="utf-8")
+    if button_id not in ids_text:
+        anchor = '    <item type="id" name="container_widget_iv_ocr" />\n'
+        if ids_text.count(anchor) != 1:
+            raise RuntimeError("Could not register screenshot button in ids.xml")
+        ids.write_text(ids_text.replace(anchor, anchor + f'    <item type="id" name="{button_id}" />\n', 1), encoding="utf-8")
+
+    public = base / "res/values/public.xml"
+    public_text = public.read_text(encoding="utf-8")
+    if button_id not in public_text:
+        if re.search(r'id="0x7f0a04f3"', public_text):
+            raise RuntimeError("Resource ID 0x7f0a04f3 is already in use")
+        anchor = '    <public type="id" name="ocr_settings_row" id="0x7f0a04f2" />\n'
+        if public_text.count(anchor) != 1:
+            raise RuntimeError("Could not register screenshot resource ID after OCR settings row")
+        public.write_text(
+            public_text.replace(
+                anchor,
+                anchor + f'    <public type="id" name="{button_id}" id="0x7f0a04f3" />\n',
+                1,
+            ),
+            encoding="utf-8",
+        )
+
+    # A small vector camera remains sharp at the 32 dp toolbar size.
+    icon = base / "res/drawable/ic_screenshot_camera.xml"
+    icon.parent.mkdir(parents=True, exist_ok=True)
+    icon.write_text('''<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M9,4 L7.2,6 H4.5 C3.4,6 2.5,6.9 2.5,8 V18 C2.5,19.1 3.4,20 4.5,20 H19.5 C20.6,20 21.5,19.1 21.5,18 V8 C21.5,6.9 20.6,6 19.5,6 H16.8 L15,4 Z" />
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.8"
+        android:pathData="M12,9 A3.5,3.5 0,1 0,12 16 A3.5,3.5 0,1 0,12 9 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M18,8.5 A0.9,0.9 0,1 0,18 10.3 A0.9,0.9 0,1 0,18 8.5 Z" />
+</vector>
+''', encoding="utf-8")
+
+    service = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali"
+    service_text = service.read_text(encoding="utf-8")
+    method_start = service_text.find(".method public final h()Lrh/c;")
+    if method_start < 0:
+        raise RuntimeError("ScreenTranslateService.h() result-overlay constructor was not found")
+    method_end = service_text.find(".end method", method_start)
+    if method_end < 0:
+        raise RuntimeError("Could not isolate ScreenTranslateService.h()")
+    method = service_text[method_start:method_end]
+    if "TranslationScreenshotClickListener" not in method:
+        if "    .locals 14\n" not in method:
+            raise RuntimeError("Unexpected local-register layout in ScreenTranslateService.h()")
+        # Keep the original register count so p0 remains encodable as v14.
+        # v1/v2 are dead after the preceding listener is attached.
+        click_anchor = '''    invoke-virtual {v2, v1}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+
+    new-instance v1, Lrh/b;'''
+        click_hook = '''    invoke-virtual {v2, v1}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+
+    const v1, 0x7f0a04f3
+
+    invoke-virtual {v0, v1}, Landroid/view/View;->findViewById(I)Landroid/view/View;
+
+    move-result-object v1
+
+    check-cast v1, Landroid/widget/ImageView;
+
+    new-instance v2, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;
+
+    invoke-direct {v2, v0}, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;-><init>(Lrh/c;)V
+
+    invoke-virtual {v1, v2}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+
+    new-instance v1, Lrh/b;'''
+        if method.count(click_anchor) != 1:
+            raise RuntimeError("Could not locate the OCR toolbar listener insertion point")
+        method = method.replace(click_anchor, click_hook, 1)
+        service_text = service_text[:method_start] + method + service_text[method_end:]
+        service.write_text(service_text, encoding="utf-8")
+
+    listener = base / "smali_classes5/com/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener.smali"
+    listener.parent.mkdir(parents=True, exist_ok=True)
+    listener.write_text('''.class public final Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;
+.super Ljava/lang/Object;
+
+# interfaces
+.implements Landroid/view/View$OnClickListener;
+
+.field private final a:Lrh/c;
+
+.method public constructor <init>(Lrh/c;)V
+    .locals 0
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+    iput-object p1, p0, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;->a:Lrh/c;
+    return-void
+.end method
+
+.method public final onClick(Landroid/view/View;)V
+    .locals 1
+    iget-object v0, p0, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;->a:Lrh/c;
+    invoke-static {v0}, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager;->captureFromOverlay(Ljava/lang/Object;)V
+    return-void
+.end method
+''', encoding="utf-8")
+
+    # Verify the resource, icon, and host callback are all included.
+    if button_id not in layout.read_text(encoding="utf-8"):
+        raise RuntimeError("Screenshot button is absent from container_widget.xml")
+    if "TranslationScreenshotClickListener" not in service.read_text(encoding="utf-8"):
+        raise RuntimeError("Screenshot toolbar button has no click listener")
+    if not icon.is_file() or not listener.is_file():
+        raise RuntimeError("Screenshot icon or click listener was not created")
+    print("Added translation screenshot toolbar button and helper callback")
+
+
+
+def patch_manual_selection_touch_routing(base: Path) -> None:
+    """Keep the full-screen result overlay from intercepting manual icon-drag selection."""
+    helper = base / "smali_classes2/me/c.smali"
+    text = helper.read_text(encoding="utf-8")
+    method_start = text.find(".method public m(II)V")
+    method_end = text.find(".end method", method_start)
+    if method_start < 0 or method_end < 0:
+        raise RuntimeError("Could not isolate floating-icon manual-selection callback me/c.m")
+    method = text[method_start:method_end]
+    if "ManualSelectionTouchMode;->setTouchable" not in method:
+        method = method.replace("    .locals 3\n", "    .locals 5\n", 1)
+        anchor = "    invoke-virtual {p1}, Lrh/c;->b()V\n"
+        if method.count(anchor) != 1:
+            raise RuntimeError("Could not find manual-selection overlay reset in me/c.m")
+        code = """    invoke-virtual {p1}, Lrh/c;->b()V
+
+    iget-object v1, v0, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->k:Lrh/c;
+
+    iget-object v2, v0, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->b:Landroid/view/WindowManager;
+
+    const/4 v3, 0x0
+
+    invoke-static {v1, v2, v3}, Lcom/tap_to_translate/snap_translate/hymt2/ManualSelectionTouchMode;->setTouchable(Landroid/view/View;Landroid/view/WindowManager;Z)V
+"""
+        method = method.replace(anchor, code, 1)
+        text = text[:method_start] + method + text[method_end:]
+        helper.write_text(text, encoding="utf-8")
+
+    gesture = base / "smali_classes3/sh/b.smali"
+    gtext = gesture.read_text(encoding="utf-8")
+    gstart = gtext.find(".method public final onTouch(Landroid/view/View;Landroid/view/MotionEvent;)Z")
+    gend = gtext.find(".end method", gstart)
+    if gstart < 0 or gend < 0:
+        raise RuntimeError("Could not isolate floating-icon touch listener sh/b.onTouch")
+    gmethod = gtext[gstart:gend]
+    if "ManualSelectionTouchMode;->setTouchable" not in gmethod:
+        anchor = """    invoke-virtual {v9, v10}, Lxh/c;->d(Lcom/google/android/gms/internal/ads/mk0;)V
+
+    iget-object v0, v0, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->k:Lrh/c;
+"""
+        if gmethod.count(anchor) != 1:
+            raise RuntimeError("Could not find manual-selection completion in sh/b.onTouch")
+        code = """    invoke-virtual {v9, v10}, Lxh/c;->d(Lcom/google/android/gms/internal/ads/mk0;)V
+
+    iget-object v9, v0, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->k:Lrh/c;
+
+    iget-object v10, v0, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->b:Landroid/view/WindowManager;
+
+    invoke-static {v9, v10}, Lcom/tap_to_translate/snap_translate/hymt2/ManualSelectionTouchMode;->restoreTouchable(Landroid/view/View;Landroid/view/WindowManager;)V
+
+    iget-object v0, v0, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->k:Lrh/c;
+"""
+        gmethod = gmethod.replace(anchor, code, 1)
+
+        # Also apply the flag immediately after lazily creating the full-screen
+        # overlay. On first manual selection rh/c may not exist at double-tap time.
+        move_anchor = """    invoke-virtual {p1}, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->h()Lrh/c;
+
+    move-result-object v0
+
+    iget-object p1, p1, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->l:Lcom/google/android/gms/internal/ads/mk0;
+"""
+        if gmethod.count(move_anchor) != 1:
+            raise RuntimeError("Could not locate lazy overlay creation in sh/b.onTouch")
+        move_code = """    invoke-virtual {p1}, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->h()Lrh/c;
+
+    move-result-object v0
+
+    iget-object v9, p1, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->b:Landroid/view/WindowManager;
+
+    const/4 v10, 0x0
+
+    invoke-static {v0, v9, v10}, Lcom/tap_to_translate/snap_translate/hymt2/ManualSelectionTouchMode;->setTouchable(Landroid/view/View;Landroid/view/WindowManager;Z)V
+
+    iget-object p1, p1, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->l:Lcom/google/android/gms/internal/ads/mk0;
+"""
+        gmethod = gmethod.replace(move_anchor, move_code, 1)
+        gtext = gtext[:gstart] + gmethod + gtext[gend:]
+        gesture.write_text(gtext, encoding="utf-8")
+
+    verify_a = helper.read_text(encoding="utf-8")
+    verify_b = gesture.read_text(encoding="utf-8")
+    if (
+        verify_a.count("ManualSelectionTouchMode;->setTouchable") != 1
+        or verify_b.count("ManualSelectionTouchMode;->setTouchable") != 1
+        or verify_b.count("ManualSelectionTouchMode;->restoreTouchable") != 1
+    ):
+        raise RuntimeError("Manual-selection touchability disable/restore hooks were not installed exactly once")
+    print("Added non-touchable routing during manual selection and restored touch handling after selection")
+
+
+def patch_remove_nurik_attribution(base: Path) -> None:
+    """Remove the NURIK attribution and guard its now-optional host click target."""
+    layout = base / "res/layout/fragment_settings.xml"
+    text = layout.read_text(encoding="utf-8")
+    marker = 'android:id="@id/fragment_setting_ll_policy"'
+    if marker in text:
+        id_pos = text.find(marker)
+        row_start = text.rfind("<LinearLayout", 0, id_pos)
+        row_end = text.find("</LinearLayout>", id_pos)
+        if row_start < 0 or row_end < 0:
+            raise RuntimeError("Could not safely isolate NURIK attribution row")
+        row_end += len("</LinearLayout>")
+
+        # Remove the separator immediately before the final attribution row as well.
+        previous_view = text.rfind("<View", 0, row_start)
+        view_end = text.find("/>", previous_view) + 2 if previous_view >= 0 else -1
+        if previous_view >= 0 and view_end >= 2 and not text[view_end:row_start].strip():
+            row_start = previous_view
+
+        text = text[:row_start] + text[row_end:]
+        if "NURIK | 4PDA" in text or marker in text:
+            raise RuntimeError("NURIK attribution text or row ID remained after removal")
+        layout.write_text(text, encoding="utf-8")
+        print("Removed NURIK | 4PDA attribution row from Settings")
+    else:
+        print("NURIK attribution row already absent")
+
+    # mh/p still installs a click listener on the removed policy row. Keep the
+    # original behavior when present, but skip it safely when the row is absent.
+    fragment = base / "smali_classes3/mh/p.smali"
+    smali = fragment.read_text(encoding="utf-8")
+    target = """    const p2, 0x7f0a01c6
+
+    invoke-virtual {p1, p2}, Landroid/view/View;->findViewById(I)Landroid/view/View;
+
+    move-result-object p2
+
+    new-instance v0, Lmh/m;"""
+    guarded = """    const p2, 0x7f0a01c6
+
+    invoke-virtual {p1, p2}, Landroid/view/View;->findViewById(I)Landroid/view/View;
+
+    move-result-object p2
+
+    if-eqz p2, :hymt_nurik_click_done
+
+    new-instance v0, Lmh/m;"""
+    if ":hymt_nurik_click_done" not in smali:
+        if smali.count(target) != 1:
+            raise RuntimeError("Could not isolate the NURIK policy-row click handler")
+        smali = smali.replace(target, guarded, 1)
+        click_call = """    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+
+    invoke-virtual {p1, v1}, Landroid/view/View;->findViewById(I)Landroid/view/View;"""
+        click_guarded = """    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+
+    :hymt_nurik_click_done
+
+    invoke-virtual {p1, v1}, Landroid/view/View;->findViewById(I)Landroid/view/View;"""
+        if smali.count(click_call) != 1:
+            raise RuntimeError("Could not place the NURIK click-handler null guard")
+        smali = smali.replace(click_call, click_guarded, 1)
+        fragment.write_text(smali, encoding="utf-8")
+    print("Guarded optional NURIK settings click target")
+
+def patch_home_ocr_quick_selector(base: Path) -> None:
+    """Add a Home shortcut that shares the native HAWK_OCR preference."""
+    layout = base / "res/layout/fragment_home.xml"
+    xml_text = layout.read_text(encoding="utf-8")
+    row_id = 'android:id="@id/fragment_home_ll_OCR_engine"'
+    if row_id not in xml_text:
+        anchor = '<LinearLayout android:gravity="center" android:orientation="horizontal" android:id="@id/fragment_home_ll_translation_engine"'
+        if xml_text.count(anchor) != 1:
+            raise RuntimeError("Could not locate Home translation-engine row")
+        row = '''<LinearLayout android:gravity="center" android:orientation="horizontal" android:id="@id/fragment_home_ll_OCR_engine" android:background="@drawable/bg_spinner_language" android:paddingTop="5.0dip" android:paddingBottom="5.0dip" android:focusable="true" android:clickable="true" android:layout_width="fill_parent" android:layout_height="45.0dip" android:layout_marginTop="8.0dip" android:foreground="@drawable/fg_efftect_8" android:paddingVertical="5.0dip">
+                <LinearLayout android:gravity="center|left" android:orientation="vertical" android:layout_width="0.0dip" android:layout_height="wrap_content" android:layout_marginLeft="20.0dip" android:layout_weight="1.0">
+                    <TextView android:theme="@style/fontSemi" android:textSize="17.0dip" android:textColor="@color/cl_text_word" android:gravity="center|left" android:id="@id/fragment_home_tv_OCR_engine" android:layout_width="fill_parent" android:layout_height="wrap_content" android:text="PP-OCRv6 (Comics)" android:includeFontPadding="false" />
+                </LinearLayout>
+                <ImageView android:layout_width="11.0dip" android:layout_height="11.0dip" android:layout_marginRight="20.0dip" android:src="@drawable/ic_more_dropdown_svg" />
+            </LinearLayout>
+            '''
+        xml_text = xml_text.replace(anchor, row + anchor, 1)
+        layout.write_text(xml_text, encoding="utf-8")
+
+    ids = base / "res/values/ids.xml"
+    public = base / "res/values/public.xml"
+    for resource_file in (ids, public):
+        data = resource_file.read_text(encoding="utf-8")
+        if "fragment_home_ll_OCR_engine" not in data or "fragment_home_tv_OCR_engine" not in data:
+            raise RuntimeError("OCR selector IDs are not registered in host resources")
+
+    fragment = base / "smali_classes3/mh/l.smali"
+    text = fragment.read_text(encoding="utf-8")
+    on_view = ".method public final onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V"
+    start = text.find(on_view)
+    end = text.find(".end method", start)
+    if start < 0 or end < 0:
+        raise RuntimeError("Could not isolate Home onViewCreated")
+    method = text[start:end]
+    if "HomeOcrQuickSelector;->bind" not in method:
+        # Bind immediately while p1 still points to the inflated root view.
+        # The host method reuses p1 later for child widgets.
+        super_call = "    invoke-super {p0, p1, p2}, Landroidx/fragment/app/Fragment;->onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V"
+        if method.count(super_call) != 1:
+            raise RuntimeError("Could not locate unique Home onViewCreated super call")
+        method = method.replace(super_call, super_call + "\n\n    invoke-static {p1}, Lcom/tap_to_translate/snap_translate/hymt2/HomeOcrQuickSelector;->bind(Landroid/view/View;)V", 1)
+        text = text[:start] + method + text[end:]
+
+    start = text.find(".method public final onResume()V")
+    end = text.find(".end method", start)
+    if start < 0 or end < 0:
+        raise RuntimeError("Could not isolate Home onResume")
+    method = text[start:end]
+    if "HomeOcrQuickSelector;->sync" not in method:
+        insertion = method.rfind("    return-void\n")
+        if insertion < 0:
+            raise RuntimeError("Could not locate Home onResume return")
+        sync = """    invoke-virtual {p0}, Landroidx/fragment/app/Fragment;->getView()Landroid/view/View;
+
+    move-result-object v0
+
+    if-eqz v0, :hymt_home_ocr_sync_done
+
+    invoke-static {v0}, Lcom/tap_to_translate/snap_translate/hymt2/HomeOcrQuickSelector;->sync(Landroid/view/View;)V
+
+    :hymt_home_ocr_sync_done
+
+"""
+        method = method[:insertion] + sync + method[insertion:]
+        text = text[:start] + method + text[end:]
+    fragment.write_text(text, encoding="utf-8")
+    print("Added Home OCR quick selector sharing HAWK_OCR with native settings")
+
+
+def patch_fixed_font_size_renderers(base: Path) -> None:
+    """Enforce an 85% minimum only when that size fits; otherwise keep adaptive sizing."""
+    f_path = base / "smali_classes3/rh/f.smali"
+    g_path = base / "smali_classes3/rh/g.smali"
+
+    f_text = f_path.read_text(encoding="utf-8")
+    f_anchor = """    iget v4, v0, Lrh/f;->m:F
+
+    :goto_2"""
+    f_code = """    iget v4, v0, Lrh/f;->m:F
+
+    move-object/from16 v19, v9
+    sget-object v5, Ljava/lang/Boolean;->FALSE:Ljava/lang/Boolean;
+    const-string v6, "HAWK_FIXED_FONT_SIZE"
+    invoke-static {v5, v6}, Lqh/n;->a(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;
+    move-result-object v5
+    check-cast v5, Ljava/lang/Boolean;
+    invoke-virtual {v5}, Ljava/lang/Boolean;->booleanValue()Z
+    move-result v5
+    if-eqz v5, :hymt_fixed_font_done_f
+
+    const v5, 0x3f59999a
+    mul-float/2addr v5, v4
+    cmpl-float v6, v5, v3
+    if-lez v6, :hymt_fixed_font_done_f
+
+    iget-object v6, v0, Lrh/f;->g:Landroid/text/TextPaint;
+    invoke-virtual {v6, v5}, Landroid/graphics/Paint;->setTextSize(F)V
+    iget-object v7, v0, Lrh/f;->l:Landroid/text/Layout$Alignment;
+    move-object/from16 v14, v6
+    move-object/from16 v16, v7
+    invoke-static/range {v13 .. v16}, Lca/c2;->f(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;)Landroid/text/StaticLayout;
+    move-result-object v8
+    invoke-virtual {v8}, Landroid/text/Layout;->getHeight()I
+    move-result v9
+    iget v7, v11, Loh/m;->f:I
+    iget v6, v11, Loh/m;->e:I
+    sub-int/2addr v7, v6
+    sget v6, Lca/g2;->h:I
+    add-int/2addr v7, v6
+    if-gt v9, v7, :hymt_fixed_font_done_f
+    move v3, v5
+
+    :hymt_fixed_font_done_f
+    move-object/from16 v9, v19
+    :goto_2"""
+    if "hymt_fixed_font_done_f" not in f_text:
+        if f_text.count(f_anchor) != 1:
+            raise RuntimeError("Cannot identify rh/f fixed-font binary-search prelude")
+        f_text = f_text.replace(f_anchor, f_code, 1)
+        f_path.write_text(f_text, encoding="utf-8")
+
+    g_text = g_path.read_text(encoding="utf-8")
+    g_anchor = """    iget v3, v0, Lrh/g;->m:F
+
+    const/4 v4, 0x1"""
+    g_code = """    iget v3, v0, Lrh/g;->m:F
+
+    move-object/from16 v19, v9
+    sget-object v5, Ljava/lang/Boolean;->FALSE:Ljava/lang/Boolean;
+    const-string v6, "HAWK_FIXED_FONT_SIZE"
+    invoke-static {v5, v6}, Lqh/n;->a(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;
+    move-result-object v5
+    check-cast v5, Ljava/lang/Boolean;
+    invoke-virtual {v5}, Ljava/lang/Boolean;->booleanValue()Z
+    move-result v5
+    if-eqz v5, :hymt_fixed_font_done_g
+
+    const v5, 0x3f59999a
+    mul-float/2addr v5, v3
+    cmpl-float v6, v5, v2
+    if-lez v6, :hymt_fixed_font_done_g
+
+    iget-object v6, v0, Lrh/g;->g:Landroid/text/TextPaint;
+    invoke-virtual {v6, v5}, Landroid/graphics/Paint;->setTextSize(F)V
+    new-instance v12, Landroid/text/StaticLayout;
+    iget-object v14, v0, Lrh/g;->g:Landroid/text/TextPaint;
+    iget-object v7, v0, Lrh/g;->l:Landroid/text/Layout$Alignment;
+    const/16 v18, 0x0
+    const/16 v19, 0x0
+    const/high16 v17, 0x3f800000
+    move-object/from16 v16, v7
+    invoke-direct/range {v12 .. v19}, Landroid/text/StaticLayout;-><init>(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;FFZ)V
+    invoke-virtual {v12}, Landroid/text/Layout;->getHeight()I
+    move-result v7
+    iget v8, v11, Loh/m;->f:I
+    iget v6, v11, Loh/m;->e:I
+    sub-int/2addr v8, v6
+    sget v6, Lca/g2;->h:I
+    add-int/2addr v8, v6
+    if-gt v7, v8, :hymt_fixed_font_done_g
+    move v2, v5
+
+    :hymt_fixed_font_done_g
+    move-object/from16 v9, v19
+    const/4 v4, 0x1"""
+    if "hymt_fixed_font_done_g" not in g_text:
+        if g_text.count(g_anchor) != 1:
+            raise RuntimeError("Cannot identify rh/g fixed-font binary-search prelude")
+        g_text = g_text.replace(g_anchor, g_code, 1)
+        g_path.write_text(g_text, encoding="utf-8")
+    print("Added fixed-size floor with adaptive overflow fallback to both renderers")
+
+
+def patch_max_font_size(base: Path) -> None:
+    """Raise the translated-font size selector maximum from 40dp to 72dp."""
+    target = base / "smali_classes3/mh/l.smali"
+    text = target.read_text(encoding="utf-8")
+    anchor = '''    const/16 v9, 0x6
+
+    const/16 v10, 0x28
+
+    invoke-virtual {v2, v9, v10, v6, v7}, Lcom/tap_to_translate/snap_translate/domain/main/widgets/custom/WidgetChooseValue;->b(IIILsh/p;)V'''
+    replacement = anchor.replace("const/16 v10, 0x28", "const/16 v10, 0x48")
+    if "const/16 v10, 0x48" not in text:
+        if text.count(anchor) != 1:
+            raise RuntimeError("Could not locate HAWK_FONT_SIZE selector range")
+        text = text.replace(anchor, replacement, 1)
+        target.write_text(text, encoding="utf-8")
+    print("Raised translated font-size selector maximum to 72dp")
+
+
+def patch_display_profiles(base: Path) -> None:
+    """Expose the profile manager in the main Settings tab."""
+    layout = base / "res/layout/fragment_settings.xml"
+    xml_text = layout.read_text(encoding="utf-8")
+    if PROFILE_ROW_ID_NAME not in xml_text:
+        anchor = '<LinearLayout android:gravity="start|center" android:orientation="horizontal" android:id="@id/fragment_setting_ll_voice_settings"'
+        if xml_text.count(anchor) != 1:
+            raise RuntimeError("Could not locate voice-settings row for display profiles")
+        row = f'''<LinearLayout android:gravity="start|center" android:orientation="horizontal" android:id="@id/{PROFILE_ROW_ID_NAME}" android:paddingLeft="15.0dip" android:paddingTop="15.0dip" android:paddingRight="15.0dip" android:paddingBottom="15.0dip" android:focusable="true" android:clickable="true" android:layout_width="fill_parent" android:layout_height="wrap_content" android:foreground="@drawable/fg_efftect">
+                <ImageView android:padding="5.0dip" android:layout_width="30.0dip" android:layout_height="30.0dip" android:layout_marginRight="10.0dip" android:src="@drawable/ic_download_svg" />
+                <TextView android:textSize="18.0dip" android:textColor="@color/cl_text_word" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Профили оформления текста" />
+            </LinearLayout>
+            <View android:background="@color/cl_underLine" android:layout_width="fill_parent" android:layout_height="1.0dip" android:layout_marginLeft="25.0dip" android:layout_marginRight="25.0dip" />
+            '''
+        layout.write_text(xml_text.replace(anchor, row + anchor, 1), encoding="utf-8")
+
+    ids = base / "res/values/ids.xml"
+    ids_text = ids.read_text(encoding="utf-8")
+    if PROFILE_ROW_ID_NAME not in ids_text:
+        anchor = f'    <item type="id" name="container_widget_iv_screenshot" />\n'
+        if anchor not in ids_text:
+            raise RuntimeError("Could not locate last allocated resource id for profile manager")
+        ids.write_text(ids_text.replace(anchor, anchor + f'    <item type="id" name="{PROFILE_ROW_ID_NAME}" />\n', 1), encoding="utf-8")
+
+    public = base / "res/values/public.xml"
+    public_text = public.read_text(encoding="utf-8")
+    if PROFILE_ROW_ID_NAME not in public_text:
+        if re.search(r'id="0x7f0a04f4"', public_text):
+            raise RuntimeError("Resource ID 0x7f0a04f4 is already occupied")
+        anchor = '    <public type="id" name="container_widget_iv_screenshot" id="0x7f0a04f3" />\n'
+        if public_text.count(anchor) != 1:
+            raise RuntimeError("Could not locate screenshot button resource ID")
+        public.write_text(
+            public_text.replace(
+                anchor,
+                anchor + f'    <public type="id" name="{PROFILE_ROW_ID_NAME}" id="{PROFILE_ROW_ID}" />\n',
+                1,
+            ),
+            encoding="utf-8",
+        )
+
+    if PROFILE_ROW_ID_NAME not in layout.read_text(encoding="utf-8"):
+        raise RuntimeError("Display profile settings row was not inserted")
+    if PROFILE_ROW_ID_NAME not in ids.read_text(encoding="utf-8"):
+        raise RuntimeError("Display profile resource ID is missing from ids.xml")
+    if PROFILE_ROW_ID_NAME not in public.read_text(encoding="utf-8"):
+        raise RuntimeError("Display profile resource ID is missing from public.xml")
+
+
+def patch_display_profiles_click(base: Path) -> None:
+    """Wire the main settings row to DisplayProfilesActivity."""
+    fragment = base / "smali_classes3/mh/p.smali"
+    text = fragment.read_text(encoding="utf-8")
+    method_start = text.find(".method public final onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V")
+    method_end = text.find(".end method", method_start)
+    if method_start < 0 or method_end < 0:
+        raise RuntimeError("Could not isolate main settings onViewCreated for profile manager")
+    method = text[method_start:method_end]
+    if "DisplayProfilesSettingsClickListener" not in method:
+        anchor = "    return-void\n"
+        insert_at = method.rfind(anchor)
+        if insert_at < 0:
+            raise RuntimeError("Could not find end of profile settings callback method")
+        code = f'''    invoke-virtual {{p0}}, Landroidx/fragment/app/Fragment;->requireView()Landroid/view/View;
+
+    move-result-object v1
+
+    const v2, {PROFILE_ROW_ID}
+
+    invoke-virtual {{v1, v2}}, Landroid/view/View;->findViewById(I)Landroid/view/View;
+
+    move-result-object v1
+
+    new-instance v2, Lcom/tap_to_translate/snap_translate/hymt2/DisplayProfilesSettingsClickListener;
+
+    invoke-direct {{v2, p0}}, Lcom/tap_to_translate/snap_translate/hymt2/DisplayProfilesSettingsClickListener;-><init>(Lmh/p;)V
+
+    invoke-virtual {{v1, v2}}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+
+'''
+        method = method[:insert_at] + code + method[insert_at:]
+        text = text[:method_start] + method + text[method_end:]
+        fragment.write_text(text, encoding="utf-8")
+
+    listener = base / "smali_classes5/com/tap_to_translate/snap_translate/hymt2/DisplayProfilesSettingsClickListener.smali"
+    listener.parent.mkdir(parents=True, exist_ok=True)
+    listener.write_text('''.class public final Lcom/tap_to_translate/snap_translate/hymt2/DisplayProfilesSettingsClickListener;
+.super Ljava/lang/Object;
+
+# interfaces
+.implements Landroid/view/View$OnClickListener;
+
+.field private final a:Lmh/p;
+
+.method public constructor <init>(Lmh/p;)V
+    .locals 0
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+    iput-object p1, p0, Lcom/tap_to_translate/snap_translate/hymt2/DisplayProfilesSettingsClickListener;->a:Lmh/p;
+    return-void
+.end method
+
+.method public final onClick(Landroid/view/View;)V
+    .locals 3
+    iget-object v0, p0, Lcom/tap_to_translate/snap_translate/hymt2/DisplayProfilesSettingsClickListener;->a:Lmh/p;
+    invoke-virtual {v0}, Landroidx/fragment/app/Fragment;->requireContext()Landroid/content/Context;
+    move-result-object v0
+    new-instance v1, Landroid/content/Intent;
+    const-class v2, Lcom/tap_to_translate/snap_translate/hymt2/DisplayProfilesActivity;
+    invoke-direct {v1, v0, v2}, Landroid/content/Intent;-><init>(Landroid/content/Context;Ljava/lang/Class;)V
+    invoke-virtual {v0, v1}, Landroid/content/Context;->startActivity(Landroid/content/Intent;)V
+    return-void
+.end method
+''', encoding="utf-8")
+
+    fragment_text = fragment.read_text(encoding="utf-8")
+    start = fragment_text.find(".method public final onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V")
+    end = fragment_text.find(".end method", start)
+    if "DisplayProfilesSettingsClickListener" not in fragment_text[start:end]:
+        raise RuntimeError("Display profile settings row has no click listener")
+
+
+def patch_profile_host_notifier(base: Path) -> None:
+    """Provide the same display-refresh event used by the host's style/font controls."""
+    notifier = base / "smali_classes5/com/tap_to_translate/snap_translate/hymt2/DisplayProfilesHostNotifier.smali"
+    notifier.parent.mkdir(parents=True, exist_ok=True)
+    notifier.write_text('''.class public final Lcom/tap_to_translate/snap_translate/hymt2/DisplayProfilesHostNotifier;
+.super Ljava/lang/Object;
+
+.method public static postDisplayRefresh()V
+    .locals 2
+
+    invoke-static {}, Lbn/d;->b()Lbn/d;
+
+    move-result-object v0
+    new-instance v1, Loh/k;
+
+    invoke-direct {v1}, Ljava/lang/Object;-><init>()V
+
+    invoke-virtual {v0, v1}, Lbn/d;->e(Ljava/lang/Object;)V
+
+    return-void
+.end method
+''', encoding="utf-8")
+    print("Added host display settings refresh event notifier")
+
+
+def patch_profile_apply_hook(base: Path) -> None:
+    """Retain a late fallback; the primary apply runs before RT-DETR at vh/j.a()."""
+    service = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali"
+    text = service.read_text(encoding="utf-8")
+    method_start = text.find(".method public final c(Ljava/util/List;)V")
+    method_end = text.find(".end method", method_start)
+    if method_start < 0 or method_end < 0:
+        raise RuntimeError("Could not find ScreenTranslateService result-list method")
+    method = text[method_start:method_end]
+    hook = "    invoke-static {p0}, Lcom/tap_to_translate/snap_translate/hymt2/DisplayProfilesStore;->applyPendingProfile(Landroid/content/Context;)V\n\n"
+    if "DisplayProfilesStore;->applyPendingProfile" not in method:
+        anchor = '''    :cond_1
+    invoke-virtual {p0}, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->h()Lrh/c;'''
+        if method.count(anchor) != 1:
+            raise RuntimeError("Could not locate next-page handoff for deferred profile application")
+        method = method.replace(
+            anchor,
+            '''    :cond_1
+''' + hook + '''    invoke-virtual {p0}, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->h()Lrh/c;''',
+            1,
+        )
+        text = text[:method_start] + method + text[method_end:]
+        service.write_text(text, encoding="utf-8")
+    if "DisplayProfilesStore;->applyPendingProfile" not in service.read_text(encoding="utf-8"):
+        raise RuntimeError("Deferred profile application hook was not installed")
+
+
+def patch_manifest(base: Path) -> None:
+    path = base / "AndroidManifest.xml"
+    text = path.read_text(encoding="utf-8")
+    marker = "    </application>"
+    activities = []
+    if ACTIVITY not in text:
+        activities.append(f'''        <activity android:name="{ACTIVITY}" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="Hy-MT2 Offline" />\n''')
+    if OCR_SETTINGS_ACTIVITY not in text:
+        activities.append(f'''        <activity android:name="{OCR_SETTINGS_ACTIVITY}" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="OCR settings" />\n''')
+    if PROFILE_ACTIVITY not in text:
+        activities.append(f'''        <activity android:name="{PROFILE_ACTIVITY}" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="Display profiles" />\n''')
+    if BUBBLEPOP_DIAGNOSTIC_ACTIVITY not in text:
+        activities.append(f'''        <activity android:name="{BUBBLEPOP_DIAGNOSTIC_ACTIVITY}" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="BubblePop diagnostic" />\n''')
+    if not activities:
+        return
+    if marker not in text:
+        raise RuntimeError("Could not find application closing tag in manifest")
+    path.write_text(text.replace(marker, "".join(activities) + marker, 1), encoding="utf-8")
+
+
+def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, ...]) -> int:
+    target_root = base / "smali_classes5"
+    target_root.mkdir(parents=True, exist_ok=True)
+    existing = set()
+    for smali_dir in base.glob("smali*"):
+        if not smali_dir.is_dir() or smali_dir == target_root:
+            continue
+        for p in smali_dir.rglob("*.smali"):
+            existing.add(p.relative_to(smali_dir).as_posix())
+
+    copied = 0
+    replaced = 0
+    for helper in helper_dirs:
+        for prefix in rel_prefixes:
+            root = helper / prefix
+            if not root.exists():
+                continue
+            for source in root.rglob("*.smali"):
+                rel = source.relative_to(helper).as_posix()
+                destination = target_root / rel
+                if rel in existing:
+                    if destination.is_file():
+                        # This input APK already contains the Hy-MT2 runtime.
+                        # Refresh its own classes with the updated helper build.
+                        shutil.copy2(source, destination)
+                        replaced += 1
+                        continue
+                    # The host APK already supplies Kotlin stdlib/coroutines and
+                    # annotations. Keep those host copies instead of duplicating them
+                    # from the helper APK. The actual Hy-MT2 and llama API packages
+                    # are refreshed in classes5.dex above.
+                    if rel.startswith(("kotlin/", "kotlinx/", "org/jetbrains/annotations/")):
+                        continue
+                    # Do not silently introduce duplicate app/runtime classes across DEX files.
+                    other = [d for d in base.glob("smali*") if d.is_dir() and d != target_root and (d / rel).is_file()]
+                    if other:
+                        if (other[0] / rel).read_bytes() == source.read_bytes():
+                            continue
+                        raise RuntimeError(f"Cannot safely replace {rel}: existing definition is outside classes5.dex")
+                    continue
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+                existing.add(rel)
+                copied += 1
+    print(f"Updated {replaced} existing runtime classes; added {copied} new classes")
+    return copied
+
+
+def copy_helper_payload(helper: Path, base: Path) -> None:
+    helper_dirs = [p for p in helper.glob("smali*") if p.is_dir()]
+    prefixes = (
+        "com/tap_to_translate/snap_translate/hymt2",
+        "dev/ffmpegkit/llama",
+        "kotlinx",
+        "kotlin",
+        "org/jetbrains/annotations",
+        "ai/onnxruntime",
+        "com/paddle/ocr",
+        "org/opencv",
+    )
+    count = copy_package(helper_dirs, base, prefixes)
+    if count == 0:
+        raise RuntimeError("No Hy-MT2 runtime classes were found in the helper APK")
+    print(f"Copied {count} smali classes to classes5.dex")
+    target_root = base / "smali_classes5"
+
+    # Copy the prebuilt ARM64 native libraries from the AAR dependency.
+    helper_lib = helper / "lib/arm64-v8a"
+    if not helper_lib.exists():
+        raise RuntimeError("The helper APK has no arm64-v8a native library directory")
+    out_lib = base / "lib/arm64-v8a"
+    out_lib.mkdir(parents=True, exist_ok=True)
+    so_files = list(helper_lib.glob("*.so"))
+    if not so_files:
+        raise RuntimeError("The llama-android AAR did not package any native .so files")
+    replaceable = {
+        "libllama_jni.so", "libllama.so", "libggml.so",
+        "libggml-base.so", "libggml-cpu.so", "libggml-vulkan.so",
+        "libhymt2_jni.so", "libc++_shared.so", "libopencv_java4.so",
+    }
+    for source in so_files:
+        destination = out_lib / source.name
+        if destination.exists() and destination.read_bytes() != source.read_bytes():
+            # The helper APK's ML Kit dependency may package a different
+            # libtranslate_jni.so. We do not merge the helper's com.google.mlkit
+            # classes; the host APK's ML Kit DEX must therefore stay paired with
+            # its original native library. Keep the host copy on this collision.
+            if source.name == "libtranslate_jni.so":
+                print("Preserving host ML Kit native library: libtranslate_jni.so")
+                continue
+            if source.name not in replaceable:
+                raise RuntimeError(f"Unexpected native library collision: {source.name}")
+            print(f"Replacing Hy-MT2 runtime library: {source.name}")
+        shutil.copy2(source, destination)
+    required_runtime = {
+        "libllama_jni.so", "libllama.so", "libggml.so",
+        "libggml-base.so", "libggml-cpu.so", "libggml-vulkan.so",
+        "libhymt2_jni.so", "libonnxruntime.so", "libonnxruntime4j_jni.so",
+        "libopencv_java4.so",
+    }
+    missing_runtime = sorted(name for name in required_runtime if not (out_lib / name).is_file())
+    if missing_runtime:
+        raise RuntimeError("Vulkan runtime libraries missing from helper APK: " + ", ".join(missing_runtime))
+    print("Copied/replaced native libraries:", ", ".join(sorted(p.name for p in so_files)))
+
+    # Preserve helper assets (RT-DETR weights and legal notices) in the final host APK.
+    helper_assets = helper / "assets"
+    copied_assets = 0
+    if helper_assets.exists():
+        for source in helper_assets.rglob("*"):
+            if not source.is_file():
+                continue
+            relative = source.relative_to(helper_assets)
+            destination = base / "assets" / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists():
+                if destination.read_bytes() != source.read_bytes():
+                    raise RuntimeError(f"Helper asset conflicts with host asset: {relative.as_posix()}")
+                continue
+            shutil.copy2(source, destination)
+            copied_assets += 1
+    print(f"Copied {copied_assets} helper assets into final APK")
+
+    # Coroutines can discover Android's Main dispatcher via META-INF service files.
+    helper_services = helper / "unknown/META-INF/services"
+    base_services = base / "unknown/META-INF/services"
+    if helper_services.exists():
+        base_services.mkdir(parents=True, exist_ok=True)
+        for source in helper_services.rglob("*"):
+            if not source.is_file():
+                continue
+            rel = source.relative_to(helper_services)
+            destination = base_services / rel
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists():
+                old = destination.read_text(encoding="utf-8", errors="ignore")
+                new = source.read_text(encoding="utf-8", errors="ignore")
+                lines = list(dict.fromkeys([x for x in (old + "\n" + new).splitlines() if x.strip()]))
+                destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            else:
+                shutil.copy2(source, destination)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--base-apk", required=True, type=Path)
+    parser.add_argument("--helper-apk", required=True, type=Path)
+    parser.add_argument("--apktool", required=True, type=Path)
+    parser.add_argument("--work", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--zipalign", required=True)
+    args = parser.parse_args()
+
+    args.work.mkdir(parents=True, exist_ok=True)
+    base = args.work / "base_decoded"
+    helper = args.work / "helper_decoded"
+    if base.exists():
+        shutil.rmtree(base)
+    if helper.exists():
+        shutil.rmtree(helper)
+
+    run(["java", "-jar", str(args.apktool), "d", "-f", "-o", str(base), str(args.base_apk)])
+    run(["java", "-jar", str(args.apktool), "d", "-f", "-r", "-o", str(helper), str(args.helper_apk)])
+
+    preserved_ocr = snapshot_preserved_ocr(base)
+
+    copy_helper_payload(helper, base)
+    patch_atomic_backport_shims(base)
+    patch_engine_list(base)
+    patch_ocr_engine_picker(base)
+    patch_dispatcher(base)
+    patch_live_hybrid_ocr(base)
+    patch_free_text_alpha_renderers(base)
+    patch_fixed_font_size_renderers(base)
+    patch_max_font_size(base)
+    patch_home_ocr_quick_selector(base)
+    patch_remove_nurik_attribution(base)
+    patch_manual_selection_touch_routing(base)
+    patch_paddle_child_constructor(base)
+    patch_picker_callbacks(base)
+    patch_settings_click(base)
+    patch_ocr_settings_click(base)
+    patch_resources(base)
+    patch_ocr_resources(base)
+    patch_screenshot_button(base)
+    patch_translation_region_editor(base)
+    patch_floating_icon_z_order(base)
+    patch_display_profiles(base)
+    patch_display_profiles_click(base)
+    patch_profile_host_notifier(base)
+    patch_profile_apply_hook(base)
+    patch_manifest(base)
+    assert_preserved_ocr(base, preserved_ocr)
+
+    unaligned = args.work / "TapTranslate_HyMT2_unsigned_unaligned.apk"
+    run(["java", "-jar", str(args.apktool), "b", str(base), "-o", str(unaligned)])
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    run([args.zipalign, "-f", "-p", "4", str(unaligned), str(args.output)])
+    run([args.zipalign, "-c", "-p", "4", str(args.output)])
+    verify_final_host_payload(args.base_apk, args.output)
+    print(f"Unsigned APK created: {args.output} ({args.output.stat().st_size} bytes)")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise
