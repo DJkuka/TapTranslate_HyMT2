@@ -176,7 +176,7 @@ public final class BubblePopWatershedSplitter {
             List<Peak> peaks = collectPeaks(distance, peakLabels, peakCount);
             peaks = suppressNearbyPeaks(peaks);
             if (peaks.size() < 2) {
-                return false;
+                return 0;
             }
 
             Mat boundaryRoi = boundaryMap.submat(rect);
