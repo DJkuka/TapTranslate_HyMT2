@@ -36,6 +36,9 @@ public final class RtDetrLiveBridge {
             Collections.synchronizedMap(new WeakHashMap<Object, List<DetectedRegion>>());
     private static final Map<Object, Boolean> OVERLAY_IS_BUBBLE =
             Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
+    /** Identity markers for host blocks whose text geometry comes directly from PP-OCR. */
+    private static final Map<Object, Boolean> PADDLE_TEXT_BLOCKS =
+            Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
     private static final String OCR_PREFS = "taptranslate_ocr_settings";
     private static final String FREE_ALPHA_ENABLED = "ocr_free_text_alpha_enabled";
     private static final String FREE_ALPHA_PERCENT = "ocr_free_text_alpha_percent";
@@ -354,6 +357,7 @@ public final class RtDetrLiveBridge {
                 Object parent = parentConstructor.newInstance(
                         group.getText(), bounds, rectanglePolygon(bounds), "en", children);
                 paddleBlocks.add(parent);
+                PADDLE_TEXT_BLOCKS.put(parent, Boolean.TRUE);
                 generated++;
                 Log.i(TAG, "Paddle native OCR block created: type="
                         + (group.getBubbleId() == null ? "FREE_TEXT" : "BUBBLE")
@@ -526,9 +530,6 @@ public final class RtDetrLiveBridge {
      */
     public static boolean allowGrouping(
             Object owner, Object blockListValue, int firstIndex, int secondIndex) {
-        // BubblePop is layout-only: never let its contours alter OCR paragraph
-        // assembly or split/merge recognized text blocks.
-        if (isBubblePopEnabled(resolveContext(owner))) return true;
         try {
             List<?> blocks;
             if (blockListValue instanceof List<?>) {
@@ -545,6 +546,16 @@ public final class RtDetrLiveBridge {
             }
             if (firstIndex < 0 || secondIndex < 0
                     || firstIndex >= blocks.size() || secondIndex >= blocks.size()) return true;
+
+            // Preserve each PP-OCR detection as its own translation geometry block.
+            // This is keyed to blocks actually created by Paddle, not to BubblePop's
+            // presence or mask topology, so BubblePop cannot change OCR grouping.
+            Object firstBlock = blocks.get(firstIndex);
+            Object secondBlock = blocks.get(secondIndex);
+            if (PADDLE_TEXT_BLOCKS.containsKey(firstBlock)
+                    || PADDLE_TEXT_BLOCKS.containsKey(secondBlock)) {
+                return false;
+            }
 
             final List<DetectedRegion> regions;
             synchronized (LOCK) {
