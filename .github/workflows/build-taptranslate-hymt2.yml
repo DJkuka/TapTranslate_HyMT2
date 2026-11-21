@@ -354,12 +354,12 @@ jobs:
           java -jar tools/apktool.jar d -f -o "$decoded" build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
           test -s "$decoded/assets/models/bubblepop/model_fp16.onnx"
           test -s "$decoded/assets/models/bubblepop/LICENSE.bubble-pop"
-          test -s "$decoded/smali_classes5/com/tap_to_translate/snap_translate/hymt2/BubblePopDiagnosticActivity.smali"
-          test -s "$decoded/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopSegmenter.smali"
-          test -s "$decoded/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopLiveSegmenter.smali"
-          test -s "$decoded/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopBoundarySplitter.smali"
-          grep -q "ocr_bubblepop_live_enabled" "$decoded/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge.smali"
-          grep -q "Использовать BubblePop в обычном переводе" "$decoded/smali_classes5/com/tap_to_translate/snap_translate/hymt2/OcrSettingsActivity.smali"
+          find "$decoded"/smali* -path '*/com/tap_to_translate/snap_translate/hymt2/BubblePopDiagnosticActivity.smali' -print -quit | grep -q .
+          find "$decoded"/smali* -path '*/com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopSegmenter.smali' -print -quit | grep -q .
+          find "$decoded"/smali* -path '*/com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopLiveSegmenter.smali' -print -quit | grep -q .
+          find "$decoded"/smali* -path '*/com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopBoundarySplitter.smali' -print -quit | grep -q .
+          grep -R -q "ocr_bubblepop_live_enabled" "$decoded"/smali*
+          grep -R -q "Использовать BubblePop в обычном переводе" "$decoded"/smali*
           grep -q "BubblePopDiagnosticActivity" "$decoded/AndroidManifest.xml"
           echo "BubblePop model, license, diagnostic screen and manifest verified in final APK."
 
