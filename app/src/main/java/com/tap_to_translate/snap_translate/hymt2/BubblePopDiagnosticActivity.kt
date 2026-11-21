@@ -130,7 +130,8 @@ class BubblePopDiagnosticActivity : Activity() {
             text = "Сбросить параметры"
             setOnClickListener {
                 diagnosticPrefs.edit().clear().apply()
-                recreate()
+                settingsPanel.removeAllViews()
+                addDiagnosticSettings(settingsPanel)
             }
         })
     }
