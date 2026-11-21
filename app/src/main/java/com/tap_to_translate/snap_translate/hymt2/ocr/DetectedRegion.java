@@ -11,15 +11,26 @@ public final class DetectedRegion {
     private final float confidence;
     private final float[] contour;
     private final float[] maskCoefficients;
+    /** Cropped CV_8UC1 mask pixels; dimensions match bounds. */
+    private final byte[] maskData;
+    private final int maskWidth;
+    private final int maskHeight;
 
     public DetectedRegion(
             String id, OcrRegionKind kind, Rect bounds, float confidence, float[] contour) {
-        this(id, kind, bounds, confidence, contour, null);
+        this(id, kind, bounds, confidence, contour, null, null, 0, 0);
     }
 
     public DetectedRegion(
             String id, OcrRegionKind kind, Rect bounds, float confidence,
             float[] contour, float[] maskCoefficients) {
+        this(id, kind, bounds, confidence, contour, maskCoefficients, null, 0, 0);
+    }
+
+    public DetectedRegion(
+            String id, OcrRegionKind kind, Rect bounds, float confidence,
+            float[] contour, float[] maskCoefficients,
+            byte[] maskData, int maskWidth, int maskHeight) {
         if (id == null || id.trim().isEmpty()) throw new IllegalArgumentException("Region id is required");
         if (kind == null) throw new IllegalArgumentException("Region kind is required");
         if (bounds == null || bounds.width() <= 0 || bounds.height() <= 0) {
@@ -39,8 +50,15 @@ public final class DetectedRegion {
         this.bounds = new Rect(bounds);
         this.confidence = confidence;
         this.contour = contour == null ? null : Arrays.copyOf(contour, contour.length);
+        if (maskData != null && (maskWidth != bounds.width() || maskHeight != bounds.height()
+                || maskData.length != maskWidth * maskHeight)) {
+            throw new IllegalArgumentException("Mask dimensions must match region bounds");
+        }
         this.maskCoefficients = maskCoefficients == null ? null
                 : Arrays.copyOf(maskCoefficients, maskCoefficients.length);
+        this.maskData = maskData == null ? null : Arrays.copyOf(maskData, maskData.length);
+        this.maskWidth = maskData == null ? 0 : maskWidth;
+        this.maskHeight = maskData == null ? 0 : maskHeight;
     }
 
     public String getId() { return id; }
@@ -53,4 +71,9 @@ public final class DetectedRegion {
     public float[] getMaskCoefficients() {
         return maskCoefficients == null ? null : Arrays.copyOf(maskCoefficients, maskCoefficients.length);
     }
+    public byte[] getMaskData() {
+        return maskData == null ? null : Arrays.copyOf(maskData, maskData.length);
+    }
+    public int getMaskWidth() { return maskWidth; }
+    public int getMaskHeight() { return maskHeight; }
 }

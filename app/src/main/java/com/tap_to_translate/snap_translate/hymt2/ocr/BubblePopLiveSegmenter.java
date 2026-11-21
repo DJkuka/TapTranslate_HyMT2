@@ -77,10 +77,18 @@ public final class BubblePopLiveSegmenter implements AutoCloseable {
                 if (pixels.empty() || pixels.total() < 100) continue;
                 org.opencv.core.Rect bounds = Imgproc.boundingRect(pixels);
                 if (bounds.width <= 1 || bounds.height <= 1) continue;
+                // Preserve the exact per-instance interior, not only its bounding box.
+                // The cropped byte mask is detached from OpenCV Mats before they are released.
+                Mat cropped = instanceMask.submat(bounds);
+                byte[] maskData = new byte[bounds.width * bounds.height];
+                cropped.get(0, 0, maskData);
+                cropped.release();
+                Rect androidBounds = new Rect(bounds.x, bounds.y,
+                        bounds.x + bounds.width, bounds.y + bounds.height);
                 output.add(new DetectedRegion(
                         "bubblepop:" + (id++), OcrRegionKind.BUBBLE_CONTAINER,
-                        new Rect(bounds.x, bounds.y, bounds.x + bounds.width, bounds.y + bounds.height),
-                        1.0f, null));
+                        androidBounds, 1.0f, null, null,
+                        maskData, bounds.width, bounds.height));
             }
             Log.i(TAG, "live segmentation: input_components=" + split.inputComponents
                     + " instances=" + output.size() + " split_components=" + split.splitComponents
