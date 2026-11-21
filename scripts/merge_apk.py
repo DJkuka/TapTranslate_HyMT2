@@ -454,10 +454,11 @@ def patch_free_text_alpha_renderers(base: Path) -> None:
             shape_hook = """    move-object/from16 v23, v1
     move-object/from16 v24, v11
     move-object/from16 v25, v13
-    iget-object v26, v0, Lrh/OWNER;->g:Landroid/text/TextPaint;
+    iget-object v7, v0, Lrh/OWNER;->g:Landroid/text/TextPaint;
+    move-object/from16 v26, v7
     move/from16 v27, MIN_REGISTER
     move/from16 v28, MAX_REGISTER
-    const/4 v29, 0x4
+    const/16 v29, 0x4
     invoke-static/range {v23 .. v29}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->drawBubbleText(Landroid/graphics/Canvas;Ljava/lang/Object;Ljava/lang/CharSequence;Landroid/text/TextPaint;FFI)Z
     move-result v23
     if-nez v23, :goto_0
