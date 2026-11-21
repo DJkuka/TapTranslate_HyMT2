@@ -101,10 +101,12 @@ public final class BubbleTextLayout {
             }
             if (run == null || run[1] - run[0] < minimumRun) return null;
             float available = run[1] - run[0];
-            int count = paint.breakText(text, offset, text.length(), true, available, null);
+            int paragraphEnd = text.indexOf('\n', offset);
+            if (paragraphEnd < 0) paragraphEnd = text.length();
+            int count = paint.breakText(text, offset, paragraphEnd, true, available, null);
             if (count <= 0) return null;
-            int end = offset + count;
-            if (end < text.length() && text.charAt(end) != '\n') {
+            int end = Math.min(paragraphEnd, offset + count);
+            if (end < paragraphEnd) {
                 int whitespace = -1;
                 for (int i = end - 1; i > offset; i--) {
                     if (Character.isWhitespace(text.charAt(i))) {
