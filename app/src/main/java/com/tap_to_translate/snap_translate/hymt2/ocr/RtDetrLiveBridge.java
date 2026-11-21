@@ -40,6 +40,7 @@ public final class RtDetrLiveBridge {
     private static final String FREE_ALPHA_ENABLED = "ocr_free_text_alpha_enabled";
     private static final String FREE_ALPHA_PERCENT = "ocr_free_text_alpha_percent";
     private static final String PADDLE_ENGINE_NAME = "PP-OCRv6 (Comics)";
+    private static final String BUBBLEPOP_ENABLED = "ocr_bubblepop_live_enabled";
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor(
             new ThreadFactory() {
                 @Override public Thread newThread(Runnable task) {
@@ -52,6 +53,8 @@ public final class RtDetrLiveBridge {
 
     private static volatile RtDetrComicRegionDetector detector;
     private static volatile Context detectorContext;
+    private static volatile BubblePopLiveSegmenter bubblePopSegmenter;
+    private static volatile Context bubblePopContext;
 
     private RtDetrLiveBridge() {}
 
@@ -67,7 +70,8 @@ public final class RtDetrLiveBridge {
 
         final boolean paddleEnabled = isPaddleSelected();
         final boolean classifyForFreeTextOpacity = isSeparateFreeTextAlphaEnabled(context);
-        if (!paddleEnabled && !classifyForFreeTextOpacity) {
+        final boolean bubblePopEnabled = isBubblePopEnabled(context);
+        if (!paddleEnabled && !classifyForFreeTextOpacity && !bubblePopEnabled) {
             synchronized (LOCK) {
                 PendingFrame previous = PENDING.remove(owner);
                 if (previous != null && !previous.task.isDone()) previous.task.cancel(true);
@@ -104,6 +108,26 @@ public final class RtDetrLiveBridge {
                                     new Rect(0, 0, snapshot.getWidth(), snapshot.getHeight()),
                                     0, 0, 1f, 1f);
                             List<DetectedRegion> result = active.detect(frame);
+                            if (isBubblePopEnabled(context)) {
+                                try {
+                                    List<DetectedRegion> bubblePop = getBubblePopSegmenter(context).detect(snapshot);
+                                    if (bubblePop != null && !bubblePop.isEmpty()) {
+                                        ArrayList<DetectedRegion> merged = new ArrayList<>();
+                                        for (DetectedRegion region : result) {
+                                            if (region.getKind() != OcrRegionKind.BUBBLE_CONTAINER) {
+                                                merged.add(region);
+                                            }
+                                        }
+                                        merged.addAll(bubblePop);
+                                        result = merged;
+                                        Log.i(TAG, "BubblePop containers applied: " + bubblePop.size());
+                                    } else {
+                                        Log.w(TAG, "BubblePop returned no instances; RT-DETR containers retained");
+                                    }
+                                } catch (Throwable bubbleError) {
+                                    Log.e(TAG, "BubblePop integration failed; RT-DETR containers retained", bubbleError);
+                                }
+                            }
                             int containers = 0;
                             int bubbleText = 0;
                             int free = 0;
@@ -144,7 +168,8 @@ public final class RtDetrLiveBridge {
 
         final Context resolvedContext = resolveContext(owner);
         final boolean paddleEnabled = isPaddleSelected();
-        if (!paddleEnabled && !isSeparateFreeTextAlphaEnabled(resolvedContext)) {
+        if (!paddleEnabled && !isSeparateFreeTextAlphaEnabled(resolvedContext)
+                && !isBubblePopEnabled(resolvedContext)) {
             synchronized (LOCK) {
                 ACTIVE_REGIONS.remove(owner);
             }
@@ -418,6 +443,34 @@ public final class RtDetrLiveBridge {
         } catch (Throwable error) {
             Log.w(TAG, "Cannot resolve OCR service context", error);
             return null;
+        }
+    }
+
+    private static boolean isBubblePopEnabled(Context context) {
+        if (context == null) return false;
+        try {
+            return context.getSharedPreferences(OCR_PREFS, Context.MODE_PRIVATE)
+                    .getBoolean(BUBBLEPOP_ENABLED, false);
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not read BubblePop preference; feature disabled", error);
+            return false;
+        }
+    }
+
+    private static BubblePopLiveSegmenter getBubblePopSegmenter(Context context) throws Exception {
+        BubblePopLiveSegmenter current = bubblePopSegmenter;
+        if (current != null && bubblePopContext == context) return current;
+        synchronized (RtDetrLiveBridge.class) {
+            current = bubblePopSegmenter;
+            if (current != null && bubblePopContext == context) return current;
+            if (current != null) {
+                try { current.close(); } catch (Throwable ignored) {}
+            }
+            current = new BubblePopLiveSegmenter(context);
+            bubblePopContext = context;
+            bubblePopSegmenter = current;
+            Log.i(TAG, "BubblePop live model/runtime initialized");
+            return current;
         }
     }
 
