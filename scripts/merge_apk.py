@@ -132,6 +132,7 @@ OCR_ROW_ID_NAME = "ocr_settings_row"
 OCR_ROW_ID = "0x7f0a04f2"
 OCR_SETTINGS_ACTIVITY = "com.tap_to_translate.snap_translate.hymt2.OcrSettingsActivity"
 PROFILE_ACTIVITY = "com.tap_to_translate.snap_translate.hymt2.DisplayProfilesActivity"
+BUBBLEPOP_DIAGNOSTIC_ACTIVITY = "com.tap_to_translate.snap_translate.hymt2.BubblePopDiagnosticActivity"
 PROFILE_ROW_ID_NAME = "display_profiles_row"
 PROFILE_ROW_ID = "0x7f0a04f4"
 PADDLE_OCR_NAME = "PP-OCRv6 (Comics)"
@@ -1820,6 +1821,8 @@ def patch_manifest(base: Path) -> None:
         activities.append(f'''        <activity android:name="{OCR_SETTINGS_ACTIVITY}" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="OCR settings" />\n''')
     if PROFILE_ACTIVITY not in text:
         activities.append(f'''        <activity android:name="{PROFILE_ACTIVITY}" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="Display profiles" />\n''')
+    if BUBBLEPOP_DIAGNOSTIC_ACTIVITY not in text:
+        activities.append(f'''        <activity android:name="{BUBBLEPOP_DIAGNOSTIC_ACTIVITY}" android:exported="false" android:theme="@style/AppThemeNoActionBar" android:label="BubblePop diagnostic" />\n''')
     if not activities:
         return
     if marker not in text:
