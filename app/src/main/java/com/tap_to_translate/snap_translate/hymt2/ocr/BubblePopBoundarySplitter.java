@@ -19,14 +19,44 @@ import org.opencv.imgproc.Imgproc;
  * clean, substantial split, the original component is kept unchanged.
  */
 public final class BubblePopBoundarySplitter {
-    private static final int[] BOUNDARY_THRESHOLDS = {176, 160, 144, 128, 112};
-    private static final int MIN_COMPONENT_AREA = 700;
-    private static final int MIN_PART_AREA = 120;
-    private static final int MAX_PARTS = 4;
-    private static final double MIN_RETAINED_FRACTION = 0.82;
-    private static final int CLOSE_KERNEL = 3;
-
     private BubblePopBoundarySplitter() {}
+
+    /** Adjustable diagnostic-only parameters. Defaults preserve the original behavior. */
+    public static final class Options {
+        public final int boundaryThresholdStart;
+        public final int boundaryThresholdStep;
+        public final int boundaryThresholdAttempts;
+        public final int minComponentArea;
+        public final int minPartArea;
+        public final double minPartAreaFraction;
+        public final int maxParts;
+        public final double minRetainedFraction;
+        public final int closeKernelSize;
+
+        public Options(int boundaryThresholdStart, int boundaryThresholdStep,
+                       int boundaryThresholdAttempts, int minComponentArea,
+                       int minPartArea, double minPartAreaFraction, int maxParts,
+                       double minRetainedFraction, int closeKernelSize) {
+            this.boundaryThresholdStart = clamp(boundaryThresholdStart, 1, 255);
+            this.boundaryThresholdStep = clamp(boundaryThresholdStep, 1, 64);
+            this.boundaryThresholdAttempts = clamp(boundaryThresholdAttempts, 1, 12);
+            this.minComponentArea = Math.max(1, minComponentArea);
+            this.minPartArea = Math.max(1, minPartArea);
+            this.minPartAreaFraction = Math.max(0.0, Math.min(0.5, minPartAreaFraction));
+            this.maxParts = clamp(maxParts, 2, 12);
+            this.minRetainedFraction = Math.max(0.1, Math.min(1.0, minRetainedFraction));
+            int kernel = clamp(closeKernelSize, 1, 15);
+            this.closeKernelSize = (kernel & 1) == 0 ? kernel + 1 : kernel;
+        }
+
+        public static Options defaults() {
+            return new Options(176, 16, 5, 700, 120, 0.04, 4, 0.82, 3);
+        }
+
+        private static int clamp(int value, int min, int max) {
+            return Math.max(min, Math.min(max, value));
+        }
+    }
 
     public static final class Result {
         public final Mat mask;
@@ -53,6 +83,12 @@ public final class BubblePopBoundarySplitter {
 
     /** Caller must release both returned Mats. */
     public static Result split(Mat inputMask, Mat boundaryMap) {
+        return split(inputMask, boundaryMap, Options.defaults());
+    }
+
+    /** Caller must release both returned Mats. */
+    public static Result split(Mat inputMask, Mat boundaryMap, Options options) {
+        if (options == null) options = Options.defaults();
         if (inputMask == null || boundaryMap == null
                 || inputMask.empty() || boundaryMap.empty()) {
             throw new IllegalArgumentException("mask and boundary map must be non-empty");
@@ -94,8 +130,9 @@ public final class BubblePopBoundarySplitter {
             inputCount = Imgproc.connectedComponentsWithStats(
                     binary, labels, stats, centroids, 8, CvType.CV_32S);
 
+            int kernelSize = options.closeKernelSize;
             Mat closeKernel = Imgproc.getStructuringElement(
-                    Imgproc.MORPH_ELLIPSE, new Size(CLOSE_KERNEL, CLOSE_KERNEL));
+                    Imgproc.MORPH_ELLIPSE, new Size(kernelSize, kernelSize));
             try {
                 for (int componentId = 1; componentId < inputCount; componentId++) {
                     int area = (int) stats.get(componentId, Imgproc.CC_STAT_AREA)[0];
@@ -111,12 +148,15 @@ public final class BubblePopBoundarySplitter {
                     labelRoi.release();
 
                     Candidate accepted = null;
-                    if (area >= MIN_COMPONENT_AREA) {
+                    if (area >= options.minComponentArea) {
                         Mat boundaryRoi = boundary8.submat(rect);
                         try {
-                            for (int threshold : BOUNDARY_THRESHOLDS) {
+                            for (int attempt = 0; attempt < options.boundaryThresholdAttempts; attempt++) {
+                                int threshold = options.boundaryThresholdStart
+                                        - attempt * options.boundaryThresholdStep;
+                                if (threshold < 1) break;
                                 Candidate candidate = tryBoundarySplit(
-                                        component, boundaryRoi, threshold, closeKernel);
+                                        component, boundaryRoi, threshold, closeKernel, options);
                                 if (candidate != null) {
                                     accepted = candidate;
                                     usedThreshold = usedThreshold < 0
@@ -179,7 +219,7 @@ public final class BubblePopBoundarySplitter {
     }
 
     private static Candidate tryBoundarySplit(
-            Mat component, Mat boundaryRoi, int threshold, Mat closeKernel) {
+            Mat component, Mat boundaryRoi, int threshold, Mat closeKernel, Options options) {
         Mat barrier = new Mat();
         Mat insideBarrier = new Mat();
         Mat inverseBarrier = new Mat();
@@ -196,10 +236,10 @@ public final class BubblePopBoundarySplitter {
 
             int count = Imgproc.connectedComponentsWithStats(
                     cut, labels, stats, centroids, 8, CvType.CV_32S);
-            if (count < 3 || count - 1 > MAX_PARTS) return null;
+            if (count < 3 || count - 1 > options.maxParts) return null;
 
-            int minArea = Math.max(MIN_PART_AREA,
-                    (int) Math.round(Core.countNonZero(component) * 0.04));
+            int minArea = Math.max(options.minPartArea,
+                    (int) Math.round(Core.countNonZero(component) * options.minPartAreaFraction));
             int[] idMap = new int[count];
             int accepted = 0;
             int retainedArea = 0;
@@ -211,8 +251,8 @@ public final class BubblePopBoundarySplitter {
                 }
             }
             int originalArea = Core.countNonZero(component);
-            if (accepted < 2 || accepted > MAX_PARTS
-                    || retainedArea < originalArea * MIN_RETAINED_FRACTION) {
+            if (accepted < 2 || accepted > options.maxParts
+                    || retainedArea < originalArea * options.minRetainedFraction) {
                 return null;
             }
 
