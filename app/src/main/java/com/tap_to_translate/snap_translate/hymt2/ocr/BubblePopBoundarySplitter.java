@@ -101,13 +101,14 @@ public final class BubblePopBoundarySplitter {
         public final int boundaryMaxThresholdTried;
         /** Per-component geometry diagnostics in full input-image coordinates. */
         public final List<GeometryTrace> geometryTraces;
+        public final List<ConcavityTrace> concavityTraces;
 
         private Result(Mat mask, Mat instances, int instanceCount,
                        int inputComponents, int outputComponents,
                        int splitComponents, int boundaryThreshold, String geometrySummary,
                        int boundaryAttemptCount, int boundaryAcceptedCount,
                        int boundaryMinThresholdTried, int boundaryMaxThresholdTried,
-                       List<GeometryTrace> geometryTraces) {
+                       List<GeometryTrace> geometryTraces, List<ConcavityTrace> concavityTraces) {
             this.mask = mask;
             this.instances = instances;
             this.instanceCount = instanceCount;
@@ -121,6 +122,7 @@ public final class BubblePopBoundarySplitter {
             this.boundaryMinThresholdTried = boundaryMinThresholdTried;
             this.boundaryMaxThresholdTried = boundaryMaxThresholdTried;
             this.geometryTraces = Collections.unmodifiableList(new ArrayList<>(geometryTraces));
+            this.concavityTraces = Collections.unmodifiableList(new ArrayList<>(concavityTraces));
         }
     }
 
@@ -274,7 +276,7 @@ public final class BubblePopBoundarySplitter {
                     count, splitCount, usedThreshold, geometryStats.summary(options),
                     boundaryAttemptCount, boundaryAcceptedCount,
                     boundaryAttemptCount == 0 ? -1 : boundaryMinThresholdTried,
-                    boundaryMaxThresholdTried, geometryStats.traces);
+                    boundaryMaxThresholdTried, geometryStats.traces, geometryStats.concavityTraces);
         } catch (Throwable error) {
             output.release();
             instances.release();
@@ -644,6 +646,8 @@ public final class BubblePopBoundarySplitter {
             int offsetX, int offsetY, int configuredMinPartArea,
             double minPartAreaFraction, double minRetainedFraction) {
         stats.concavityAttempts++;
+        ConcavityTrace trace = new ConcavityTrace();
+        stats.concavityTraces.add(trace);
         Mat contourInput = component.clone();
         List<MatOfPoint> contours = new ArrayList<>();
         Mat hierarchy = new Mat();
@@ -671,7 +675,14 @@ public final class BubblePopBoundarySplitter {
                 return null;
             }
             Imgproc.convexHull(contour, hull, false);
-            Imgproc.convexityDefects(contour, hull, defects);
+            try {
+                Imgproc.convexityDefects(contour, hull, defects);
+            } catch (RuntimeException invalidHull) {
+                stats.concavityRejectedNoDefects++;
+                trace.outcome = "convexity_defects_unavailable";
+                return null;
+            }
+            Point[] contourPoints = contour.toArray();
             int[] d = defects.toArray();
             if (d.length < 8) {
                 stats.concavityRejectedNoDefects++;
@@ -696,12 +707,14 @@ public final class BubblePopBoundarySplitter {
                 int farI = d[i * 4 + 2];
                 double depthI = d[i * 4 + 3] / 256.0;
                 if (depthI < 4.0) continue;
-                Point pi = contour.toArray()[farI];
+                if (farI < 0 || farI >= contourPoints.length) continue;
+                Point pi = contourPoints[farI];
                 for (int j = i + 1; j < defectCount; j++) {
                     int farJ = d[j * 4 + 2];
                     double depthJ = d[j * 4 + 3] / 256.0;
                     if (depthJ < 4.0 || farI == farJ) continue;
-                    Point pj = contour.toArray()[farJ];
+                    if (farJ < 0 || farJ >= contourPoints.length) continue;
+                    Point pj = contourPoints[farJ];
                     double span = Math.hypot(pi.x - pj.x, pi.y - pj.y);
                     if (span < 8.0 || span > maxSpan) continue;
 
@@ -763,6 +776,14 @@ public final class BubblePopBoundarySplitter {
                         }
                     }
                     bestScore = score;
+                    trace.x1 = offsetX + (int) Math.round(pi.x);
+                    trace.y1 = offsetY + (int) Math.round(pi.y);
+                    trace.x2 = offsetX + (int) Math.round(pj.x);
+                    trace.y2 = offsetY + (int) Math.round(pj.y);
+                    trace.firstArea = firstSize;
+                    trace.secondArea = secondSize;
+                    trace.retainedArea = retained;
+                    trace.outcome = "candidate";
                     bestA = (int) Math.round(pi.x);
                     bestB = (int) Math.round(pj.x);
                     bestRetained = retained;
@@ -785,6 +806,7 @@ public final class BubblePopBoundarySplitter {
             }
             if (bestLabels == null) {
                 stats.concavityRejectedGeometry++;
+                trace.outcome = "no_valid_chord";
                 return null;
             }
             Mat retainedMask = new Mat(height, width, CvType.CV_8UC1);
@@ -792,6 +814,7 @@ public final class BubblePopBoundarySplitter {
             Mat retainedLabels = new Mat(height, width, CvType.CV_32SC1);
             retainedLabels.put(0, 0, bestLabels);
             stats.concavityAccepted++;
+            trace.outcome = "accepted";
             return new Candidate(retainedMask, retainedLabels, new int[] {0, 1, 2}, 2);
         } finally {
             contourInput.release();
@@ -892,8 +915,15 @@ public final class BubblePopBoundarySplitter {
         }
     }
 
+    public static final class ConcavityTrace {
+        public int x1 = -1, y1 = -1, x2 = -1, y2 = -1;
+        public int firstArea, secondArea, retainedArea;
+        public String outcome = "not_completed";
+    }
+
     private static final class GeometryStats {
         final List<GeometryTrace> traces = new ArrayList<>();
+        final List<ConcavityTrace> concavityTraces = new ArrayList<>();
         int attempts;
         int rejectedTooSmall;
         int rejectedNoPeaks;
