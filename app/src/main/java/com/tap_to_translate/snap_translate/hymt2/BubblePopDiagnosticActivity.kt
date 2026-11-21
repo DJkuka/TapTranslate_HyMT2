@@ -9,6 +9,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.os.Handler
 import android.os.Looper
 import android.view.ViewGroup
@@ -106,8 +107,18 @@ class BubblePopDiagnosticActivity : Activity() {
             Toast.makeText(this, "Сначала выбери изображение", Toast.LENGTH_SHORT).show()
             return
         }
+        val inputBitmap = try {
+            original.copy(Bitmap.Config.ARGB_8888, false)
+        } catch (t: Throwable) {
+            status.text = "Не удалось подготовить копию изображения: ${t.message}"
+            return
+        } ?: run {
+            status.text = "Не удалось создать копию изображения."
+            return
+        }
         status.text = "Загрузка BubblePop и поиск контуров…"
         thread(name = "BubblePopDiagnostic") {
+            val startedAt = SystemClock.elapsedRealtime()
             var segmenter: BubblePopSegmenter? = null
             var mat: Mat? = null
             var mask: Mat? = null
@@ -122,7 +133,7 @@ class BubblePopDiagnosticActivity : Activity() {
                 check(OpenCVUtils.init(applicationContext)) { "OpenCV initialization failed" }
                 segmenter = BubblePopSegmenter(model.absolutePath)
                 mat = Mat()
-                Utils.bitmapToMat(original, mat)
+                Utils.bitmapToMat(inputBitmap, mat)
                 mask = segmenter.getMask(mat, null)
                 val hierarchy = Mat()
                 Imgproc.findContours(mask, contours, hierarchy, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
@@ -146,11 +157,16 @@ class BubblePopDiagnosticActivity : Activity() {
                     }
                     canvas.drawPath(path, paint)
                 }
+                val elapsedMs = SystemClock.elapsedRealtime() - startedAt
+                val contourCount = contours.size
                 main.post {
-                    preview.setImageBitmap(overlay)
-                    status.text = "Найдено контуров: ${contours.size}. Всего вершин: $totalPoints. Красные линии показывают внешние границы масок. Время включает запуск модели."
+                    if (!isFinishing) {
+                        preview.setImageBitmap(overlay)
+                        status.text = "Найдено контуров: $contourCount. Вершин: $totalPoints. Время: ${elapsedMs} мс (включая загрузку модели). Красные линии показывают внешние границы масок."
+                    } else {
+                        overlay.recycle()
+                    }
                 }
-                hierarchyRelease(contours)
             } catch (t: Throwable) {
                 main.post { status.text = "Ошибка BubblePop: ${t.javaClass.simpleName}: ${t.message}" }
             } finally {
@@ -158,11 +174,10 @@ class BubblePopDiagnosticActivity : Activity() {
                 mask?.release()
                 mat?.release()
                 segmenter?.close()
+                if (!inputBitmap.isRecycled) inputBitmap.recycle()
             }
         }
     }
-
-    private fun hierarchyRelease(items: List<MatOfPoint>) = Unit
 
     override fun onDestroy() {
         source?.recycle()

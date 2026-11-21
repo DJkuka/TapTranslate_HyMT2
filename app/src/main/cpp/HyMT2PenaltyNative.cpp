@@ -130,18 +130,17 @@ std::string build_prompt(
 }
 
 llama_sampler *make_sampler(
-        const llama_vocab *vocab, int32_t context_size,
+        int32_t context_size,
         float temperature, float top_p, int top_k,
         float repetition_penalty, int seed) {
     llama_sampler *sampler =
         llama_sampler_chain_init(llama_sampler_chain_default_params());
 
     if (repetition_penalty > 1.0f) {
-        const int32_t n_vocab = llama_vocab_n_tokens(vocab);
         const int32_t penalty_last_n = std::max(1, context_size);
         llama_sampler_chain_add(
             sampler, llama_sampler_init_penalties(
-                n_vocab, penalty_last_n, repetition_penalty, 0.0f, 0.0f));
+                penalty_last_n, repetition_penalty, 0.0f, 0.0f));
     }
 
     if (temperature <= 0.0f) {
@@ -376,7 +375,7 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
 
     llama_memory_clear(llama_get_memory(context->ctx), true);
     llama_sampler *sampler = make_sampler(
-        vocab, static_cast<int32_t>(llama_n_ctx(context->ctx)),
+        static_cast<int32_t>(llama_n_ctx(context->ctx)),
         temperature, top_p, top_k, repetition_penalty, seed);
     if (!sampler) return env->NewStringUTF("{\"text\":\"\",\"error\":\"sampler initialization failed\"}");
 
