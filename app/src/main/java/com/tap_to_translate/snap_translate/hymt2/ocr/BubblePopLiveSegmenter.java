@@ -10,6 +10,7 @@ import com.paddle.ocr.util.OpenCVUtils;
 import org.opencv.android.Utils;
 import org.opencv.core.Core;
 import org.opencv.core.Mat;
+import org.opencv.core.MatOfPoint;
 import org.opencv.core.Scalar;
 import org.opencv.imgproc.Imgproc;
 
@@ -62,29 +63,25 @@ public final class BubblePopLiveSegmenter implements AutoCloseable {
         Mat image = new Mat();
         BubblePopSegmenter.SegmentationResult segmentation = null;
         BubblePopBoundarySplitter.Result split = null;
-        Mat labels = new Mat();
-        Mat stats = new Mat();
-        Mat centroids = new Mat();
+        Mat instanceMask = new Mat();
+        MatOfPoint pixels = new MatOfPoint();
         ArrayList<DetectedRegion> output = new ArrayList<>();
         try {
             Utils.bitmapToMat(bitmap, image);
             segmentation = segmenter.getSegmentation(image);
             split = BubblePopBoundarySplitter.split(
                     segmentation.mask, segmentation.boundary);
-            int count = Imgproc.connectedComponentsWithStats(
-                    split.instances, labels, stats, centroids, 8, org.opencv.core.CvType.CV_32S);
             int id = 0;
-            for (int instance = 1; instance < count; instance++) {
-                int area = (int) stats.get(instance, Imgproc.CC_STAT_AREA)[0];
-                if (area < 100) continue;
-                int x = (int) stats.get(instance, Imgproc.CC_STAT_LEFT)[0];
-                int y = (int) stats.get(instance, Imgproc.CC_STAT_TOP)[0];
-                int width = (int) stats.get(instance, Imgproc.CC_STAT_WIDTH)[0];
-                int height = (int) stats.get(instance, Imgproc.CC_STAT_HEIGHT)[0];
-                if (width <= 1 || height <= 1) continue;
+            for (int instance = 1; instance <= split.instanceCount; instance++) {
+                Core.compare(split.instances, new Scalar(instance), instanceMask, Core.CMP_EQ);
+                Core.findNonZero(instanceMask, pixels);
+                if (pixels.empty() || pixels.total() < 100) continue;
+                org.opencv.core.Rect bounds = Imgproc.boundingRect(pixels);
+                if (bounds.width <= 1 || bounds.height <= 1) continue;
                 output.add(new DetectedRegion(
                         "bubblepop:" + (id++), OcrRegionKind.BUBBLE_CONTAINER,
-                        new Rect(x, y, x + width, y + height), 1.0f, null));
+                        new Rect(bounds.x, bounds.y, bounds.x + bounds.width, bounds.y + bounds.height),
+                        1.0f, null));
             }
             Log.i(TAG, "live segmentation: input_components=" + split.inputComponents
                     + " instances=" + output.size() + " split_components=" + split.splitComponents
@@ -95,9 +92,8 @@ public final class BubblePopLiveSegmenter implements AutoCloseable {
             Log.e(TAG, "BubblePop live segmentation failed; RT-DETR containers will be retained", error);
             return output;
         } finally {
-            labels.release();
-            stats.release();
-            centroids.release();
+            instanceMask.release();
+            pixels.release();
             if (split != null) {
                 split.instances.release();
                 split.mask.release();
