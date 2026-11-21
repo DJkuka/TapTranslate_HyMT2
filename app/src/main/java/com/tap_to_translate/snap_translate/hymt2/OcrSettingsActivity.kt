@@ -222,6 +222,17 @@ class OcrSettingsActivity : Activity() {
             "Это стартовые наборы, а не измеренные оптимальные значения. Изменяй по одному параметру и сравнивай на одной странице. Настройки PP-OCRv6 применяются после полной остановки и повторного запуска приложения.",
             12f, false, dp(20))
 
+        addText(root, "ДИАГНОСТИКА ФОРМЫ БАБЛОВ", 16f, true, dp(8))
+        addText(root,
+            "Экспериментальный BubblePop анализирует выбранную страницу и показывает найденные контуры поверх оригинала. На работу OCR и переводов эта проверка не влияет.",
+            13f, false, dp(8))
+        root.addView(Button(this).apply {
+            text = "Открыть диагностику BubblePop"
+            setOnClickListener {
+                startActivity(Intent(this@OcrSettingsActivity, BubblePopDiagnosticActivity::class.java))
+            }
+        }, matchWrap(dp(16)))
+
         addText(root, "СКРИНШОТЫ ПЕРЕВОДА", 16f, true, dp(8))
         addText(root,
             "Снимок сохраняет исходную страницу вместе с наложенным переводом, без верхней панели управления. Нумерация продолжается по порядку добавления: 001, 002, 003 и далее.",
