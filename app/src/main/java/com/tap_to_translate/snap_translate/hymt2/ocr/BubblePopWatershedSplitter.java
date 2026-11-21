@@ -42,7 +42,7 @@ public final class BubblePopWatershedSplitter {
     private static final int PEAK_NEIGHBORHOOD = 15;
     private static final int MAX_PEAKS = 8;
     private static final double MIN_PEAK_DISTANCE = 16.0;
-    private static final double SAME_BUBBLE_SADDLE_RATIO = 0.62;
+    private static final double SAME_BUBBLE_SADDLE_RATIO = 0.78;
     private static final double MAX_BOUNDARY_SUPPORTED_SADDLE_RATIO = 0.82;
     private static final double MIN_ACCEPTED_REGION_FRACTION = 0.10;
     private static final int MAX_SPLIT_SEEDS = 4;
