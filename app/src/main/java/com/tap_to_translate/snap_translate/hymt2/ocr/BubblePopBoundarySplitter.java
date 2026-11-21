@@ -40,11 +40,25 @@ public final class BubblePopBoundarySplitter {
         public final int maxParts;
         public final double minRetainedFraction;
         public final int closeKernelSize;
+        public final double geometryMaxSaddleRatio;
+        public final double geometryMinPeakRadius;
+        public final double geometryMinPeakDistance;
 
         public Options(int boundaryThresholdStart, int boundaryThresholdStep,
                        int boundaryThresholdAttempts, int minComponentArea,
                        int minPartArea, double minPartAreaFraction, int maxParts,
                        double minRetainedFraction, int closeKernelSize) {
+            this(boundaryThresholdStart, boundaryThresholdStep, boundaryThresholdAttempts,
+                    minComponentArea, minPartArea, minPartAreaFraction, maxParts,
+                    minRetainedFraction, closeKernelSize, 0.92, 5.0, 16.0);
+        }
+
+        public Options(int boundaryThresholdStart, int boundaryThresholdStep,
+                       int boundaryThresholdAttempts, int minComponentArea,
+                       int minPartArea, double minPartAreaFraction, int maxParts,
+                       double minRetainedFraction, int closeKernelSize,
+                       double geometryMaxSaddleRatio, double geometryMinPeakRadius,
+                       double geometryMinPeakDistance) {
             this.boundaryThresholdStart = clamp(boundaryThresholdStart, 1, 255);
             this.boundaryThresholdStep = clamp(boundaryThresholdStep, 1, 64);
             this.boundaryThresholdAttempts = clamp(boundaryThresholdAttempts, 1, 12);
@@ -55,10 +69,13 @@ public final class BubblePopBoundarySplitter {
             this.minRetainedFraction = Math.max(0.1, Math.min(1.0, minRetainedFraction));
             int kernel = clamp(closeKernelSize, 1, 15);
             this.closeKernelSize = (kernel & 1) == 0 ? kernel + 1 : kernel;
+            this.geometryMaxSaddleRatio = Math.max(0.45, Math.min(1.15, geometryMaxSaddleRatio));
+            this.geometryMinPeakRadius = Math.max(2.0, Math.min(30.0, geometryMinPeakRadius));
+            this.geometryMinPeakDistance = Math.max(6.0, Math.min(80.0, geometryMinPeakDistance));
         }
 
         public static Options defaults() {
-            return new Options(176, 16, 5, 700, 120, 0.04, 4, 0.82, 3);
+            return new Options(176, 16, 5, 700, 120, 0.08, 4, 0.82, 3, 0.92, 5.0, 16.0);
         }
 
         private static int clamp(int value, int min, int max) {
@@ -75,10 +92,11 @@ public final class BubblePopBoundarySplitter {
         public final int outputComponents;
         public final int splitComponents;
         public final int boundaryThreshold;
+        public final String geometrySummary;
 
         private Result(Mat mask, Mat instances, int instanceCount,
                        int inputComponents, int outputComponents,
-                       int splitComponents, int boundaryThreshold) {
+                       int splitComponents, int boundaryThreshold, String geometrySummary) {
             this.mask = mask;
             this.instances = instances;
             this.instanceCount = instanceCount;
@@ -86,6 +104,7 @@ public final class BubblePopBoundarySplitter {
             this.outputComponents = outputComponents;
             this.splitComponents = splitComponents;
             this.boundaryThreshold = boundaryThreshold;
+            this.geometrySummary = geometrySummary;
         }
     }
 
@@ -117,6 +136,7 @@ public final class BubblePopBoundarySplitter {
         int splitCount = 0;
         int nextId = 1;
         int usedThreshold = -1;
+        GeometryStats geometryStats = new GeometryStats();
 
         try {
             if (inputMask.channels() == 1) {
@@ -177,7 +197,7 @@ public final class BubblePopBoundarySplitter {
                             // prerequisite. If it has no continuous seam, look for a
                             // geometrically narrow neck between two substantial lobes.
                             if (accepted == null) {
-                                accepted = tryGeometricSplit(component, boundaryRoi, options);
+                                accepted = tryGeometricSplit(component, boundaryRoi, options, geometryStats);
                             }
                         } finally {
                             boundaryRoi.release();
@@ -219,7 +239,7 @@ public final class BubblePopBoundarySplitter {
 
             int count = nextId - 1;
             return new Result(output, instances, count, inputCount - 1,
-                    count, splitCount, usedThreshold);
+                    count, splitCount, usedThreshold, geometryStats.summary(options));
         } catch (Throwable error) {
             output.release();
             instances.release();
@@ -302,14 +322,16 @@ public final class BubblePopBoundarySplitter {
      * multi-seed fragments produced by unconstrained watershed experiments.
      */
     private static Candidate tryGeometricSplit(
-            Mat component, Mat boundaryRoi, Options options) {
+            Mat component, Mat boundaryRoi, Options options, GeometryStats stats) {
         final int width = component.cols();
         final int height = component.rows();
         final int total = width * height;
         final int originalArea = Core.countNonZero(component);
-        if (originalArea < Math.max(options.minComponentArea, 700) || width < 3 || height < 3) {
+        if (originalArea < options.minComponentArea || width < 3 || height < 3) {
+            stats.rejectedTooSmall++;
             return null;
         }
+        stats.attempts++;
 
         Mat distance = new Mat();
         Mat dilated = new Mat();
@@ -339,7 +361,10 @@ public final class BubblePopBoundarySplitter {
 
             int peakCount = Imgproc.connectedComponentsWithStats(
                     peakMask, peakLabels, peakStats, peakCentroids, 8, CvType.CV_32S);
-            if (peakCount <= 2) return null;
+            if (peakCount <= 2) {
+                stats.rejectedNoPeaks++;
+                return null;
+            }
 
             float[] distanceData = new float[total];
             int[] peakIds = new int[total];
@@ -360,7 +385,7 @@ public final class BubblePopBoundarySplitter {
             List<Peak> peaks = new ArrayList<>();
             for (int id = 1; id < peakCount; id++) {
                 int index = maxIndex[id];
-                if (index >= 0 && maxRadius[id] >= 5.0f) {
+                if (index >= 0 && maxRadius[id] >= options.geometryMinPeakRadius) {
                     peaks.add(new Peak(index % width, index / width, maxRadius[id]));
                 }
             }
@@ -375,7 +400,8 @@ public final class BubblePopBoundarySplitter {
             for (Peak peak : peaks) {
                 boolean near = false;
                 for (Peak kept : separated) {
-                    if (Math.hypot(peak.x - kept.x, peak.y - kept.y) < 18.0) {
+                    if (Math.hypot(peak.x - kept.x, peak.y - kept.y)
+                            < options.geometryMinPeakDistance) {
                         near = true;
                         break;
                     }
@@ -383,7 +409,10 @@ public final class BubblePopBoundarySplitter {
                 if (!near) separated.add(peak);
                 if (separated.size() >= 8) break;
             }
-            if (separated.size() < 2) return null;
+            if (separated.size() < 2) {
+                stats.rejectedNoPeaks++;
+                return null;
+            }
 
             byte[] componentData = new byte[total];
             byte[] boundaryData = new byte[total];
@@ -433,13 +462,22 @@ public final class BubblePopBoundarySplitter {
                     saddleMap.release();
                 }
             }
-            if (first == null || second == null) return null;
+            if (first == null || second == null) {
+                stats.rejectedNoPath++;
+                return null;
+            }
+            stats.recordSaddle(bestRatio, bestBoundary);
 
-            // A deep geometric saddle is sufficient. A somewhat wider neck is
-            // accepted only when the model independently marks the same area.
-            boolean strongGeometricNeck = bestRatio <= 0.72;
-            boolean boundarySupportedNeck = bestRatio <= 0.88 && bestBoundary >= 155;
-            if (!strongGeometricNeck && !boundarySupportedNeck) return null;
+            // The first-button controls now tune this decision. Higher saddle
+            // ratios allow wider bridges; lower values are more conservative.
+            boolean strongGeometricNeck = bestRatio <= options.geometryMaxSaddleRatio;
+            boolean boundarySupportedNeck = bestRatio <= Math.min(1.15,
+                    options.geometryMaxSaddleRatio + 0.08)
+                    && bestBoundary >= options.boundaryThresholdStart;
+            if (!strongGeometricNeck && !boundarySupportedNeck) {
+                stats.rejectedNeckTooWide++;
+                return null;
+            }
 
             markers.create(height, width, CvType.CV_32SC1);
             markers.setTo(new Scalar(0));
@@ -480,8 +518,11 @@ public final class BubblePopBoundarySplitter {
             }
 
             int minimumArea = Math.max(options.minPartArea,
-                    (int) Math.ceil(originalArea * 0.12));
-            if (firstArea < minimumArea || secondArea < minimumArea) return null;
+                    (int) Math.ceil(originalArea * options.minPartAreaFraction));
+            if (firstArea < minimumArea || secondArea < minimumArea) {
+                stats.rejectedPartTooSmall++;
+                return null;
+            }
 
             byte[] splitMask = new byte[total];
             int[] splitLabels = new int[total];
@@ -493,7 +534,11 @@ public final class BubblePopBoundarySplitter {
                     retainedArea++;
                 }
             }
-            if (retainedArea < originalArea * options.minRetainedFraction) return null;
+            if (retainedArea < originalArea * options.minRetainedFraction) {
+                stats.rejectedRetainedArea++;
+                return null;
+            }
+            stats.accepted++;
 
             Mat retained = new Mat(height, width, CvType.CV_8UC1);
             retained.put(0, 0, splitMask);
@@ -570,6 +615,40 @@ public final class BubblePopBoundarySplitter {
             }
         }
         return max;
+    }
+
+    private static final class GeometryStats {
+        int attempts;
+        int rejectedTooSmall;
+        int rejectedNoPeaks;
+        int rejectedNoPath;
+        int rejectedNeckTooWide;
+        int rejectedPartTooSmall;
+        int rejectedRetainedArea;
+        int accepted;
+        double bestSaddleRatio = Double.POSITIVE_INFINITY;
+        int bestBoundary;
+
+        void recordSaddle(double ratio, int boundary) {
+            if (ratio < bestSaddleRatio) {
+                bestSaddleRatio = ratio;
+                bestBoundary = boundary;
+            }
+        }
+
+        String summary(Options options) {
+            String best = Double.isInfinite(bestSaddleRatio)
+                    ? "нет" : (Math.round(bestSaddleRatio * 100.0) + "%");
+            return "Геометрия: попыток " + attempts
+                    + ", разделено " + accepted
+                    + ", недостаточно центров " + rejectedNoPeaks
+                    + ", нет пути " + rejectedNoPath
+                    + ", перемычка шире порога " + rejectedNeckTooWide
+                    + ", части малы " + rejectedPartTooSmall
+                    + ", потеря площади " + rejectedRetainedArea
+                    + ", лучшая перемычка " + best
+                    + " / порог " + Math.round(options.geometryMaxSaddleRatio * 100.0) + "%";
+        }
     }
 
     private static final class Peak {
