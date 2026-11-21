@@ -457,6 +457,42 @@ class BubblePopDiagnosticActivity : Activity() {
                     paint.color = palette[index % palette.size]
                     canvas.drawPath(path, paint)
                 }
+                val geometryTraces = result!!.geometryTraces
+                val tracePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style = Paint.Style.STROKE
+                    strokeWidth = max(3f, original.width / 350f)
+                }
+                for (trace in geometryTraces) {
+                    tracePaint.color = 0xFFFFD60A.toInt()
+                    for (peak in trace.peaks) {
+                        canvas.drawCircle(peak.x.toFloat(), peak.y.toFloat(),
+                            max(5f, peak.radius * 0.45f), tracePaint)
+                    }
+                    if (trace.firstX >= 0 && trace.secondX >= 0) {
+                        tracePaint.color = 0xFF30D158.toInt()
+                        canvas.drawLine(trace.firstX.toFloat(), trace.firstY.toFloat(),
+                            trace.secondX.toFloat(), trace.secondY.toFloat(), tracePaint)
+                        canvas.drawCircle(trace.firstX.toFloat(), trace.firstY.toFloat(), 9f, tracePaint)
+                        tracePaint.color = 0xFF64D2FF.toInt()
+                        canvas.drawCircle(trace.secondX.toFloat(), trace.secondY.toFloat(), 9f, tracePaint)
+                    }
+                    if (trace.saddleX >= 0 && trace.saddleY >= 0) {
+                        tracePaint.color = 0xFFFF453A.toInt()
+                        canvas.drawCircle(trace.saddleX.toFloat(), trace.saddleY.toFloat(), 8f, tracePaint)
+                    }
+                }
+                val traceReport = geometryTraces.mapIndexed { index, trace ->
+                    val centers = if (trace.firstX >= 0) {
+                        val ratioText = if (trace.saddleRatio.isNaN()) "—"
+                            else ((trace.saddleRatio * 100).roundToInt()).toString() + "%"
+                        "центры (${trace.firstX},${trace.firstY})–(${trace.secondX},${trace.secondY}), " +
+                            "седло (${trace.saddleX},${trace.saddleY}), ratio $ratioText"
+                    } else {
+                        "центры не выбраны; кандидатов ${trace.rawPeakComponents}, после NMS ${trace.separatedPeaks}"
+                    }
+                    "#${index + 1}: $centers; watershed ${trace.firstArea}/${trace.secondArea}, " +
+                        "минимум ${trace.minimumPartArea}, сохранено ${trace.retainedArea}/${trace.componentArea}; ${trace.outcome}"
+                }.joinToString("\\n")
                 val elapsedMs = SystemClock.elapsedRealtime() - startedAt
                 val finalBitmap = resultBitmap
                 val inputCount = result!!.inputComponents
@@ -478,7 +514,7 @@ class BubblePopDiagnosticActivity : Activity() {
                 main.post {
                     if (!isFinishing) {
                         preview.setImageBitmap(finalBitmap)
-                        status.text = "Boundary + geometry: исходных областей $inputCount, итоговых областей $outputCount, разделено: $splitCount. $boundaryInfo. ${result!!.geometrySummary}. Контуров: $contourCount. Вершин: $points. Время: ${elapsedMs} мс."
+                        status.text = "Boundary + geometry: исходных областей $inputCount, итоговых областей $outputCount, разделено: $splitCount. $boundaryInfo. ${result!!.geometrySummary}.\\nТрассировка попыток:\\n$traceReport\\nМетки: жёлтые круги — кандидаты центров; зелёный/голубой — выбранная пара; красный — седловая точка. Контуров: $contourCount. Вершин: $points. Время: ${elapsedMs} мс."
                     } else {
                         finalBitmap.recycle()
                     }
