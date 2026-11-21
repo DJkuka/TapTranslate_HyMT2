@@ -75,6 +75,10 @@ class BubblePopDiagnosticActivity : Activity() {
             text = "Показать карту границ"
             setOnClickListener { runBoundaryDiagnostic() }
         })
+        root.addView(Button(this).apply {
+            text = "Экспериментально разделить смежные баблы"
+            setOnClickListener { runWatershedDiagnostic() }
+        })
         status = TextView(this).apply { text = "Изображение не выбрано."; textSize = 13f }
         root.addView(status)
         preview = ImageView(this).apply { adjustViewBounds = true; scaleType = ImageView.ScaleType.FIT_CENTER }
@@ -239,6 +243,104 @@ class BubblePopDiagnosticActivity : Activity() {
             } finally {
                 boundary?.release()
                 rgba?.release()
+                mat?.release()
+                segmenter?.close()
+                if (!inputBitmap.isRecycled) inputBitmap.recycle()
+            }
+        }
+    }
+
+
+    /** Experimental watershed comparison. Original mask remains unchanged. */
+    private fun runWatershedDiagnostic() {
+        val original = source ?: run {
+            Toast.makeText(this, "Сначала выбери изображение", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val inputBitmap = try {
+            original.copy(Bitmap.Config.ARGB_8888, false)
+        } catch (t: Throwable) {
+            status.text = "Не удалось подготовить копию изображения: ${t.message}"
+            return
+        } ?: run {
+            status.text = "Не удалось создать копию изображения."
+            return
+        }
+        status.text = "Экспериментальное разделение смежных баблов…"
+        thread(name = "BubblePopWatershedDiagnostic") {
+            val startedAt = SystemClock.elapsedRealtime()
+            var segmenter: BubblePopSegmenter? = null
+            var mat: Mat? = null
+            var mask: Mat? = null
+            var boundary: Mat? = null
+            var splitMask: Mat? = null
+            var overlay: Bitmap? = null
+            try {
+                val model = File(cacheDir, "bubblepop_model_fp16.onnx")
+                if (!model.exists() || model.length() < 100_000) {
+                    assets.open("models/bubblepop/model_fp16.onnx").use { input ->
+                        FileOutputStream(model).use { output -> input.copyTo(output) }
+                    }
+                }
+                check(OpenCVUtils.init(applicationContext)) { "OpenCV initialization failed" }
+                segmenter = BubblePopSegmenter(model.absolutePath)
+                mat = Mat()
+                Utils.bitmapToMat(inputBitmap, mat)
+                // Two model passes for now: preserve the baseline API and compare raw outputs.
+                mask = segmenter.getMask(mat, null)
+                boundary = segmenter.getBoundaryMap(mat)
+                val split = BubblePopWatershedSplitter.split(mat, mask, boundary)
+                splitMask = split.mask
+
+                val contours = ArrayList<MatOfPoint>()
+                val hierarchy = Mat()
+                Imgproc.findContours(splitMask, contours, hierarchy, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+                hierarchy.release()
+                val resultBitmap = original.copy(Bitmap.Config.ARGB_8888, true)
+                val canvas = Canvas(resultBitmap)
+                val palette = intArrayOf(
+                    0xFFFF453A.toInt(), 0xFF30D158.toInt(), 0xFF0A84FF.toInt(),
+                    0xFFFF9F0A.toInt(), 0xFFBF5AF2.toInt(), 0xFF64D2FF.toInt(),
+                    0xFFFF375F.toInt(), 0xFFAC8E68.toInt()
+                )
+                val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style = Paint.Style.STROKE
+                    strokeWidth = max(2f, original.width / 500f)
+                }
+                var points = 0
+                for ((index, contour) in contours.withIndex()) {
+                    val pts = contour.toArray()
+                    if (pts.size < 3) continue
+                    points += pts.size
+                    val path = Path().apply {
+                        moveTo(pts[0].x.toFloat(), pts[0].y.toFloat())
+                        for (i in 1 until pts.size) lineTo(pts[i].x.toFloat(), pts[i].y.toFloat())
+                        close()
+                    }
+                    paint.color = palette[index % palette.size]
+                    canvas.drawPath(path, paint)
+                }
+                contours.forEach { it.release() }
+                val elapsedMs = SystemClock.elapsedRealtime() - startedAt
+                val finalBitmap = resultBitmap
+                val inputCount = split.inputComponents
+                val outputCount = split.outputComponents
+                val splitCount = split.splitComponents
+                main.post {
+                    if (!isFinishing) {
+                        preview.setImageBitmap(finalBitmap)
+                        status.text = "Watershed: исходных областей $inputCount, после разделения $outputCount, разделено крупных областей: $splitCount. Контуров: ${contours.size}. Вершин: $points. Время: ${elapsedMs} мс. Цвета различают найденные области."
+                    } else {
+                        finalBitmap.recycle()
+                    }
+                }
+            } catch (t: Throwable) {
+                overlay?.recycle()
+                main.post { status.text = "Ошибка watershed: ${t.javaClass.simpleName}: ${t.message}" }
+            } finally {
+                splitMask?.release()
+                boundary?.release()
+                mask?.release()
                 mat?.release()
                 segmenter?.close()
                 if (!inputBitmap.isRecycled) inputBitmap.recycle()
