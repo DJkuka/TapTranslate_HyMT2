@@ -4,6 +4,8 @@ import org.opencv.core.Core;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
 import org.opencv.core.MatOfPoint;
+import org.opencv.core.MatOfInt;
+import org.opencv.core.MatOfInt4;
 import org.opencv.core.Point;
 import org.opencv.core.Rect;
 import org.opencv.core.Scalar;
@@ -221,6 +223,13 @@ public final class BubblePopBoundarySplitter {
                             if (accepted == null) {
                                 accepted = tryGeometricSplit(component, boundaryRoi, options,
                                         geometryStats, x, y);
+                            }
+                            // Independent contour-concavity method: only runs when
+                            // boundary and distance-transform geometry did not split.
+                            if (accepted == null) {
+                                accepted = tryConcavitySplit(component, geometryStats, x, y,
+                                        options.minPartArea, options.minPartAreaFraction,
+                                        options.minRetainedFraction);
                             }
                         } finally {
                             boundaryRoi.release();
@@ -625,6 +634,179 @@ public final class BubblePopBoundarySplitter {
         }
     }
 
+    /**
+     * Experimental concavity-based split. It pairs deep convexity defects on
+     * opposite sides of a merged silhouette, cuts between their far points,
+     * and accepts only a cut that creates two substantial connected interiors.
+     * This is diagnostic-only and does not affect the live OCR path.
+     */
+    private static Candidate tryConcavitySplit(Mat component, GeometryStats stats,
+            int offsetX, int offsetY, int configuredMinPartArea,
+            double minPartAreaFraction, double minRetainedFraction) {
+        stats.concavityAttempts++;
+        Mat contourInput = component.clone();
+        List<MatOfPoint> contours = new ArrayList<>();
+        Mat hierarchy = new Mat();
+        MatOfInt hull = new MatOfInt();
+        MatOfInt4 defects = new MatOfInt4();
+        Mat barrier = Mat.zeros(component.size(), CvType.CV_8UC1);
+        Mat cut = new Mat();
+        Mat labels = new Mat();
+        Mat ccStats = new Mat();
+        Mat centroids = new Mat();
+        try {
+            Imgproc.findContours(contourInput, contours, hierarchy,
+                    Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_NONE);
+            if (contours.isEmpty()) {
+                stats.concavityRejectedNoDefects++;
+                return null;
+            }
+            MatOfPoint contour = Collections.max(contours, new Comparator<MatOfPoint>() {
+                @Override public int compare(MatOfPoint a, MatOfPoint b) {
+                    return Double.compare(Imgproc.contourArea(a), Imgproc.contourArea(b));
+                }
+            });
+            if (contour.rows() < 5) {
+                stats.concavityRejectedNoDefects++;
+                return null;
+            }
+            Imgproc.convexHull(contour, hull, false);
+            Imgproc.convexityDefects(contour, hull, defects);
+            int[] d = defects.toArray();
+            if (d.length < 8) {
+                stats.concavityRejectedNoDefects++;
+                return null;
+            }
+
+            final int width = component.cols();
+            final int height = component.rows();
+            final int originalArea = Core.countNonZero(component);
+            final int minArea = Math.max(configuredMinPartArea,
+                    (int) Math.ceil(originalArea * minPartAreaFraction));
+            byte[] maskData = new byte[width * height];
+            component.get(0, 0, maskData);
+            int bestA = -1, bestB = -1;
+            double bestScore = Double.NEGATIVE_INFINITY;
+            int bestRetained = 0, bestAreaA = 0, bestAreaB = 0;
+            int[] bestLabels = null;
+            int[] bestIdMap = null;
+            int defectCount = d.length / 4;
+            double maxSpan = Math.hypot(width, height) * 0.58;
+            for (int i = 0; i < defectCount; i++) {
+                int farI = d[i * 4 + 2];
+                double depthI = d[i * 4 + 3] / 256.0;
+                if (depthI < 4.0) continue;
+                Point pi = contour.toArray()[farI];
+                for (int j = i + 1; j < defectCount; j++) {
+                    int farJ = d[j * 4 + 2];
+                    double depthJ = d[j * 4 + 3] / 256.0;
+                    if (depthJ < 4.0 || farI == farJ) continue;
+                    Point pj = contour.toArray()[farJ];
+                    double span = Math.hypot(pi.x - pj.x, pi.y - pj.y);
+                    if (span < 8.0 || span > maxSpan) continue;
+
+                    // A candidate chord must stay inside the foreground mask.
+                    int samples = Math.max(8, (int) Math.ceil(span));
+                    int inside = 0;
+                    for (int k = 0; k <= samples; k++) {
+                        double t = k / (double) samples;
+                        int sx = (int) Math.round(pi.x + (pj.x - pi.x) * t);
+                        int sy = (int) Math.round(pi.y + (pj.y - pi.y) * t);
+                        if (sx >= 0 && sy >= 0 && sx < width && sy < height
+                                && (maskData[sy * width + sx] & 0xFF) != 0) inside++;
+                    }
+                    if (inside < samples * 0.96) continue;
+
+                    barrier.setTo(new Scalar(0));
+                    Imgproc.line(barrier, pi, pj, new Scalar(255), 3, Imgproc.LINE_8, 0);
+                    Core.bitwise_not(barrier, cut);
+                    Core.bitwise_and(component, cut, cut);
+                    int count = Imgproc.connectedComponentsWithStats(
+                            cut, labels, ccStats, centroids, 8, CvType.CV_32S);
+                    if (count < 3) continue;
+
+                    int firstId = -1, secondId = -1;
+                    int firstSize = 0, secondSize = 0;
+                    for (int id = 1; id < count; id++) {
+                        int area = (int) ccStats.get(id, Imgproc.CC_STAT_AREA)[0];
+                        if (area > firstSize) {
+                            secondSize = firstSize; secondId = firstId;
+                            firstSize = area; firstId = id;
+                        } else if (area > secondSize) {
+                            secondSize = area; secondId = id;
+                        }
+                    }
+                    int retained = firstSize + secondSize;
+                    if (firstSize < minArea || secondSize < minArea
+                            || retained < originalArea * minRetainedFraction) continue;
+
+                    // Prefer balanced large parts, then deeper and shorter concavity chords.
+                    double balance = Math.min(firstSize, secondSize)
+                            / (double) Math.max(firstSize, secondSize);
+                    double retainedFraction = retained / (double) originalArea;
+                    double depthScore = Math.min(depthI, depthJ);
+                    double score = balance * 2.0 + retainedFraction
+                            + Math.min(12.0, depthScore) * 0.025 - span / maxSpan * 0.15;
+                    if (score <= bestScore) continue;
+                    int[] localLabels = new int[width * height];
+                    labels.get(0, 0, localLabels);
+                    int[] idMap = new int[count];
+                    idMap[firstId] = 1;
+                    idMap[secondId] = 2;
+                    int[] remappedLabels = new int[localLabels.length];
+                    byte[] retainedMask = new byte[localLabels.length];
+                    for (int q = 0; q < localLabels.length; q++) {
+                        int id = localLabels[q];
+                        if (id == firstId || id == secondId) {
+                            remappedLabels[q] = idMap[id];
+                            retainedMask[q] = (byte) 255;
+                        }
+                    }
+                    bestScore = score;
+                    bestA = (int) Math.round(pi.x);
+                    bestB = (int) Math.round(pj.x);
+                    bestRetained = retained;
+                    bestAreaA = firstSize;
+                    bestAreaB = secondSize;
+                    bestLabels = remappedLabels;
+                    bestIdMap = new int[] {0, 1, 2};
+                    stats.concavityBestDepth = Math.max(stats.concavityBestDepth,
+                            Math.min(depthI, depthJ));
+                    stats.concavityBestRetained = retained;
+                    stats.concavityBestAreaA = firstSize;
+                    stats.concavityBestAreaB = secondSize;
+                    stats.concavityFirstX = offsetX + (int) Math.round(pi.x);
+                    stats.concavityFirstY = offsetY + (int) Math.round(pi.y);
+                    stats.concavitySecondX = offsetX + (int) Math.round(pj.x);
+                    stats.concavitySecondY = offsetY + (int) Math.round(pj.y);
+                    stats.concavityLabels = bestLabels;
+                    stats.concavityMask = retainedMask;
+                }
+            }
+            if (bestLabels == null) {
+                stats.concavityRejectedGeometry++;
+                return null;
+            }
+            Mat retainedMask = new Mat(height, width, CvType.CV_8UC1);
+            retainedMask.put(0, 0, stats.concavityMask);
+            Mat retainedLabels = new Mat(height, width, CvType.CV_32SC1);
+            retainedLabels.put(0, 0, bestLabels);
+            stats.concavityAccepted++;
+            return new Candidate(retainedMask, retainedLabels, new int[] {0, 1, 2}, 2);
+        } finally {
+            contourInput.release();
+            hierarchy.release();
+            hull.release();
+            defects.release();
+            barrier.release();
+            cut.release();
+            labels.release();
+            ccStats.release();
+            centroids.release();
+            for (MatOfPoint c : contours) c.release();
+        }
+    }
+
     private static SaddleMap widestPathSaddles(Peak start, float[] distance,
                                                 byte[] mask, int width, int height) {
         int total = width * height;
@@ -744,7 +926,10 @@ public final class BubblePopBoundarySplitter {
                     + " / порог " + Math.round(options.geometryMaxSaddleRatio * 100.0) + "%"
                     + ", радиус центра ≥ " + options.geometryMinPeakRadius + " px"
                     + ", расстояние между центрами ≥ " + options.geometryMinPeakDistance + " px"
-                    + ", boundary start = " + options.boundaryThresholdStart;
+                    + ", boundary start = " + options.boundaryThresholdStart
+                    + "; concavity: попыток " + concavityAttempts + ", разделено " + concavityAccepted
+                    + ", нет глубоких дефектов " + concavityRejectedNoDefects
+                    + ", неподходящая геометрия " + concavityRejectedGeometry;
         }
     }
 
