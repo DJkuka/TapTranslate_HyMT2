@@ -175,8 +175,11 @@ jobs:
           set -euo pipefail
           decoded="build/merge/base_decoded"
           trace="build/ocr-live-call-chain-trace"
+          if [ ! -d "$decoded" ]; then
+            echo "Decoded Apktool tree is unavailable after merge; optional call-chain export skipped."
+            exit 0
+          fi
           mkdir -p "$trace/smali"
-          test -d "$decoded"
           for root in "$decoded"/smali*; do
             [ -d "$root" ] || continue
             for package in vh xh loh Loh rh nf gi gf mh qh; do
@@ -223,6 +226,7 @@ jobs:
           find "$trace" -type f -printf '%p %s bytes\n' | sort
 
       - name: Upload live OCR call-chain trace
+        if: hashFiles('build/ocr-live-call-chain-trace/**') != ''
         uses: actions/upload-artifact@v4
         with:
           name: TapTranslate-OCR-live-call-chain
