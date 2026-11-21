@@ -112,15 +112,20 @@ public final class BubblePopBoundarySplitter {
 
                     Candidate accepted = null;
                     if (area >= MIN_COMPONENT_AREA) {
-                        for (int threshold : BOUNDARY_THRESHOLDS) {
-                            Candidate candidate = tryBoundarySplit(
-                                    component, boundary8.submat(rect), threshold, closeKernel);
-                            if (candidate != null) {
-                                accepted = candidate;
-                                usedThreshold = usedThreshold < 0
-                                        ? threshold : Math.min(usedThreshold, threshold);
-                                break; // strongest boundary threshold that yields a valid split
+                        Mat boundaryRoi = boundary8.submat(rect);
+                        try {
+                            for (int threshold : BOUNDARY_THRESHOLDS) {
+                                Candidate candidate = tryBoundarySplit(
+                                        component, boundaryRoi, threshold, closeKernel);
+                                if (candidate != null) {
+                                    accepted = candidate;
+                                    usedThreshold = usedThreshold < 0
+                                            ? threshold : Math.min(usedThreshold, threshold);
+                                    break;
+                                }
                             }
+                        } finally {
+                            boundaryRoi.release();
                         }
                     }
 
@@ -128,7 +133,9 @@ public final class BubblePopBoundarySplitter {
                         copyAsOneInstance(component, output.submat(rect),
                                 instances.submat(rect), nextId++);
                     } else {
-                        accepted.mask.copyTo(output.submat(rect));
+                        Mat outputRoi = output.submat(rect);
+                        accepted.mask.copyTo(outputRoi);
+                        outputRoi.release();
                         int[] localIds = new int[accepted.labels.rows() * accepted.labels.cols()];
                         accepted.labels.get(0, 0, localIds);
                         int[] remapped = new int[localIds.length];
@@ -141,7 +148,9 @@ public final class BubblePopBoundarySplitter {
                         Mat localInstances = new Mat(
                                 accepted.labels.rows(), accepted.labels.cols(), CvType.CV_32SC1);
                         localInstances.put(0, 0, remapped);
-                        localInstances.copyTo(instances.submat(rect));
+                        Mat instanceRoi = instances.submat(rect);
+                        localInstances.copyTo(instanceRoi);
+                        instanceRoi.release();
                         localInstances.release();
                         nextId += accepted.partCount;
                         splitCount++;
