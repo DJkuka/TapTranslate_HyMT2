@@ -49,12 +49,17 @@ public final class BubblePopWatershedSplitter {
 
     public static final class Result {
         public final Mat mask;
+        public final Mat instances;
+        public final int instanceCount;
         public final int inputComponents;
         public final int outputComponents;
         public final int splitComponents;
 
-        private Result(Mat mask, int inputComponents, int outputComponents, int splitComponents) {
+        private Result(Mat mask, Mat instances, int instanceCount,
+                       int inputComponents, int outputComponents, int splitComponents) {
             this.mask = mask;
+            this.instances = instances;
+            this.instanceCount = instanceCount;
             this.inputComponents = inputComponents;
             this.outputComponents = outputComponents;
             this.splitComponents = splitComponents;
@@ -77,8 +82,10 @@ public final class BubblePopWatershedSplitter {
         Mat stats = new Mat();
         Mat centroids = new Mat();
         Mat output = Mat.zeros(inputMask.size(), CvType.CV_8UC1);
+        Mat instances = Mat.zeros(inputMask.size(), CvType.CV_32SC1);
         int inputCount = 0;
         int splitCount = 0;
+        int nextInstanceId = 1;
         try {
             if (inputMask.channels() == 1) {
                 inputMask.convertTo(binary, CvType.CV_8UC1);
@@ -105,24 +112,31 @@ public final class BubblePopWatershedSplitter {
                 Core.compare(labelRoi, new Scalar(id), component, Core.CMP_EQ);
                 labelRoi.release();
 
-                boolean accepted = false;
+                int producedInstances = 0;
                 if (area >= MIN_COMPONENT_AREA) {
-                    accepted = trySplitComponent(source, boundaryMap, component, rect, output);
+                    producedInstances = trySplitComponent(
+                            source, boundaryMap, component, rect, output, instances, nextInstanceId);
                 }
-                if (accepted) {
+                if (producedInstances > 1) {
                     splitCount++;
+                    nextInstanceId += producedInstances;
                 } else {
                     Mat outputRoi = output.submat(rect);
                     Core.bitwise_or(outputRoi, component, outputRoi);
                     outputRoi.release();
+                    Mat instanceRoi = instances.submat(rect);
+                    instanceRoi.setTo(new Scalar(nextInstanceId), component);
+                    instanceRoi.release();
+                    nextInstanceId++;
                 }
                 component.release();
             }
 
             int outputCount = countForegroundComponents(output);
-            return new Result(output, inputCount - 1, outputCount - 1, splitCount);
+            return new Result(output, instances, nextInstanceId - 1, inputCount - 1, outputCount - 1, splitCount);
         } catch (Throwable t) {
             output.release();
+            instances.release();
             throw t;
         } finally {
             binary.release();
@@ -132,8 +146,9 @@ public final class BubblePopWatershedSplitter {
         }
     }
 
-    private static boolean trySplitComponent(
-            Mat source, Mat boundaryMap, Mat component, Rect rect, Mat output) {
+    private static int trySplitComponent(
+            Mat source, Mat boundaryMap, Mat component, Rect rect,
+            Mat output, Mat instances, int firstInstanceId) {
         Mat distance = new Mat();
         Mat dilated = new Mat();
         Mat peakMask = new Mat();
@@ -155,7 +170,7 @@ public final class BubblePopWatershedSplitter {
             int peakCount = Imgproc.connectedComponentsWithStats(
                     peakMask, peakLabels, peakStats, peakCentroids, 8, CvType.CV_32S);
             if (peakCount <= 2) {
-                return false;
+                return 0;
             }
 
             List<Peak> peaks = collectPeaks(distance, peakLabels, peakCount);
@@ -225,27 +240,46 @@ public final class BubblePopWatershedSplitter {
                 return false;
             }
 
-            byte[] splitData = new byte[markerData.length];
-            for (int i = 0; i < markerData.length; i++) {
-                if ((componentData[i] & 0xFF) != 0 && markerData[i] >= 2) {
-                    splitData[i] = (byte) 255;
+            // Preserve instance IDs until contour extraction. A binary union here
+            // can merge regions again when they touch diagonally.
+            int[] labelToInstance = new int[regionAreas.length];
+            int acceptedRegions = 0;
+            for (int label = 2; label < regionAreas.length; label++) {
+                if (regionAreas[label] >= minRegionArea) {
+                    labelToInstance[label] = firstInstanceId + acceptedRegions;
+                    acceptedRegions++;
                 }
             }
+            if (acceptedRegions < 2) return 0;
+
+            byte[] splitData = new byte[markerData.length];
+            int[] instanceData = new int[markerData.length];
+            for (int i = 0; i < markerData.length; i++) {
+                int label = markerData[i];
+                if ((componentData[i] & 0xFF) != 0
+                        && label >= 2 && label < labelToInstance.length
+                        && labelToInstance[label] != 0) {
+                    splitData[i] = (byte) 255;
+                    instanceData[i] = labelToInstance[label];
+                }
+            }
+
             Mat splitLocal = new Mat(component.rows(), component.cols(), CvType.CV_8UC1);
             splitLocal.put(0, 0, splitData);
-            int localComponents = countForegroundComponents(splitLocal);
-            if (localComponents < 2) {
-                splitLocal.release();
-                return false;
-            }
+            Mat instanceLocal = new Mat(component.rows(), component.cols(), CvType.CV_32SC1);
+            instanceLocal.put(0, 0, instanceData);
 
             Mat outputRoi = output.submat(rect);
             splitLocal.copyTo(outputRoi);
             outputRoi.release();
+            Mat instanceRoi = instances.submat(rect);
+            instanceLocal.copyTo(instanceRoi);
+            instanceRoi.release();
             splitLocal.release();
+            instanceLocal.release();
             System.out.println("BubblePop watershed: component split into "
-                    + localComponents + " regions from " + seeds.size() + " markers");
-            return true;
+                    + acceptedRegions + " labeled regions from " + seeds.size() + " markers");
+            return acceptedRegions;
         } finally {
             distance.release();
             dilated.release();
