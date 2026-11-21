@@ -4,10 +4,18 @@ import org.opencv.core.Core;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
 import org.opencv.core.MatOfPoint;
+import org.opencv.core.Point;
 import org.opencv.core.Rect;
 import org.opencv.core.Scalar;
 import org.opencv.core.Size;
 import org.opencv.imgproc.Imgproc;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.PriorityQueue;
 
 /**
  * Diagnostic instance separation driven by BubblePop's predicted boundary head.
@@ -164,6 +172,13 @@ public final class BubblePopBoundarySplitter {
                                     break;
                                 }
                             }
+
+                            // The model boundary head is supporting evidence, not a hard
+                            // prerequisite. If it has no continuous seam, look for a
+                            // geometrically narrow neck between two substantial lobes.
+                            if (accepted == null) {
+                                accepted = tryGeometricSplit(component, boundaryRoi, options);
+                            }
                         } finally {
                             boundaryRoi.release();
                         }
@@ -274,6 +289,318 @@ public final class BubblePopBoundarySplitter {
             labels.release();
             stats.release();
             centroids.release();
+        }
+    }
+
+    /**
+     * Detect and split one narrow geometric neck even when BubblePop did not
+     * predict a usable internal boundary. The distance-transform saddle is
+     * measured along the best path through the mask, so curved and offset
+     * bridges are handled without drawing a straight chord between lobe centers.
+     *
+     * Only two lobe markers are used. This deliberately avoids the small
+     * multi-seed fragments produced by unconstrained watershed experiments.
+     */
+    private static Candidate tryGeometricSplit(
+            Mat component, Mat boundaryRoi, Options options) {
+        final int width = component.cols();
+        final int height = component.rows();
+        final int total = width * height;
+        final int originalArea = Core.countNonZero(component);
+        if (originalArea < Math.max(options.minComponentArea, 700) || width < 3 || height < 3) {
+            return null;
+        }
+
+        Mat distance = new Mat();
+        Mat dilated = new Mat();
+        Mat peakMask = new Mat();
+        Mat radiusMask = new Mat();
+        Mat peakLabels = new Mat();
+        Mat peakStats = new Mat();
+        Mat peakCentroids = new Mat();
+        Mat markers = new Mat();
+        Mat background = new Mat();
+        Mat inverseDistance = new Mat();
+        Mat boundary8 = new Mat();
+        Mat terrain = new Mat();
+        Mat watershedImage = new Mat();
+        try {
+            Imgproc.distanceTransform(component, distance, Imgproc.DIST_L2, 5);
+            Mat peakKernel = Imgproc.getStructuringElement(
+                    Imgproc.MORPH_ELLIPSE, new Size(15, 15));
+            try {
+                Imgproc.dilate(distance, dilated, peakKernel);
+            } finally {
+                peakKernel.release();
+            }
+            Core.compare(distance, dilated, peakMask, Core.CMP_GE);
+            Core.compare(distance, new Scalar(5.0), radiusMask, Core.CMP_GE);
+            Core.bitwise_and(peakMask, radiusMask, peakMask);
+
+            int peakCount = Imgproc.connectedComponentsWithStats(
+                    peakMask, peakLabels, peakStats, peakCentroids, 8, CvType.CV_32S);
+            if (peakCount <= 2) return null;
+
+            float[] distanceData = new float[total];
+            int[] peakIds = new int[total];
+            distance.get(0, 0, distanceData);
+            peakLabels.get(0, 0, peakIds);
+
+            float[] maxRadius = new float[peakCount];
+            int[] maxIndex = new int[peakCount];
+            Arrays.fill(maxIndex, -1);
+            for (int i = 0; i < total; i++) {
+                int id = peakIds[i];
+                if (id > 0 && id < peakCount && distanceData[i] > maxRadius[id]) {
+                    maxRadius[id] = distanceData[i];
+                    maxIndex[id] = i;
+                }
+            }
+
+            List<Peak> peaks = new ArrayList<>();
+            for (int id = 1; id < peakCount; id++) {
+                int index = maxIndex[id];
+                if (index >= 0 && maxRadius[id] >= 5.0f) {
+                    peaks.add(new Peak(index % width, index / width, maxRadius[id]));
+                }
+            }
+            Collections.sort(peaks, new Comparator<Peak>() {
+                @Override public int compare(Peak a, Peak b) {
+                    return Float.compare(b.radius, a.radius);
+                }
+            });
+
+            // Non-maximum suppression: one representative for each broad lobe.
+            List<Peak> separated = new ArrayList<>();
+            for (Peak peak : peaks) {
+                boolean near = false;
+                for (Peak kept : separated) {
+                    if (Math.hypot(peak.x - kept.x, peak.y - kept.y) < 18.0) {
+                        near = true;
+                        break;
+                    }
+                }
+                if (!near) separated.add(peak);
+                if (separated.size() >= 8) break;
+            }
+            if (separated.size() < 2) return null;
+
+            byte[] componentData = new byte[total];
+            byte[] boundaryData = new byte[total];
+            component.get(0, 0, componentData);
+            if (boundaryRoi.depth() == CvType.CV_8U) {
+                boundaryRoi.get(0, 0, boundaryData);
+            } else {
+                Mat scaled = new Mat();
+                try {
+                    double scale = boundaryRoi.depth() == CvType.CV_32F
+                            || boundaryRoi.depth() == CvType.CV_64F ? 255.0 : 1.0;
+                    boundaryRoi.convertTo(scaled, CvType.CV_8UC1, scale);
+                    scaled.get(0, 0, boundaryData);
+                } finally {
+                    scaled.release();
+                }
+            }
+
+            Peak first = null;
+            Peak second = null;
+            double bestRatio = Double.POSITIVE_INFINITY;
+            int bestBoundary = 0;
+            for (int i = 0; i < separated.size(); i++) {
+                Peak a = separated.get(i);
+                SaddleMap saddleMap = widestPathSaddles(a, distanceData,
+                        componentData, width, height);
+                try {
+                    for (int j = i + 1; j < separated.size(); j++) {
+                        Peak b = separated.get(j);
+                        int target = b.y * width + b.x;
+                        float saddle = saddleMap.capacity[target];
+                        if (saddle < 0.0f) continue;
+                        double ratio = saddle / Math.max(1.0,
+                                Math.min(a.radius, b.radius));
+                        if (ratio >= bestRatio) continue;
+                        int saddleIndex = saddleMap.bottleneck[target];
+                        int sx = saddleIndex >= 0 ? saddleIndex % width : (a.x + b.x) / 2;
+                        int sy = saddleIndex >= 0 ? saddleIndex / width : (a.y + b.y) / 2;
+                        int boundaryStrength = maxBoundaryNear(
+                                boundaryData, sx, sy, width, height, 5);
+                        bestRatio = ratio;
+                        bestBoundary = boundaryStrength;
+                        first = a;
+                        second = b;
+                    }
+                } finally {
+                    saddleMap.release();
+                }
+            }
+            if (first == null || second == null) return null;
+
+            // A deep geometric saddle is sufficient. A somewhat wider neck is
+            // accepted only when the model independently marks the same area.
+            boolean strongGeometricNeck = bestRatio <= 0.72;
+            boolean boundarySupportedNeck = bestRatio <= 0.88 && bestBoundary >= 155;
+            if (!strongGeometricNeck && !boundarySupportedNeck) return null;
+
+            markers.create(height, width, CvType.CV_32SC1);
+            markers.setTo(new Scalar(0));
+            Core.bitwise_not(component, background);
+            markers.setTo(new Scalar(1), background);
+
+            int firstRadius = Math.max(2, Math.min(4, Math.round(first.radius * 0.18f)));
+            int secondRadius = Math.max(2, Math.min(4, Math.round(second.radius * 0.18f)));
+            Imgproc.circle(markers, new Point(first.x, first.y), firstRadius,
+                    new Scalar(2), -1, Imgproc.LINE_8, 0);
+            Imgproc.circle(markers, new Point(second.x, second.y), secondRadius,
+                    new Scalar(3), -1, Imgproc.LINE_8, 0);
+
+            Core.normalize(distance, inverseDistance, 255.0, 0.0,
+                    Core.NORM_MINMAX, CvType.CV_8UC1);
+            if (boundaryRoi.depth() == CvType.CV_8U) {
+                boundaryRoi.copyTo(boundary8);
+            } else {
+                double scale = boundaryRoi.depth() == CvType.CV_32F
+                        || boundaryRoi.depth() == CvType.CV_64F ? 255.0 : 1.0;
+                boundaryRoi.convertTo(boundary8, CvType.CV_8UC1, scale);
+            }
+            // Use mask geometry as the terrain. Boundary predictions reinforce
+            // an existing neck but artwork brightness and text strokes are excluded.
+            Core.addWeighted(inverseDistance, 0.72, boundary8, 0.90, 0.0, terrain);
+            Imgproc.cvtColor(terrain, watershedImage, Imgproc.COLOR_GRAY2BGR);
+            Imgproc.watershed(watershedImage, markers);
+
+            int[] markerData = new int[total];
+            markers.get(0, 0, markerData);
+            int firstArea = 0;
+            int secondArea = 0;
+            int retainedArea = 0;
+            for (int i = 0; i < total; i++) {
+                if ((componentData[i] & 0xFF) == 0) continue;
+                if (markerData[i] == 2) firstArea++;
+                else if (markerData[i] == 3) secondArea++;
+            }
+
+            int minimumArea = Math.max(options.minPartArea,
+                    (int) Math.ceil(originalArea * 0.12));
+            if (firstArea < minimumArea || secondArea < minimumArea) return null;
+
+            byte[] splitMask = new byte[total];
+            int[] splitLabels = new int[total];
+            for (int i = 0; i < total; i++) {
+                if ((componentData[i] & 0xFF) == 0) continue;
+                if (markerData[i] == 2 || markerData[i] == 3) {
+                    splitMask[i] = (byte) 255;
+                    splitLabels[i] = markerData[i] - 1;
+                    retainedArea++;
+                }
+            }
+            if (retainedArea < originalArea * options.minRetainedFraction) return null;
+
+            Mat retained = new Mat(height, width, CvType.CV_8UC1);
+            retained.put(0, 0, splitMask);
+            Mat labels = new Mat(height, width, CvType.CV_32SC1);
+            labels.put(0, 0, splitLabels);
+            int[] idMap = new int[] {0, 1, 2};
+            return new Candidate(retained, labels, idMap, 2);
+        } finally {
+            distance.release();
+            dilated.release();
+            peakMask.release();
+            radiusMask.release();
+            peakLabels.release();
+            peakStats.release();
+            peakCentroids.release();
+            markers.release();
+            background.release();
+            inverseDistance.release();
+            boundary8.release();
+            terrain.release();
+            watershedImage.release();
+        }
+    }
+
+    private static SaddleMap widestPathSaddles(Peak start, float[] distance,
+                                                byte[] mask, int width, int height) {
+        int total = width * height;
+        int sourceIndex = start.y * width + start.x;
+        float[] best = new float[total];
+        int[] bottleneck = new int[total];
+        Arrays.fill(best, -1.0f);
+        Arrays.fill(bottleneck, -1);
+        PriorityQueue<PathNode> queue = new PriorityQueue<>(new Comparator<PathNode>() {
+            @Override public int compare(PathNode a, PathNode b) {
+                return Float.compare(b.capacity, a.capacity);
+            }
+        });
+        best[sourceIndex] = distance[sourceIndex];
+        bottleneck[sourceIndex] = sourceIndex;
+        queue.add(new PathNode(sourceIndex, best[sourceIndex]));
+
+        while (!queue.isEmpty()) {
+            PathNode current = queue.poll();
+            if (current.capacity < best[current.index]) continue;
+            int x = current.index % width;
+            int y = current.index / width;
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    if (dx == 0 && dy == 0) continue;
+                    int nx = x + dx;
+                    int ny = y + dy;
+                    if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+                    int next = ny * width + nx;
+                    if ((mask[next] & 0xFF) == 0) continue;
+                    float capacity = Math.min(current.capacity, distance[next]);
+                    if (capacity > best[next]) {
+                        best[next] = capacity;
+                        bottleneck[next] = distance[next] < current.capacity
+                                ? next : bottleneck[current.index];
+                        queue.add(new PathNode(next, capacity));
+                    }
+                }
+            }
+        }
+        return new SaddleMap(best, bottleneck);
+    }
+
+    private static int maxBoundaryNear(
+            byte[] boundary, int cx, int cy, int width, int height, int radius) {
+        int max = 0;
+        for (int y = Math.max(0, cy - radius); y <= Math.min(height - 1, cy + radius); y++) {
+            for (int x = Math.max(0, cx - radius); x <= Math.min(width - 1, cx + radius); x++) {
+                max = Math.max(max, boundary[y * width + x] & 0xFF);
+            }
+        }
+        return max;
+    }
+
+    private static final class Peak {
+        final int x;
+        final int y;
+        final float radius;
+        Peak(int x, int y, float radius) {
+            this.x = x;
+            this.y = y;
+            this.radius = radius;
+        }
+    }
+
+    private static final class PathNode {
+        final int index;
+        final float capacity;
+        PathNode(int index, float capacity) {
+            this.index = index;
+            this.capacity = capacity;
+        }
+    }
+
+    private static final class SaddleMap {
+        final float[] capacity;
+        final int[] bottleneck;
+        SaddleMap(float[] capacity, int[] bottleneck) {
+            this.capacity = capacity;
+            this.bottleneck = bottleneck;
+        }
+        void release() {
+            // Primitive arrays are reclaimed by the runtime after this reference is dropped.
         }
     }
 
