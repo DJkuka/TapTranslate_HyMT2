@@ -201,62 +201,51 @@ object PaddleOcrLiveBridge {
             PaddleOcrTextLine(text, bounds, item.confidence.coerceIn(0f, 1f))
         }
 
-        // OCR remains authoritative: BubblePop is consulted only after PP-OCR has
-        // produced all text lines. It assigns lines to a layout region; it cannot
-        // add, remove, split or rewrite recognized text.
+        // First build PP-OCR text blocks using geometry alone. BubblePop is not
+        // allowed to influence which OCR lines are grouped into a translation block.
+        val ordered = detectedLines.sortedWith(compareBy<PaddleOcrTextLine> { it.getBounds().top }
+            .thenBy { it.getBounds().left })
+        val clusters = ArrayList<MutableList<PaddleOcrTextLine>>()
+        for (line in ordered) {
+            val target = clusters.lastOrNull()
+            val previous = target?.lastOrNull()
+            if (target != null && previous != null && canJoinAdjacentLines(previous, line)) {
+                target.add(line)
+            } else {
+                clusters.add(arrayListOf(line))
+            }
+        }
+
+        // Only after the PP-OCR blocks are complete do we associate each block
+        // with a BubblePop layout region. This association never changes OCR text,
+        // line membership, or the block's geometry.
         val bubbles = (detectedRegions ?: emptyList())
             .filter { it.getKind() == OcrRegionKind.BUBBLE_CONTAINER }
         val bubbleBounds = bubbles.map { region ->
             val b = region.getBounds()
             BubbleRegionMatcher.Bounds(b.left, b.top, b.right, b.bottom)
         }
-        val bubbleLines = LinkedHashMap<String, MutableList<PaddleOcrTextLine>>()
-        val freeGroups = ArrayList<PaddleOcrTextGroup>()
-        var associated = 0
-        detectedLines.forEachIndexed { index, line ->
-            val b = line.getBounds()
-            val container = BubbleRegionMatcher.findBestContainer(
-                b.left, b.top, b.right, b.bottom, bubbleBounds)
-            if (container >= 0 && container < bubbles.size) {
-                val id = bubbles[container].getId()
-                bubbleLines.getOrPut(id) { ArrayList() }.add(line)
-                associated++
-            } else {
-                freeGroups.add(PaddleOcrTextGroup(
-                    line.getText(), b, null, line.getConfidence(), 1, listOf(line)))
-            }
-            Log.i(TAG, "ocr_line[$index] bounds=${b.flattenToString()} bubble=${if (container >= 0 && container < bubbles.size) bubbles[container].getId() else "none"} text=${line.getText()}")
-        }
-
         val groups = ArrayList<PaddleOcrTextGroup>()
-        groups.addAll(freeGroups)
-        for ((bubbleId, lines) in bubbleLines) {
-            val ordered = lines.sortedWith(compareBy<PaddleOcrTextLine> { it.getBounds().top }
-                .thenBy { it.getBounds().left })
-            val clusters = ArrayList<MutableList<PaddleOcrTextLine>>()
-            for (line in ordered) {
-                val bounds = line.getBounds()
-                val target = clusters.lastOrNull()
-                val previous = target?.lastOrNull()
-                if (target != null && previous != null && canJoinAdjacentLines(previous, line)) {
-                    target.add(line)
-                } else {
-                    clusters.add(arrayListOf(line))
-                }
-            }
-            for (cluster in clusters) {
-                val union = Rect(cluster.first().getBounds())
-                cluster.drop(1).forEach { union.union(it.getBounds()) }
-                val text = cluster.map { it.getText() }.joinToString("\n")
-                val confidence = cluster.map { it.getConfidence() }.average().toFloat()
-                groups.add(PaddleOcrTextGroup(
-                    text, union, bubbleId, confidence, cluster.size, cluster))
-            }
+        var associated = 0
+        for ((index, cluster) in clusters.withIndex()) {
+            val union = Rect(cluster.first().getBounds())
+            cluster.drop(1).forEach { union.union(it.getBounds()) }
+            val text = cluster.map { it.getText() }.joinToString("\n")
+            val confidence = cluster.map { it.getConfidence() }.average().toFloat()
+            val container = BubbleRegionMatcher.findBestContainer(
+                union.left, union.top, union.right, union.bottom, bubbleBounds)
+            val bubbleId = if (container >= 0 && container < bubbles.size) {
+                associated++
+                bubbles[container].getId()
+            } else null
+            groups.add(PaddleOcrTextGroup(
+                text, union, bubbleId, confidence, cluster.size, cluster))
+            Log.i(TAG, "ocr_block[$index] lines=${cluster.size} bounds=${union.flattenToString()} bubble=${bubbleId ?: "none"} text=${text}")
         }
         groups.sortWith(compareBy<PaddleOcrTextGroup> { it.getBounds().top }
             .thenBy { it.getBounds().left })
         val skipped = result.results.size - detectedLines.size
-        Log.i(TAG, "text_geometry_summary detections=${result.results.size} lines=${detectedLines.size} layout_blocks=${groups.size} bubble_lines=${associated} bubble_groups=${bubbleLines.size} skipped=${skipped} association=post_ocr_only")
+        Log.i(TAG, "text_geometry_summary detections=${result.results.size} lines=${detectedLines.size} layout_blocks=${groups.size} bubble_associated_blocks=${associated} skipped=${skipped} association=post_ocr_only")
         return groups
     }
 }
