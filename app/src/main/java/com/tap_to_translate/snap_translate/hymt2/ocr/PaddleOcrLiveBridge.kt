@@ -89,7 +89,7 @@ object PaddleOcrLiveBridge {
         // Join vertically stacked lines of one paragraph, but never adjacent
         // same-row detections: those may be text from two touching balloons
         // inside one connected BubblePop mask.
-        val nextRow = verticalGap <= maxOf(12, (minHeight * 1.35).toInt()) &&
+        val nextRow = verticalGap <= maxOf(10, (minHeight * 0.85).toInt()) &&
             (horizontalOverlap >= minOf(a.width(), b.width()) * 0.20 ||
                 kotlin.math.abs(a.centerX() - b.centerX()) <= minHeight * 0.90)
         return nextRow
