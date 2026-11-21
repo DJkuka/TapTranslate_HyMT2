@@ -629,7 +629,7 @@ public final class RtDetrLiveBridge {
                 OVERLAY_IS_BUBBLE.put(group, Boolean.valueOf(isBubbleText));
                 if (isBubbleText) {
                     DetectedRegion bubbleMask = findBubbleRegion(bounds, regions);
-                    if (bubbleMask != null && bubbleMask.getMaskData() != null) {
+                    if (bubbleMask != null && bubbleMask.maskDataView() != null) {
                         OVERLAY_BUBBLE_MASKS.put(group, bubbleMask);
                     } else {
                         OVERLAY_BUBBLE_MASKS.remove(group);
@@ -771,7 +771,7 @@ public final class RtDetrLiveBridge {
                 Rect bounds = readOverlayBounds(overlay);
                 if (bounds == null) continue;
                 DetectedRegion region = findBubbleRegion(bounds, regions);
-                if (region == null || region.getMaskData() == null) continue;
+                if (region == null || region.maskDataView() == null) continue;
                 byRegion.computeIfAbsent(region, ignored -> new ArrayList<>()).add(overlay);
             }
             for (Map.Entry<DetectedRegion, ArrayList<Object>> entry : byRegion.entrySet()) {
@@ -854,7 +854,7 @@ public final class RtDetrLiveBridge {
         if (canvas == null || overlay == null || text == null || paint == null) return false;
         try {
             DetectedRegion region = OVERLAY_BUBBLE_MASKS.get(overlay);
-            if (region == null || region.getMaskData() == null) return false;
+            if (region == null || region.maskDataView() == null) return false;
             Rect overlayBounds = readOverlayBounds(overlay);
             if (overlayBounds == null) return false;
             return BubbleTextLayout.draw(canvas, region.maskDataView(), region.getMaskWidth(),
