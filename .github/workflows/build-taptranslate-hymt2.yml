@@ -139,7 +139,7 @@ jobs:
           unzip -l "$helper" | grep -F "lib/arm64-v8a/libopencv_java4.so"
 
 
-      - name: Verify BubblePop diagnostic model and screen
+      - name: Verify BubblePop diagnostic model and DEX classes
         if: github.ref == 'refs/heads/bubblepop-diagnostic'
         shell: bash
         run: |
@@ -147,9 +147,13 @@ jobs:
           helper="app/build/outputs/apk/debug/app-debug.apk"
           unzip -l "$helper" | grep -F "assets/models/bubblepop/model_fp16.onnx"
           unzip -l "$helper" | grep -F "assets/models/bubblepop/LICENSE.bubble-pop"
-          java -jar tools/apktool.jar d -f -o build/bubblepop-helper-check "$helper"
-          test -s build/bubblepop-helper-check/smali_classes5/com/tap_to_translate/snap_translate/hymt2/BubblePopDiagnosticActivity.smali
-          test -s build/bubblepop-helper-check/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopSegmenter.smali
+          mkdir -p build/bubblepop-helper-check
+          while IFS= read -r dex; do
+            unzip -p "$helper" "$dex" | strings -a
+          done < <(unzip -Z1 "$helper" | grep -E '^classes([0-9]+)?\\.dex$') > build/bubblepop-helper-check/dex-strings.txt
+          grep -F "BubblePopDiagnosticActivity" build/bubblepop-helper-check/dex-strings.txt
+          grep -F "BubblePopSegmenter" build/bubblepop-helper-check/dex-strings.txt
+          echo "BubblePop model assets and compiled diagnostic classes verified without Apktool decompilation."
 
       - name: Merge Hy-MT2 runtime into the original Tap Translate APK
         run: |

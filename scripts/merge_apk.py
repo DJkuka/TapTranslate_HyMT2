@@ -1985,7 +1985,7 @@ def main() -> int:
         shutil.rmtree(helper)
 
     run(["java", "-jar", str(args.apktool), "d", "-f", "-o", str(base), str(args.base_apk)])
-    run(["java", "-jar", str(args.apktool), "d", "-f", "-o", str(helper), str(args.helper_apk)])
+    run(["java", "-jar", str(args.apktool), "d", "-f", "-r", "-o", str(helper), str(args.helper_apk)])
 
     preserved_ocr = snapshot_preserved_ocr(base)
 
