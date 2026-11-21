@@ -2,6 +2,8 @@ package com.tap_to_translate.snap_translate.hymt2
 
 import android.app.Activity
 import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -105,6 +107,19 @@ class BubblePopDiagnosticActivity : Activity() {
         })
         status = TextView(this).apply { text = "Изображение не выбрано."; textSize = 13f }
         root.addView(status)
+        root.addView(Button(this).apply {
+            text = "Копировать результат диагностики"
+            setOnClickListener {
+                val report = status.text?.toString().orEmpty()
+                if (report.isBlank()) {
+                    Toast.makeText(this@BubblePopDiagnosticActivity, "Результат пока пуст", Toast.LENGTH_SHORT).show()
+                } else {
+                    val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("BubblePop diagnostic", report))
+                    Toast.makeText(this@BubblePopDiagnosticActivity, "Результат скопирован", Toast.LENGTH_SHORT).show()
+                }
+            }
+        })
         preview = ImageView(this).apply { adjustViewBounds = true; scaleType = ImageView.ScaleType.FIT_CENTER }
         root.addView(preview, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
