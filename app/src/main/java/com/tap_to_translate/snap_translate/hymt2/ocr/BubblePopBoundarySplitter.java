@@ -473,6 +473,7 @@ public final class BubblePopBoundarySplitter {
             Peak second = null;
             double bestRatio = Double.POSITIVE_INFINITY;
             int bestBoundary = 0;
+            int bestSaddleIndex = -1;
             for (int i = 0; i < separated.size(); i++) {
                 Peak a = separated.get(i);
                 SaddleMap saddleMap = widestPathSaddles(a, distanceData,
@@ -493,6 +494,7 @@ public final class BubblePopBoundarySplitter {
                                 boundaryData, sx, sy, width, height, 5);
                         bestRatio = ratio;
                         bestBoundary = boundaryStrength;
+                        bestSaddleIndex = saddleIndex;
                         first = a;
                         second = b;
                     }
@@ -511,14 +513,10 @@ public final class BubblePopBoundarySplitter {
             trace.secondY = offsetY + second.y;
             trace.saddleRatio = bestRatio;
             trace.boundaryStrength = bestBoundary;
-            // The bottleneck coordinate is the point where the widest path narrows most.
-            SaddleMap selectedSaddle = widestPathSaddles(first, distanceData,
-                    componentData, width, height);
-            int selectedTarget = second.y * width + second.x;
-            int selectedIndex = selectedSaddle.bottleneck[selectedTarget];
-            if (selectedIndex >= 0) {
-                trace.saddleX = offsetX + selectedIndex % width;
-                trace.saddleY = offsetY + selectedIndex / width;
+            // Reuse the bottleneck selected during pair ranking; no second path search.
+            if (bestSaddleIndex >= 0) {
+                trace.saddleX = offsetX + bestSaddleIndex % width;
+                trace.saddleY = offsetY + bestSaddleIndex / width;
             }
             stats.recordSaddle(bestRatio, bestBoundary);
 
