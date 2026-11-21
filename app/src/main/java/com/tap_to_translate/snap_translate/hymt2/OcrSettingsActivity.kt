@@ -226,6 +226,15 @@ class OcrSettingsActivity : Activity() {
         addText(root,
             "Экспериментальный BubblePop анализирует выбранную страницу и показывает найденные контуры поверх оригинала. На работу OCR и переводов эта проверка не влияет.",
             13f, false, dp(8))
+        val bubblePopSwitch = Switch(this).apply {
+            text = "Использовать BubblePop в обычном переводе"
+            isChecked = prefs.getBoolean(KEY_BUBBLEPOP_LIVE_ENABLED, false)
+        }
+        root.addView(bubblePopSwitch, matchWrap(dp(12)))
+        addText(root,
+            "При включении BubblePop будет выделять отдельные области баблов перед группировкой OCR. Распознанный текст по-прежнему обрабатывается выбранным OCR-движком. Если сегментация не удастся, сохраняются исходные границы RT-DETR и штатный OCR. Изменение вступит в силу после нажатия «Сохранить».",
+            12f, false, dp(12))
+
         root.addView(Button(this).apply {
             text = "Открыть диагностику BubblePop"
             setOnClickListener {
@@ -287,6 +296,7 @@ class OcrSettingsActivity : Activity() {
                 val selectedLimit = currentInt(KEY_MAX_SIDE, 4000)
                 val editor = prefs.edit()
                     .putBoolean(KEY_ALPHA_ENABLED, alphaSwitch.isChecked)
+                    .putBoolean(KEY_BUBBLEPOP_LIVE_ENABLED, bubblePopSwitch.isChecked)
                     .putInt(KEY_ALPHA_PERCENT, alphaSeek.progress.coerceIn(0, 100))
                     .putFloat(KEY_DET_THRESH, currentFloat(KEY_DET_THRESH, 0.20f))
                     .putFloat(KEY_DET_BOX_THRESH, currentFloat(KEY_DET_BOX_THRESH, 0.45f))
@@ -560,6 +570,7 @@ class OcrSettingsActivity : Activity() {
         private const val PREFS_NAME = "taptranslate_ocr_settings"
         private const val KEY_ALPHA_ENABLED = "ocr_free_text_alpha_enabled"
         private const val KEY_ALPHA_PERCENT = "ocr_free_text_alpha_percent"
+        private const val KEY_BUBBLEPOP_LIVE_ENABLED = "ocr_bubblepop_live_enabled"
         private const val KEY_MAX_SIDE = "ocr_det_max_side_limit"
         private const val KEY_DET_THRESH = "ocr_det_thresh"
         private const val KEY_DET_BOX_THRESH = "ocr_det_box_thresh"
