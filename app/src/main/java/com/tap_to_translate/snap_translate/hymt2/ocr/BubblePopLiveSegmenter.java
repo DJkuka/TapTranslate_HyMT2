@@ -34,7 +34,7 @@ public final class BubblePopLiveSegmenter implements AutoCloseable {
     private final BubblePopSegmenter segmenter;
 
     public BubblePopLiveSegmenter(Context context) throws Exception {
-        if (!OpenCVUtils.init(context)) {
+        if (!OpenCVUtils.INSTANCE.init(context)) {
             throw new IllegalStateException("OpenCV initialization failed");
         }
         File model = new File(context.getCodeCacheDir(), "bubblepop_model_fp16.onnx");
