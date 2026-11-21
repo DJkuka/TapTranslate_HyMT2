@@ -45,15 +45,22 @@ public final class BubbleTextLayout {
                 List<Line> lines = layout(mask, maskWidth, maskHeight, maskBounds,
                         area, source.toString(), paint, inset);
                 if (lines != null && !lines.isEmpty()) {
+                    android.graphics.Paint.FontMetrics fm = paint.getFontMetrics();
+                    float usedTop = lines.get(0).baseline + fm.ascent;
+                    float usedBottom = lines.get(lines.size() - 1).baseline + fm.descent;
+                    float verticalShift = (area.top + area.bottom - usedTop - usedBottom) / 2f;
+                    android.graphics.Paint.Align oldAlign = paint.getTextAlign();
+                    paint.setTextAlign(android.graphics.Paint.Align.LEFT);
                     for (Line line : lines) {
-                        canvas.drawText(line.text, line.x, line.baseline, paint);
+                        canvas.drawText(line.text, line.x, line.baseline + verticalShift, paint);
                     }
-                    Log.d(TAG, "shape_layout=fit lines=" + lines.size()
+                    paint.setTextAlign(oldAlign);
+                    Log.i(TAG, "shape_layout=fit lines=" + lines.size()
                             + " font=" + size + " area=" + area.flattenToString());
                     return true;
                 }
             }
-            Log.w(TAG, "shape_layout=not_fit text_length=" + source.length()
+            Log.i(TAG, "shape_layout=not_fit text_length=" + source.length()
                     + " mask=" + maskWidth + "x" + maskHeight
                     + " overlay=" + overlayBounds.flattenToString());
             return false;
