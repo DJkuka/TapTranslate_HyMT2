@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.PriorityQueue;
 
 /**
  * Experimental instance splitter for touching BubblePop regions.
@@ -40,7 +41,11 @@ public final class BubblePopWatershedSplitter {
     private static final double MIN_PEAK_RADIUS = 5.0;
     private static final int PEAK_NEIGHBORHOOD = 15;
     private static final int MAX_PEAKS = 8;
-    private static final double MIN_PEAK_DISTANCE = 10.0;
+    private static final double MIN_PEAK_DISTANCE = 16.0;
+    private static final double SAME_BUBBLE_SADDLE_RATIO = 0.62;
+    private static final double MAX_BOUNDARY_SUPPORTED_SADDLE_RATIO = 0.82;
+    private static final double MIN_ACCEPTED_REGION_FRACTION = 0.10;
+    private static final int MAX_SPLIT_SEEDS = 4;
     private static final double STRONG_SADDLE_RATIO = 0.62;
     private static final double BOUNDARY_SADDLE_RATIO = 0.82;
     private static final int BOUNDARY_EVIDENCE = 125;
@@ -188,7 +193,7 @@ public final class BubblePopWatershedSplitter {
             boundaryRoi.release();
 
             List<Peak> seeds = selectSeparatedPeaks(peaks, distanceData, boundaryData,
-                    distance.cols(), distance.rows());
+                    component, distance.cols(), distance.rows());
             if (seeds.size() < 2) {
                 return 0;
             }
@@ -230,7 +235,7 @@ public final class BubblePopWatershedSplitter {
             }
 
             int minRegionArea = Math.max(MIN_OUTPUT_REGION_AREA,
-                    (int) (Core.countNonZero(component) * 0.035));
+                    (int) (Core.countNonZero(component) * MIN_ACCEPTED_REGION_FRACTION));
             int substantialRegions = 0;
             for (int label = 2; label < regionAreas.length; label++) {
                 if (regionAreas[label] >= minRegionArea) {
@@ -348,49 +353,131 @@ public final class BubblePopWatershedSplitter {
         return kept;
     }
 
+    /**
+     * Merge local distance maxima that belong to the same broad lobe.
+     *
+     * The saddle is measured along the best available path INSIDE the mask,
+     * not on the straight segment between two peaks. This handles curved and
+     * offset bridges and prevents one irregular bubble from producing many
+     * watershed markers.
+     */
     private static List<Peak> selectSeparatedPeaks(
-            List<Peak> peaks, float[] distance, byte[] boundary, int width, int height) {
-        boolean[] selected = new boolean[peaks.size()];
-        for (int i = 0; i < peaks.size(); i++) {
+            List<Peak> peaks, float[] distance, byte[] boundary, Mat component,
+            int width, int height) {
+        int n = peaks.size();
+        int[] parent = new int[n];
+        for (int i = 0; i < n; i++) parent[i] = i;
+
+        byte[] mask = new byte[width * height];
+        component.get(0, 0, mask);
+
+        for (int i = 0; i < n; i++) {
             Peak a = peaks.get(i);
-            for (int j = i + 1; j < peaks.size(); j++) {
+            for (int j = i + 1; j < n; j++) {
                 Peak b = peaks.get(j);
-                int saddleIndex = -1;
-                float minimumDistance = Float.MAX_VALUE;
-                int steps = Math.max(20, (int) (Math.hypot(b.x - a.x, b.y - a.y) * 2));
-                for (int step = 0; step <= steps; step++) {
-                    double t = step / (double) steps;
-                    int x = clamp((int) Math.round(a.x + (b.x - a.x) * t), 0, width - 1);
-                    int y = clamp((int) Math.round(a.y + (b.y - a.y) * t), 0, height - 1);
-                    float value = distance[y * width + x];
-                    if (value < minimumDistance) {
-                        minimumDistance = value;
-                        saddleIndex = y * width + x;
-                    }
-                }
-                if (saddleIndex < 0) continue;
+                float saddle = widestPathSaddle(a, b, distance, mask, width, height);
+                double ratio = saddle / Math.max(1.0, Math.min(a.radius, b.radius));
+                int boundaryStrength = maxBoundaryNear(boundary, bresenhamMidX(a, b),
+                        bresenhamMidY(a, b), width, height, 5);
 
-                float smallerRadius = Math.min(a.radius, b.radius);
-                double saddleRatio = minimumDistance / Math.max(1.0, smallerRadius);
-                int sx = saddleIndex % width;
-                int sy = saddleIndex / width;
-                int boundaryStrength = maxBoundaryNear(boundary, sx, sy, width, height, 3);
-
-                boolean veryNarrowNeck = saddleRatio <= STRONG_SADDLE_RATIO;
-                boolean boundarySupportedNeck = saddleRatio <= BOUNDARY_SADDLE_RATIO
+                boolean boundarySeparates = ratio <= MAX_BOUNDARY_SUPPORTED_SADDLE_RATIO
                         && boundaryStrength >= BOUNDARY_EVIDENCE;
-                if (veryNarrowNeck || boundarySupportedNeck) {
-                    selected[i] = true;
-                    selected[j] = true;
+                boolean geometricallySeparate = ratio <= SAME_BUBBLE_SADDLE_RATIO;
+                if (!boundarySeparates && !geometricallySeparate) {
+                    union(parent, i, j);
                 }
             }
         }
 
-        List<Peak> result = new ArrayList<>();
-        for (int i = 0; i < peaks.size(); i++) {
-            if (selected[i]) result.add(peaks.get(i));
+        // One representative (the strongest distance maximum) per merged lobe.
+        List<Peak> representatives = new ArrayList<>();
+        boolean[] emitted = new boolean[n];
+        for (int i = 0; i < n; i++) {
+            int root = find(parent, i);
+            if (emitted[root]) continue;
+            emitted[root] = true;
+            Peak best = peaks.get(i);
+            for (int j = i + 1; j < n; j++) {
+                if (find(parent, j) == root && peaks.get(j).radius > best.radius) {
+                    best = peaks.get(j);
+                }
+            }
+            representatives.add(best);
         }
-        return result;
+        Collections.sort(representatives, new Comparator<Peak>() {
+            @Override public int compare(Peak a, Peak b) {
+                return Float.compare(b.radius, a.radius);
+            }
+        });
+        if (representatives.size() > MAX_SPLIT_SEEDS) {
+            representatives = new ArrayList<>(representatives.subList(0, MAX_SPLIT_SEEDS));
+        }
+        return representatives;
+    }
+
+    /** Maximin path: the minimum radius along the widest path between peaks. */
+    private static float widestPathSaddle(Peak start, Peak target, float[] distance,
+                                          byte[] mask, int width, int height) {
+        int total = width * height;
+        int sourceIndex = start.y * width + start.x;
+        int targetIndex = target.y * width + target.x;
+        float[] best = new float[total];
+        java.util.Arrays.fill(best, -1f);
+        PriorityQueue<PathNode> queue = new PriorityQueue<>(new Comparator<PathNode>() {
+            @Override public int compare(PathNode a, PathNode b) {
+                return Float.compare(b.capacity, a.capacity);
+            }
+        });
+        best[sourceIndex] = distance[sourceIndex];
+        queue.add(new PathNode(sourceIndex, best[sourceIndex]));
+
+        while (!queue.isEmpty()) {
+            PathNode current = queue.poll();
+            if (current.capacity < best[current.index]) continue;
+            if (current.index == targetIndex) return current.capacity;
+            int x = current.index % width;
+            int y = current.index / width;
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    if (dx == 0 && dy == 0) continue;
+                    int nx = x + dx, ny = y + dy;
+                    if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+                    int ni = ny * width + nx;
+                    if ((mask[ni] & 0xFF) == 0) continue;
+                    float capacity = Math.min(current.capacity, distance[ni]);
+                    if (capacity > best[ni]) {
+                        best[ni] = capacity;
+                        queue.add(new PathNode(ni, capacity));
+                    }
+                }
+            }
+        }
+        return 0f;
+    }
+
+    private static int find(int[] parent, int x) {
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        return x;
+    }
+
+    private static void union(int[] parent, int a, int b) {
+        int ra = find(parent, a), rb = find(parent, b);
+        if (ra != rb) parent[rb] = ra;
+    }
+
+    private static int bresenhamMidX(Peak a, Peak b) { return (a.x + b.x) / 2; }
+    private static int bresenhamMidY(Peak a, Peak b) { return (a.y + b.y) / 2; }
+
+    private static final class PathNode {
+        final int index;
+        final float capacity;
+        PathNode(int index, float capacity) {
+            this.index = index;
+            this.capacity = capacity;
+        }
     }
 
     private static int maxBoundaryNear(
