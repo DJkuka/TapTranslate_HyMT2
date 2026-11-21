@@ -169,6 +169,63 @@ public class BubblePopSegmenter {
     }
 
     /**
+     * Run one model pass and return both the filtered balloon mask and boundary map.
+     * The caller must release both Mats through SegmentationResult.release().
+     */
+    public SegmentationResult getSegmentation(Mat bgr) {
+        Mat rawMask = new Mat();
+        Mat rawBoundary = new Mat();
+        Mat confidence = new Mat();
+        Mat result = null;
+        Mat boundary8 = new Mat();
+        try {
+            predict(bgr, rawMask, rawBoundary, confidence);
+            result = keepInstances(rawMask, confidence);
+            if (fillHoles) {
+                Mat filled = new Mat();
+                fillEnclosed(result, filled);
+                result.release();
+                result = filled;
+            }
+            if (shrink > 0) {
+                Mat kernel = Imgproc.getStructuringElement(
+                        Imgproc.MORPH_ELLIPSE, new Size(2 * shrink + 1, 2 * shrink + 1));
+                try {
+                    Imgproc.erode(result, result, kernel);
+                } finally {
+                    kernel.release();
+                }
+            }
+            rawBoundary.convertTo(boundary8, CvType.CV_8UC1, 255.0);
+            SegmentationResult output = new SegmentationResult(result, boundary8);
+            result = null;
+            boundary8 = null;
+            return output;
+        } catch (Throwable error) {
+            if (result != null) result.release();
+            boundary8.release();
+            throw error;
+        } finally {
+            rawMask.release();
+            rawBoundary.release();
+            confidence.release();
+        }
+    }
+
+    public static final class SegmentationResult {
+        public final Mat mask;
+        public final Mat boundary;
+        private SegmentationResult(Mat mask, Mat boundary) {
+            this.mask = mask;
+            this.boundary = boundary;
+        }
+        public void release() {
+            mask.release();
+            boundary.release();
+        }
+    }
+
+    /**
      * Return the model's raw boundary-head probabilities as an 8-bit grayscale map.
      * White pixels indicate stronger boundary predictions; no thresholding or
      * instance splitting is applied here.
