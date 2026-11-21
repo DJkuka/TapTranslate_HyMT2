@@ -97,12 +97,15 @@ public final class BubblePopBoundarySplitter {
         public final int boundaryAcceptedCount;
         public final int boundaryMinThresholdTried;
         public final int boundaryMaxThresholdTried;
+        /** Per-component geometry diagnostics in full input-image coordinates. */
+        public final List<GeometryTrace> geometryTraces;
 
         private Result(Mat mask, Mat instances, int instanceCount,
                        int inputComponents, int outputComponents,
                        int splitComponents, int boundaryThreshold, String geometrySummary,
                        int boundaryAttemptCount, int boundaryAcceptedCount,
-                       int boundaryMinThresholdTried, int boundaryMaxThresholdTried) {
+                       int boundaryMinThresholdTried, int boundaryMaxThresholdTried,
+                       List<GeometryTrace> geometryTraces) {
             this.mask = mask;
             this.instances = instances;
             this.instanceCount = instanceCount;
@@ -115,6 +118,7 @@ public final class BubblePopBoundarySplitter {
             this.boundaryAcceptedCount = boundaryAcceptedCount;
             this.boundaryMinThresholdTried = boundaryMinThresholdTried;
             this.boundaryMaxThresholdTried = boundaryMaxThresholdTried;
+            this.geometryTraces = Collections.unmodifiableList(new ArrayList<>(geometryTraces));
         }
     }
 
@@ -215,7 +219,8 @@ public final class BubblePopBoundarySplitter {
                             // prerequisite. If it has no continuous seam, look for a
                             // geometrically narrow neck between two substantial lobes.
                             if (accepted == null) {
-                                accepted = tryGeometricSplit(component, boundaryRoi, options, geometryStats);
+                                accepted = tryGeometricSplit(component, boundaryRoi, options,
+                                        geometryStats, x, y);
                             }
                         } finally {
                             boundaryRoi.release();
@@ -260,7 +265,7 @@ public final class BubblePopBoundarySplitter {
                     count, splitCount, usedThreshold, geometryStats.summary(options),
                     boundaryAttemptCount, boundaryAcceptedCount,
                     boundaryAttemptCount == 0 ? -1 : boundaryMinThresholdTried,
-                    boundaryMaxThresholdTried);
+                    boundaryMaxThresholdTried, geometryStats.traces);
         } catch (Throwable error) {
             output.release();
             instances.release();
@@ -343,13 +348,17 @@ public final class BubblePopBoundarySplitter {
      * multi-seed fragments produced by unconstrained watershed experiments.
      */
     private static Candidate tryGeometricSplit(
-            Mat component, Mat boundaryRoi, Options options, GeometryStats stats) {
+            Mat component, Mat boundaryRoi, Options options, GeometryStats stats,
+            int offsetX, int offsetY) {
         final int width = component.cols();
         final int height = component.rows();
         final int total = width * height;
         final int originalArea = Core.countNonZero(component);
+        GeometryTrace trace = new GeometryTrace(offsetX, offsetY, width, height, originalArea);
+        stats.traces.add(trace);
         if (originalArea < options.minComponentArea || width < 3 || height < 3) {
             stats.rejectedTooSmall++;
+            trace.outcome = "component_too_small";
             return null;
         }
         stats.attempts++;
@@ -384,6 +393,8 @@ public final class BubblePopBoundarySplitter {
                     peakMask, peakLabels, peakStats, peakCentroids, 8, CvType.CV_32S);
             if (peakCount <= 2) {
                 stats.rejectedNoPeaks++;
+                trace.rawPeakComponents = Math.max(0, peakCount - 1);
+                trace.outcome = "no_peak_candidates";
                 return null;
             }
 
@@ -430,8 +441,14 @@ public final class BubblePopBoundarySplitter {
                 if (!near) separated.add(peak);
                 if (separated.size() >= 8) break;
             }
+            trace.rawPeakComponents = peaks.size();
+            trace.separatedPeaks = separated.size();
+            for (Peak peak : separated) {
+                trace.peaks.add(new PeakInfo(offsetX + peak.x, offsetY + peak.y, peak.radius));
+            }
             if (separated.size() < 2) {
                 stats.rejectedNoPeaks++;
+                trace.outcome = "fewer_than_two_separated_centers";
                 return null;
             }
 
@@ -485,7 +502,23 @@ public final class BubblePopBoundarySplitter {
             }
             if (first == null || second == null) {
                 stats.rejectedNoPath++;
+                trace.outcome = "no_path_between_centers";
                 return null;
+            }
+            trace.firstX = offsetX + first.x;
+            trace.firstY = offsetY + first.y;
+            trace.secondX = offsetX + second.x;
+            trace.secondY = offsetY + second.y;
+            trace.saddleRatio = bestRatio;
+            trace.boundaryStrength = bestBoundary;
+            // The bottleneck coordinate is the point where the widest path narrows most.
+            SaddleMap selectedSaddle = widestPathSaddles(first, distanceData,
+                    componentData, width, height);
+            int selectedTarget = second.y * width + second.x;
+            int selectedIndex = selectedSaddle.bottleneck[selectedTarget];
+            if (selectedIndex >= 0) {
+                trace.saddleX = offsetX + selectedIndex % width;
+                trace.saddleY = offsetY + selectedIndex / width;
             }
             stats.recordSaddle(bestRatio, bestBoundary);
 
@@ -497,8 +530,10 @@ public final class BubblePopBoundarySplitter {
                     && bestBoundary >= options.boundaryThresholdStart;
             if (!strongGeometricNeck && !boundarySupportedNeck) {
                 stats.rejectedNeckTooWide++;
+                trace.outcome = "neck_too_wide";
                 return null;
             }
+            trace.outcome = "watershed_running";
 
             markers.create(height, width, CvType.CV_32SC1);
             markers.setTo(new Scalar(0));
@@ -540,8 +575,12 @@ public final class BubblePopBoundarySplitter {
 
             int minimumArea = Math.max(options.minPartArea,
                     (int) Math.ceil(originalArea * options.minPartAreaFraction));
+            trace.firstArea = firstArea;
+            trace.secondArea = secondArea;
+            trace.minimumPartArea = minimumArea;
             if (firstArea < minimumArea || secondArea < minimumArea) {
                 stats.rejectedPartTooSmall++;
+                trace.outcome = "part_too_small";
                 return null;
             }
 
@@ -555,11 +594,15 @@ public final class BubblePopBoundarySplitter {
                     retainedArea++;
                 }
             }
+            trace.retainedArea = retainedArea;
+            trace.retainedFraction = originalArea == 0 ? 0.0 : retainedArea / (double) originalArea;
             if (retainedArea < originalArea * options.minRetainedFraction) {
                 stats.rejectedRetainedArea++;
+                trace.outcome = "retained_area_too_low";
                 return null;
             }
             stats.accepted++;
+            trace.outcome = "accepted";
 
             Mat retained = new Mat(height, width, CvType.CV_8UC1);
             retained.put(0, 0, splitMask);
@@ -638,7 +681,39 @@ public final class BubblePopBoundarySplitter {
         return max;
     }
 
+    /** Public immutable-ish diagnostic point; coordinates are in the source bitmap. */
+    public static final class PeakInfo {
+        public final int x;
+        public final int y;
+        public final float radius;
+        PeakInfo(int x, int y, float radius) {
+            this.x = x;
+            this.y = y;
+            this.radius = radius;
+        }
+    }
+
+    /** One attempted source component, including the selected centers and watershed result. */
+    public static final class GeometryTrace {
+        public final int componentX, componentY, componentWidth, componentHeight, componentArea;
+        public final List<PeakInfo> peaks = new ArrayList<>();
+        public int rawPeakComponents;
+        public int separatedPeaks;
+        public int firstX = -1, firstY = -1, secondX = -1, secondY = -1;
+        public int saddleX = -1, saddleY = -1;
+        public double saddleRatio = Double.NaN;
+        public int boundaryStrength;
+        public int firstArea, secondArea, minimumPartArea, retainedArea;
+        public double retainedFraction;
+        public String outcome = "not_completed";
+        GeometryTrace(int x, int y, int width, int height, int area) {
+            componentX = x; componentY = y; componentWidth = width;
+            componentHeight = height; componentArea = area;
+        }
+    }
+
     private static final class GeometryStats {
+        final List<GeometryTrace> traces = new ArrayList<>();
         int attempts;
         int rejectedTooSmall;
         int rejectedNoPeaks;
