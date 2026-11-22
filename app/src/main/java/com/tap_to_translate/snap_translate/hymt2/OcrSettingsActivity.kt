@@ -23,6 +23,7 @@ import kotlin.math.roundToInt
 /** Comic OCR display and detector preprocessing settings. */
 class OcrSettingsActivity : Activity() {
     private lateinit var alphaSwitch: Switch
+    private lateinit var pageMaskSwitch: Switch
     private lateinit var alphaSeek: SeekBar
     private lateinit var alphaValue: TextView
     private lateinit var maxSideSpinner: Spinner
@@ -186,6 +187,16 @@ class OcrSettingsActivity : Activity() {
             "Для эксперимента можно начать с 2000 px, затем сравнить с 1600 px на той же странице. Если пропадают мелкие или стилизованные надписи, верни 4000 px. Новое значение применяется после полного перезапуска приложения.",
             12f, false, dp(20))
 
+        addText(root, "МАСКА ОБЛАСТЕЙ ДЛЯ ПЕРЕВОДА", 16f, true, dp(8))
+        addText(root,
+            "BubblePop строит общую маску внутренних областей баблов на всей странице. Она не пытается разделять соединённые баблы на отдельные объекты. OCR-группы PP-OCRv6 остаются самостоятельными; маска будет использоваться как ограничение допустимой зоны компоновки.",
+            13f, false, dp(8))
+        pageMaskSwitch = Switch(this).apply {
+            text = "Использовать карту BubblePop"
+            isChecked = prefs.getBoolean(KEY_BUBBLEPOP_PAGE_MASK, false)
+        }
+        root.addView(pageMaskSwitch, matchWrap(dp(14)))
+
         addText(root, "СКРИНШОТЫ ПЕРЕВОДА", 16f, true, dp(8))
         addText(root,
             "Снимок сохраняет исходную страницу вместе с наложенным переводом, без верхней панели управления. Нумерация продолжается по порядку добавления: 001, 002, 003 и далее.",
@@ -240,6 +251,7 @@ class OcrSettingsActivity : Activity() {
                 val selectedLimit = maxSideValues.getOrElse(maxSideSpinner.selectedItemPosition) { 4000 }
                 prefs.edit()
                     .putBoolean(KEY_ALPHA_ENABLED, alphaSwitch.isChecked)
+                    .putBoolean(KEY_BUBBLEPOP_PAGE_MASK, pageMaskSwitch.isChecked)
                     .putInt(KEY_ALPHA_PERCENT, alphaSeek.progress.coerceIn(0, 100))
                     .putInt(KEY_MAX_SIDE, selectedLimit)
                     .putFloat(KEY_DET_THRESH, currentFloat(KEY_DET_THRESH, 0.20f))
@@ -407,6 +419,7 @@ class OcrSettingsActivity : Activity() {
         private const val TAG = "TapTranslateOCRSettings"
         private const val PREFS_NAME = "taptranslate_ocr_settings"
         private const val KEY_ALPHA_ENABLED = "ocr_free_text_alpha_enabled"
+        private const val KEY_BUBBLEPOP_PAGE_MASK = "ocr_bubblepop_page_mask_enabled"
         private const val KEY_ALPHA_PERCENT = "ocr_free_text_alpha_percent"
         private const val KEY_MAX_SIDE = "ocr_det_max_side_limit"
         private const val KEY_DET_THRESH = "ocr_det_thresh"
