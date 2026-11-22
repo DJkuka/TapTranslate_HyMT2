@@ -818,11 +818,13 @@ public final class BubblePopBoundarySplitter {
             int[] bestLabels = null;
             int[] bestIdMap = null;
             int defectCount = d.length / 4;
+            trace.defectCount = defectCount;
             double maxSpan = Math.hypot(width, height) * 0.58;
             for (int i = 0; i < defectCount; i++) {
                 int farI = d[i * 4 + 2];
                 double depthI = d[i * 4 + 3] / 256.0;
                 if (depthI < 4.0) continue;
+                trace.deepDefects++;
                 if (farI < 0 || farI >= contourPoints.length) continue;
                 Point pi = contourPoints[farI];
                 Point startI = contourPoints[d[i * 4]];
@@ -856,6 +858,7 @@ public final class BubblePopBoundarySplitter {
                     // Their hull-edge normals do not face each other and joining
                     // them tends to produce the recurring diagonal false cut.
                     if (facing < 0.35) continue;
+                    trace.facingPairs++;
 
                     double span = Math.hypot(pi.x - pj.x, pi.y - pj.y);
                     if (span < 8.0 || span > maxSpan) continue;
@@ -867,6 +870,7 @@ public final class BubblePopBoundarySplitter {
                             width, height, (int) Math.round(pi.x), (int) Math.round(pi.y),
                             (int) Math.round(pj.x), (int) Math.round(pj.y));
                     if (neckPath == null || neckPath.size() < 2) continue;
+                    trace.neckPaths++;
 
                     barrier.setTo(new Scalar(0));
                     float narrowestRadius = Float.POSITIVE_INFINITY;
@@ -889,6 +893,7 @@ public final class BubblePopBoundarySplitter {
                     int count = Imgproc.connectedComponentsWithStats(
                             cut, labels, ccStats, centroids, 8, CvType.CV_32S);
                     if (count < 3) continue;
+                    trace.disconnectedCuts++;
 
                     int firstId = -1, secondId = -1;
                     int firstSize = 0, secondSize = 0;
@@ -1631,6 +1636,7 @@ public final class BubblePopBoundarySplitter {
     public static final class ConcavityTrace {
         public int x1 = -1, y1 = -1, x2 = -1, y2 = -1;
         public int firstArea, secondArea, retainedArea;
+        public int defectCount, deepDefects, facingPairs, neckPaths, disconnectedCuts;
         public double triangleArea;
         public String outcome = "not_completed";
     }
