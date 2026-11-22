@@ -36,6 +36,8 @@ public final class RtDetrLiveBridge {
             Collections.synchronizedMap(new WeakHashMap<Object, List<DetectedRegion>>());
     private static final Map<Object, Boolean> OVERLAY_IS_BUBBLE =
             Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
+    private static final Map<Object, DetectedRegion> OVERLAY_BUBBLE_MASKS =
+            Collections.synchronizedMap(new WeakHashMap<Object, DetectedRegion>());
     private static final String OCR_PREFS = "taptranslate_ocr_settings";
     private static final String FREE_ALPHA_ENABLED = "ocr_free_text_alpha_enabled";
     private static final String FREE_ALPHA_PERCENT = "ocr_free_text_alpha_percent";
@@ -573,8 +575,15 @@ public final class RtDetrLiveBridge {
                         : freeTextScore == 0d && findBubbleContainer(bounds, regions) >= 0;
 
                 OVERLAY_IS_BUBBLE.put(group, Boolean.valueOf(isBubbleText));
-                if (isBubbleText) bubbleOverlays.add(group);
-                else underlays.add(group);
+                if (isBubbleText) {
+                    DetectedRegion localMask = createOverlayBubbleMask(bounds, regions);
+                    if (localMask != null) OVERLAY_BUBBLE_MASKS.put(group, localMask);
+                    else OVERLAY_BUBBLE_MASKS.remove(group);
+                    bubbleOverlays.add(group);
+                } else {
+                    OVERLAY_BUBBLE_MASKS.remove(group);
+                    underlays.add(group);
+                }
             }
 
             if (bubbleOverlays.isEmpty()) return;
@@ -689,6 +698,81 @@ public final class RtDetrLiveBridge {
         int index = BubbleRegionMatcher.findBestContainer(
                 text.left, text.top, text.right, text.bottom, bubbles);
         return index >= 0 && index < ids.size() ? ids.get(index) : null;
+    }
+
+    private static DetectedRegion createOverlayBubbleMask(
+            Rect overlayBounds, List<DetectedRegion> regions) {
+        DetectedRegion pageMask = null;
+        for (DetectedRegion region : regions) {
+            if (region.getKind() == OcrRegionKind.PAGE_BUBBLE_MASK
+                    && region.maskDataView() != null) {
+                pageMask = region;
+                break;
+            }
+        }
+        if (pageMask == null) return null;
+        int containerIndex = findBubbleContainer(overlayBounds, regions);
+        if (containerIndex < 0) return null;
+        DetectedRegion container = null;
+        int current = 0;
+        for (DetectedRegion region : regions) {
+            if (region.getKind() != OcrRegionKind.BUBBLE_CONTAINER) continue;
+            if (current++ == containerIndex) { container = region; break; }
+        }
+        if (container == null) return null;
+
+        Rect pageBounds = pageMask.getBounds();
+        Rect crop = container.getBounds();
+        if (!crop.intersect(pageBounds)) return null;
+        int width = crop.width();
+        int height = crop.height();
+        if (width <= 0 || height <= 0 || (long) width * height > 16000000L) return null;
+        byte[] source = pageMask.maskDataView();
+        int sourceWidth = pageMask.getMaskWidth();
+        int sourceHeight = pageMask.getMaskHeight();
+        if (source == null || sourceWidth != pageBounds.width()
+                || sourceHeight != pageBounds.height()
+                || source.length != sourceWidth * sourceHeight) return null;
+
+        byte[] local = new byte[width * height];
+        int foreground = 0;
+        for (int y = 0; y < height; y++) {
+            int sourceOffset = (crop.top - pageBounds.top + y) * sourceWidth
+                    + (crop.left - pageBounds.left);
+            int targetOffset = y * width;
+            for (int x = 0; x < width; x++) {
+                byte pixel = source[sourceOffset + x];
+                local[targetOffset + x] = pixel;
+                if ((pixel & 0xff) != 0) foreground++;
+            }
+        }
+        if (foreground < 40) {
+            Log.d(TAG, "BubblePop mask too sparse for overlay; rectangular fallback");
+            return null;
+        }
+        return new DetectedRegion(
+                pageMask.getId() + ":container:" + container.getId(),
+                OcrRegionKind.PAGE_BUBBLE_MASK, crop, pageMask.getConfidence(),
+                null, null, local, width, height);
+    }
+
+    /** Called by both native overlay renderers before rectangular StaticLayout fallback. */
+    public static boolean drawBubbleText(
+            android.graphics.Canvas canvas, Object overlay, CharSequence text,
+            android.text.TextPaint paint, float minTextSize, float maxTextSize, int padding) {
+        if (canvas == null || overlay == null || text == null || paint == null) return false;
+        try {
+            DetectedRegion region = OVERLAY_BUBBLE_MASKS.get(overlay);
+            if (region == null || region.maskDataView() == null) return false;
+            Rect overlayBounds = readOverlayBounds(overlay);
+            if (overlayBounds == null) return false;
+            return BubbleTextLayout.draw(canvas, region.maskDataView(),
+                    region.getMaskWidth(), region.getMaskHeight(), region.getBounds(),
+                    overlayBounds, text, paint, minTextSize, maxTextSize, padding);
+        } catch (Throwable error) {
+            Log.w(TAG, "BubblePop text layout failed; rectangular host layout retained", error);
+            return false;
+        }
     }
 
     private static int findBubbleContainer(Rect text, List<DetectedRegion> regions) {
