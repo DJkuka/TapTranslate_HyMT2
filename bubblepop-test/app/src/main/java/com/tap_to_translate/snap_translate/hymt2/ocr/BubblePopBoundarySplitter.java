@@ -821,14 +821,18 @@ public final class BubblePopBoundarySplitter {
             trace.defectCount = defectCount;
             double maxSpan = Math.hypot(width, height) * 0.58;
             for (int i = 0; i < defectCount; i++) {
+                int startIndexI = d[i * 4];
+                int endIndexI = d[i * 4 + 1];
                 int farI = d[i * 4 + 2];
                 double depthI = d[i * 4 + 3] / 256.0;
                 if (depthI < 4.0) continue;
                 trace.deepDefects++;
-                if (farI < 0 || farI >= contourPoints.length) continue;
+                if (startIndexI < 0 || startIndexI >= contourPoints.length
+                        || endIndexI < 0 || endIndexI >= contourPoints.length
+                        || farI < 0 || farI >= contourPoints.length) continue;
                 Point pi = contourPoints[farI];
-                Point startI = contourPoints[d[i * 4]];
-                Point endI = contourPoints[d[i * 4 + 1]];
+                Point startI = contourPoints[startIndexI];
+                Point endI = contourPoints[endIndexI];
                 double triangleAreaI = triangleArea(startI, endI, pi);
                 // The midpoint of the convex-hull chord gives the outward
                 // direction of this indentation. A valid neck is normally
@@ -839,13 +843,17 @@ public final class BubblePopBoundarySplitter {
                 double normalILength = Math.hypot(normalIx, normalIy);
                 if (normalILength < 1.0) continue;
                 for (int j = i + 1; j < defectCount; j++) {
+                    int startIndexJ = d[j * 4];
+                    int endIndexJ = d[j * 4 + 1];
                     int farJ = d[j * 4 + 2];
                     double depthJ = d[j * 4 + 3] / 256.0;
                     if (depthJ < 4.0 || farI == farJ) continue;
-                    if (farJ < 0 || farJ >= contourPoints.length) continue;
+                    if (startIndexJ < 0 || startIndexJ >= contourPoints.length
+                            || endIndexJ < 0 || endIndexJ >= contourPoints.length
+                            || farJ < 0 || farJ >= contourPoints.length) continue;
                     Point pj = contourPoints[farJ];
-                    Point startJ = contourPoints[d[j * 4]];
-                    Point endJ = contourPoints[d[j * 4 + 1]];
+                    Point startJ = contourPoints[startIndexJ];
+                    Point endJ = contourPoints[endIndexJ];
                     double triangleAreaJ = triangleArea(startJ, endJ, pj);
                     double pairedTriangleArea = Math.min(triangleAreaI, triangleAreaJ);
                     double normalJx = (startJ.x + endJ.x) * 0.5 - pj.x;
