@@ -85,7 +85,7 @@ jobs:
           out="build/apk219-renderer-source"
           java -jar tools/apktool.jar d -f -o "$decoded" input/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk
           mkdir -p "$out"
-          for rel in smali_classes3/rh/f.smali smali_classes3/rh/g.smali smali_classes3/vh/l.smali smali_classes3/ca/c2.smali; do
+          for rel in smali_classes3/rh/f.smali smali_classes3/rh/g.smali smali_classes3/vh/l.smali; do
             test -s "$decoded/$rel" || { echo "Missing APK219 source: $rel"; exit 1; }
             mkdir -p "$out/$(dirname "$rel")"
             cp "$decoded/$rel" "$out/$rel"
