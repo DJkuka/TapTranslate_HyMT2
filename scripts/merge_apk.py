@@ -1416,18 +1416,37 @@ def patch_remove_nurik_attribution(base: Path) -> None:
     else:
         print("NURIK attribution row already absent")
 
-    # mh/p still installs a click listener on the removed policy row. Keep the
-    # original behavior when present, but skip it safely when the row is absent.
+    # mh/p may already contain a null guard in the release APK. APK219 uses
+    # Apktool's generated :cond_N label rather than our historical custom label.
     fragment = base / "smali_classes3/mh/p.smali"
     smali = fragment.read_text(encoding="utf-8")
-    target = """    const p2, 0x7f0a01c6
+    lookup_guard = re.search(
+        r"(?m)^    const p2, 0x7f0a01c6\\n\\n"
+        r"    invoke-virtual \\{p1, p2\\}, Landroid/view/View;->findViewById\\(I\\)Landroid/view/View;\\n\\n"
+        r"    move-result-object p2\\n\\n"
+        r"    if-eqz p2, (?P<label>:[A-Za-z0-9_.$-]+)$",
+        smali,
+    )
+    if lookup_guard:
+        label = lookup_guard.group("label")
+        label_text = f"    {label}\\n"
+        click_call = "    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V"
+        click_pos = smali.find(click_call, lookup_guard.end())
+        label_pos = smali.find(label_text, click_pos + len(click_call)) if click_pos >= 0 else -1
+        if smali.count(label_text) != 1 or click_pos < 0 or label_pos < 0:
+            raise RuntimeError("APK219 NURIK null guard is incomplete or malformed")
+        print(f"APK219 already guards the optional NURIK click target with {label}")
+    else:
+        # Keep the original behavior when present, but skip it safely when the
+        # policy row is absent. Add a stable label only to unguarded host code.
+        target = """    const p2, 0x7f0a01c6
 
     invoke-virtual {p1, p2}, Landroid/view/View;->findViewById(I)Landroid/view/View;
 
     move-result-object p2
 
     new-instance v0, Lmh/m;"""
-    guarded = """    const p2, 0x7f0a01c6
+        guarded = """    const p2, 0x7f0a01c6
 
     invoke-virtual {p1, p2}, Landroid/view/View;->findViewById(I)Landroid/view/View;
 
@@ -1436,23 +1455,23 @@ def patch_remove_nurik_attribution(base: Path) -> None:
     if-eqz p2, :hymt_nurik_click_done
 
     new-instance v0, Lmh/m;"""
-    if ":hymt_nurik_click_done" not in smali:
-        if smali.count(target) != 1:
-            raise RuntimeError("Could not isolate the NURIK policy-row click handler")
-        smali = smali.replace(target, guarded, 1)
-        click_call = """    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+        if ":hymt_nurik_click_done" not in smali:
+            if smali.count(target) != 1:
+                raise RuntimeError("Could not isolate the NURIK policy-row click handler")
+            smali = smali.replace(target, guarded, 1)
+            click_call = """    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
 
     invoke-virtual {p1, v1}, Landroid/view/View;->findViewById(I)Landroid/view/View;"""
-        click_guarded = """    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+            click_guarded = """    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
 
     :hymt_nurik_click_done
 
     invoke-virtual {p1, v1}, Landroid/view/View;->findViewById(I)Landroid/view/View;"""
-        if smali.count(click_call) != 1:
-            raise RuntimeError("Could not place the NURIK click-handler null guard")
-        smali = smali.replace(click_call, click_guarded, 1)
-        fragment.write_text(smali, encoding="utf-8")
-    print("Guarded optional NURIK settings click target")
+            if smali.count(click_call) != 1:
+                raise RuntimeError("Could not place the NURIK click-handler null guard")
+            smali = smali.replace(click_call, click_guarded, 1)
+            fragment.write_text(smali, encoding="utf-8")
+        print("Guarded optional NURIK settings click target")
 
 def patch_home_ocr_quick_selector(base: Path) -> None:
     """Add a Home shortcut that shares the native HAWK_OCR preference."""
