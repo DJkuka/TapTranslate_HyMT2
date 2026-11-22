@@ -734,6 +734,7 @@ public final class BubblePopBoundarySplitter {
             int bestA = -1, bestB = -1;
             double bestScore = Double.NEGATIVE_INFINITY;
             int bestRetained = 0, bestAreaA = 0, bestAreaB = 0;
+            double bestTriangleArea = 0.0;
             int[] bestLabels = null;
             int[] bestIdMap = null;
             int defectCount = d.length / 4;
@@ -744,12 +745,19 @@ public final class BubblePopBoundarySplitter {
                 if (depthI < 4.0) continue;
                 if (farI < 0 || farI >= contourPoints.length) continue;
                 Point pi = contourPoints[farI];
+                Point startI = contourPoints[d[i * 4]];
+                Point endI = contourPoints[d[i * 4 + 1]];
+                double triangleAreaI = triangleArea(startI, endI, pi);
                 for (int j = i + 1; j < defectCount; j++) {
                     int farJ = d[j * 4 + 2];
                     double depthJ = d[j * 4 + 3] / 256.0;
                     if (depthJ < 4.0 || farI == farJ) continue;
                     if (farJ < 0 || farJ >= contourPoints.length) continue;
                     Point pj = contourPoints[farJ];
+                    Point startJ = contourPoints[d[j * 4]];
+                    Point endJ = contourPoints[d[j * 4 + 1]];
+                    double triangleAreaJ = triangleArea(startJ, endJ, pj);
+                    double pairedTriangleArea = Math.min(triangleAreaI, triangleAreaJ);
                     double span = Math.hypot(pi.x - pj.x, pi.y - pj.y);
                     if (span < 8.0 || span > maxSpan) continue;
 
@@ -793,8 +801,14 @@ public final class BubblePopBoundarySplitter {
                             / (double) Math.max(firstSize, secondSize);
                     double retainedFraction = retained / (double) originalArea;
                     double depthScore = Math.min(depthI, depthJ);
+                    double triangleScore = Math.min(1.0,
+                            pairedTriangleArea / Math.max(12.0, originalArea * 0.015));
+                    // Reject shallow slivers whose convexity-defect triangles carry
+                    // almost no area, even if the chord happens to disconnect the mask.
+                    if (triangleScore < 0.015) continue;
                     double score = balance * 2.0 + retainedFraction
-                            + Math.min(12.0, depthScore) * 0.025 - span / maxSpan * 0.15;
+                            + Math.min(12.0, depthScore) * 0.025
+                            + triangleScore * 0.18 - span / maxSpan * 0.15;
                     if (score <= bestScore) continue;
                     int[] localLabels = new int[width * height];
                     labels.get(0, 0, localLabels);
@@ -824,6 +838,8 @@ public final class BubblePopBoundarySplitter {
                     bestRetained = retained;
                     bestAreaA = firstSize;
                     bestAreaB = secondSize;
+                    bestTriangleArea = pairedTriangleArea;
+                    trace.triangleArea = pairedTriangleArea;
                     bestLabels = remappedLabels;
                     bestIdMap = new int[] {0, 1, 2};
                     stats.concavityBestDepth = Math.max(stats.concavityBestDepth,
@@ -1142,6 +1158,11 @@ public final class BubblePopBoundarySplitter {
         }
     }
 
+    private static double triangleArea(Point a, Point b, Point c) {
+        return Math.abs((a.x * (b.y - c.y) + b.x * (c.y - a.y)
+                + c.x * (a.y - b.y)) * 0.5);
+    }
+
     private static SaddleMap widestPathSaddles(Peak start, float[] distance,
                                                 byte[] mask, int width, int height) {
         int total = width * height;
@@ -1230,6 +1251,7 @@ public final class BubblePopBoundarySplitter {
     public static final class ConcavityTrace {
         public int x1 = -1, y1 = -1, x2 = -1, y2 = -1;
         public int firstArea, secondArea, retainedArea;
+        public double triangleArea;
         public String outcome = "not_completed";
     }
 
