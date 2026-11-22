@@ -1421,15 +1421,15 @@ def patch_remove_nurik_attribution(base: Path) -> None:
     fragment = base / "smali_classes3/mh/p.smali"
     smali = fragment.read_text(encoding="utf-8")
     lookup_guard = re.search(
-        r"(?m)^    const p2, 0x7f0a01c6\\n\\n"
-        r"    invoke-virtual \\{p1, p2\\}, Landroid/view/View;->findViewById\\(I\\)Landroid/view/View;\\n\\n"
-        r"    move-result-object p2\\n\\n"
+        r"(?m)^    const p2, 0x7f0a01c6\n\n"
+        r"    invoke-virtual \{p1, p2\}, Landroid/view/View;->findViewById\(I\)Landroid/view/View;\n\n"
+        r"    move-result-object p2\n\n"
         r"    if-eqz p2, (?P<label>:[A-Za-z0-9_.$-]+)$",
         smali,
     )
     if lookup_guard:
         label = lookup_guard.group("label")
-        label_text = f"    {label}\\n"
+        label_text = f"    {label}\n"
         click_call = "    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V"
         click_pos = smali.find(click_call, lookup_guard.end())
         label_pos = smali.find(label_text, click_pos + len(click_call)) if click_pos >= 0 else -1
