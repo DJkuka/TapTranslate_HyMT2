@@ -52,38 +52,66 @@ jobs:
           test -s "$model_dir/LICENSE.bubble-pop"
           sha256sum "$model_dir/model_fp16.onnx"
 
-      - name: Build standalone release APK (unsigned)
+      - name: Require persistent Android signing secrets
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.BUBBLEPOP_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.BUBBLEPOP_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.BUBBLEPOP_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.BUBBLEPOP_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$KEYSTORE_BASE64" || { echo "Missing BUBBLEPOP_KEYSTORE_BASE64 repository secret"; exit 1; }
+          test -n "$KEYSTORE_PASSWORD" || { echo "Missing BUBBLEPOP_KEYSTORE_PASSWORD repository secret"; exit 1; }
+          test -n "$KEY_ALIAS" || { echo "Missing BUBBLEPOP_KEY_ALIAS repository secret"; exit 1; }
+          test -n "$KEY_PASSWORD" || { echo "Missing BUBBLEPOP_KEY_PASSWORD repository secret"; exit 1; }
+
+      - name: Build standalone release APK
         run: gradle --no-daemon -p bubblepop-test :app:assembleRelease
 
-      - name: Verify APK and unsigned state
+      - name: Sign APK with persistent GitHub Actions keystore
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.BUBBLEPOP_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.BUBBLEPOP_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.BUBBLEPOP_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.BUBBLEPOP_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          unsigned="bubblepop-test/app/build/outputs/apk/release/app-release-unsigned.apk"
+          mkdir -p build/signing build/out
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > build/signing/bubblepop-release.jks
+          test -s build/signing/bubblepop-release.jks
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -f -p 4 "$unsigned" build/out/BubblePop_Standalone_Test_aligned.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
+            --ks build/signing/bubblepop-release.jks \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASSWORD \
+            --key-pass env:KEY_PASSWORD \
+            --out build/out/BubblePop_Standalone_Test_signed.apk \
+            build/out/BubblePop_Standalone_Test_aligned.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs build/out/BubblePop_Standalone_Test_signed.apk
+          sha256sum build/out/BubblePop_Standalone_Test_signed.apk
+          ls -lh build/out/BubblePop_Standalone_Test_signed.apk
+
+      - name: Verify signed APK
         shell: bash
         run: |
           set -euo pipefail
-          apk="bubblepop-test/app/build/outputs/apk/release/app-release-unsigned.apk"
+          apk="build/out/BubblePop_Standalone_Test_signed.apk"
           test -s "$apk"
           unzip -t "$apk" | tail -n 2
           "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -p 4 "$apk"
           unzip -Z1 "$apk" | grep -Fx "assets/models/bubblepop/model_fp16.onnx"
           unzip -Z1 "$apk" | grep -Fx "assets/models/bubblepop/LICENSE.bubble-pop"
-          if unzip -Z1 "$apk" | grep -Eiq '^META-INF/[^/]+\.(RSA|DSA|EC|SF)$'; then
-            echo "Unexpected v1 signature files in APK"
-            exit 1
-          fi
-          if "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$apk"; then
-            echo "APK unexpectedly contains an APK signature"
-            exit 1
-          else
-            echo "Unsigned APK confirmed"
-          fi
-          mkdir -p build/out
-          cp "$apk" build/out/BubblePop_Standalone_Test_unsigned.apk
-          sha256sum build/out/BubblePop_Standalone_Test_unsigned.apk
-          ls -lh build/out/BubblePop_Standalone_Test_unsigned.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
+          sha256sum "$apk"
+          ls -lh "$apk"
 
-      - name: Upload unsigned diagnostic APK
+      - name: Upload signed diagnostic APK
         uses: actions/upload-artifact@v4
         with:
-          name: BubblePop-Standalone-Test-unsigned
-          path: build/out/BubblePop_Standalone_Test_unsigned.apk
+          name: BubblePop-Standalone-Test-signed
+          path: build/out/BubblePop_Standalone_Test_signed.apk
           if-no-files-found: error
           retention-days: 30
