@@ -8,6 +8,7 @@ import org.opencv.core.MatOfInt;
 import org.opencv.core.MatOfInt4;
 import org.opencv.core.Point;
 import org.opencv.core.Rect;
+import android.graphics.RectF;
 import org.opencv.core.Scalar;
 import org.opencv.core.Size;
 import org.opencv.imgproc.Imgproc;
@@ -99,6 +100,7 @@ public final class BubblePopBoundarySplitter {
         public final int boundaryAcceptedCount;
         public final int boundaryMinThresholdTried;
         public final int boundaryMaxThresholdTried;
+        public final int ocrProtectedRejectCount;
         /** Per-component geometry diagnostics in full input-image coordinates. */
         public final List<GeometryTrace> geometryTraces;
         public final List<ConcavityTrace> concavityTraces;
@@ -108,7 +110,8 @@ public final class BubblePopBoundarySplitter {
                        int splitComponents, int boundaryThreshold, String geometrySummary,
                        int boundaryAttemptCount, int boundaryAcceptedCount,
                        int boundaryMinThresholdTried, int boundaryMaxThresholdTried,
-                       List<GeometryTrace> geometryTraces, List<ConcavityTrace> concavityTraces) {
+                       List<GeometryTrace> geometryTraces, List<ConcavityTrace> concavityTraces,
+                       int ocrProtectedRejectCount) {
             this.mask = mask;
             this.instances = instances;
             this.instanceCount = instanceCount;
@@ -121,6 +124,7 @@ public final class BubblePopBoundarySplitter {
             this.boundaryAcceptedCount = boundaryAcceptedCount;
             this.boundaryMinThresholdTried = boundaryMinThresholdTried;
             this.boundaryMaxThresholdTried = boundaryMaxThresholdTried;
+            this.ocrProtectedRejectCount = ocrProtectedRejectCount;
             this.geometryTraces = Collections.unmodifiableList(new ArrayList<>(geometryTraces));
             this.concavityTraces = Collections.unmodifiableList(new ArrayList<>(concavityTraces));
         }
@@ -145,6 +149,12 @@ public final class BubblePopBoundarySplitter {
      * The source image is used only for text evidence; no artwork-intensity watershed is used.
      */
     public static Result split(Mat source, Mat inputMask, Mat boundaryMap, Options options) {
+        return split(source, inputMask, boundaryMap, options, Collections.<RectF>emptyList());
+    }
+
+    /** OCR-aware overload: reject a candidate if a grouped text zone is divided between parts. */
+    public static Result split(Mat source, Mat inputMask, Mat boundaryMap, Options options,
+                               List<RectF> protectedTextZones) {
         if (options == null) options = Options.defaults();
         if (inputMask == null || boundaryMap == null
                 || inputMask.empty() || boundaryMap.empty()) {
@@ -174,6 +184,7 @@ public final class BubblePopBoundarySplitter {
         int boundaryAcceptedCount = 0;
         int boundaryMinThresholdTried = Integer.MAX_VALUE;
         int boundaryMaxThresholdTried = -1;
+        int ocrProtectedRejectCount = 0;
         GeometryStats geometryStats = new GeometryStats();
 
         try {
@@ -258,6 +269,15 @@ public final class BubblePopBoundarySplitter {
                                         geometryStats, x, y, options, componentId,
                                         new int[] {options.maxParts - 2});
                             }
+                            if (crossesProtectedText(boundaryCandidate, rect, protectedTextZones)) {
+                                boundaryCandidate.release(); boundaryCandidate = null; ocrProtectedRejectCount++;
+                            }
+                            if (crossesProtectedText(concavityCandidate, rect, protectedTextZones)) {
+                                concavityCandidate.release(); concavityCandidate = null; ocrProtectedRejectCount++;
+                            }
+                            if (crossesProtectedText(geometricCandidate, rect, protectedTextZones)) {
+                                geometricCandidate.release(); geometricCandidate = null; ocrProtectedRejectCount++;
+                            }
                             accepted = chooseCombinedCandidate(component, sourceRoi,
                                     boundaryCandidate, concavityCandidate, geometricCandidate,
                                     geometryStats, componentId);
@@ -314,7 +334,8 @@ public final class BubblePopBoundarySplitter {
                     count, splitCount, usedThreshold, geometryStats.summary(options),
                     boundaryAttemptCount, boundaryAcceptedCount,
                     boundaryAttemptCount == 0 ? -1 : boundaryMinThresholdTried,
-                    boundaryMaxThresholdTried, geometryStats.traces, geometryStats.concavityTraces);
+                    boundaryMaxThresholdTried, geometryStats.traces, geometryStats.concavityTraces,
+                    ocrProtectedRejectCount);
         } catch (Throwable error) {
             output.release();
             instances.release();
@@ -326,6 +347,35 @@ public final class BubblePopBoundarySplitter {
             stats.release();
             centroids.release();
         }
+    }
+
+    /** True when one OCR group is assigned to more than one proposed output part. */
+    private static boolean crossesProtectedText(
+            Candidate candidate, Rect componentBounds, List<RectF> zones) {
+        if (candidate == null || zones == null || zones.isEmpty()) return false;
+        int width = candidate.labels.cols(), height = candidate.labels.rows();
+        int[] labels = new int[width * height];
+        candidate.labels.get(0, 0, labels);
+        for (RectF zone : zones) {
+            int x0 = Math.max(0, (int) Math.floor(zone.left) - componentBounds.x);
+            int y0 = Math.max(0, (int) Math.floor(zone.top) - componentBounds.y);
+            int x1 = Math.min(width, (int) Math.ceil(zone.right) - componentBounds.x);
+            int y1 = Math.min(height, (int) Math.ceil(zone.bottom) - componentBounds.y);
+            if (x1 <= x0 || y1 <= y0) continue;
+            int firstPart = 0;
+            for (int y = y0; y < y1; y++) {
+                int offset = y * width;
+                for (int x = x0; x < x1; x++) {
+                    int label = labels[offset + x];
+                    if (label <= 0 || label >= candidate.idMap.length) continue;
+                    int part = candidate.idMap[label];
+                    if (part <= 0) continue;
+                    if (firstPart == 0) firstPart = part;
+                    else if (part != firstPart) return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static Candidate tryBoundarySplit(
