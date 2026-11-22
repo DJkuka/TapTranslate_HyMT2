@@ -9,6 +9,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RectF
 import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
@@ -32,6 +33,8 @@ import org.opencv.imgproc.Imgproc
 import com.tap_to_translate.snap_translate.hymt2.ocr.BubblePopSegmenter
 import com.tap_to_translate.snap_translate.hymt2.ocr.BubblePopWatershedSplitter
 import com.tap_to_translate.snap_translate.hymt2.ocr.BubblePopBoundarySplitter
+import com.tap_to_translate.snap_translate.hymt2.ocr.ppocrv6.OCRTextGrouper
+import com.tap_to_translate.snap_translate.hymt2.ocr.ppocrv6.PPOCRv6TextDetector
 import org.opencv.android.OpenCVLoader
 import java.io.File
 import java.io.FileOutputStream
@@ -105,6 +108,10 @@ class BubblePopDiagnosticActivity : Activity() {
         root.addView(Button(this).apply {
             text = "Разделить по геометрии маски + boundary"
             setOnClickListener { runWatershedDiagnostic() }
+        })
+        root.addView(Button(this).apply {
+            text = "PP-OCRv6 + защищённое разделение"
+            setOnClickListener { runPpOcrGuidedSplit() }
         })
         status = TextView(this).apply { text = "Изображение не выбрано."; textSize = 13f }
         root.addView(status)
@@ -801,6 +808,178 @@ class BubblePopDiagnosticActivity : Activity() {
                 mask?.release()
                 mat?.release()
                 segmenter?.close()
+                if (!inputBitmap.isRecycled) inputBitmap.recycle()
+            }
+        }
+    }
+
+
+    /** OCR-guided diagnostic: detect text lines, group them and protect each group from split seams. */
+    private fun runPpOcrGuidedSplit() {
+        val original = source ?: run {
+            Toast.makeText(this, "Сначала выбери изображение", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val inputBitmap = original.copy(Bitmap.Config.ARGB_8888, false)
+            ?: run { status.text = "Не удалось создать копию изображения."; return }
+        status.text = "PP-OCRv6: поиск текстовых областей…"
+        thread(name = "BubblePopPPOCRGuided") {
+            val startedAt = SystemClock.elapsedRealtime()
+            var detector: PPOCRv6TextDetector? = null
+            var segmenter: BubblePopSegmenter? = null
+            var pageMat: Mat? = null
+            var pageBgr: Mat? = null
+            var mask: Mat? = null
+            var boundary: Mat? = null
+            var split: BubblePopBoundarySplitter.Result? = null
+            var overlay: Bitmap? = null
+            val contours = ArrayList<MatOfPoint>()
+            try {
+                check(OpenCVLoader.initDebug()) { "OpenCV initialization failed" }
+                val bubbleModel = File(cacheDir, "bubblepop_model_fp16.onnx")
+                if (!bubbleModel.exists() || bubbleModel.length() < 100_000) {
+                    assets.open("models/bubblepop/model_fp16.onnx").use { input ->
+                        FileOutputStream(bubbleModel).use { output -> input.copyTo(output) }
+                    }
+                }
+                val sourceImage = Mat()
+                pageMat = sourceImage
+                Utils.bitmapToMat(inputBitmap, sourceImage)
+                val bgr = Mat()
+                pageBgr = bgr
+                when (sourceImage.channels()) {
+                    4 -> Imgproc.cvtColor(sourceImage, bgr, Imgproc.COLOR_RGBA2BGR)
+                    3 -> sourceImage.copyTo(bgr)
+                    1 -> Imgproc.cvtColor(sourceImage, bgr, Imgproc.COLOR_GRAY2BGR)
+                    else -> error("Unsupported source channels: ${sourceImage.channels()}")
+                }
+
+                val ocr = PPOCRv6TextDetector(this@BubblePopDiagnosticActivity)
+                detector = ocr
+                val detection = ocr.detect(bgr)
+                val groups = OCRTextGrouper.group(detection.boxes)
+                val lineBoxes = detection.boxes.mapNotNull { box ->
+                    val r = OCRTextGrouper.bounds(box)
+                    val x0 = kotlin.math.floor(r.left).toInt().coerceAtLeast(0)
+                    val y0 = kotlin.math.floor(r.top).toInt().coerceAtLeast(0)
+                    val x1 = kotlin.math.ceil(r.right).toInt().coerceAtMost(sourceImage.cols())
+                    val y1 = kotlin.math.ceil(r.bottom).toInt().coerceAtMost(sourceImage.rows())
+                    if (x1 > x0 && y1 > y0) intArrayOf(x0, y0, x1, y1) else null
+                }
+
+                val bubble = BubblePopSegmenter(bubbleModel.absolutePath)
+                segmenter = bubble
+                mask = bubble.getMask(sourceImage, lineBoxes)
+                boundary = bubble.getBoundaryMap(sourceImage)
+                val protectedZones = groups.map { RectF(it.bounds) }
+                val result = BubblePopBoundarySplitter.split(
+                    sourceImage, mask, boundary, boundaryOptions(), protectedZones
+                )
+                split = result
+
+                val instanceMask = Mat()
+                val hierarchy = Mat()
+                try {
+                    for (id in 1..result.instanceCount) {
+                        Core.compare(result.instances, Scalar(id.toDouble()), instanceMask, Core.CMP_EQ)
+                        val local = ArrayList<MatOfPoint>()
+                        Imgproc.findContours(instanceMask, local, hierarchy,
+                            Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+                        contours.addAll(local)
+                    }
+                } finally {
+                    instanceMask.release()
+                    hierarchy.release()
+                }
+
+                val output = original.copy(Bitmap.Config.ARGB_8888, true)
+                overlay = output
+                val canvas = Canvas(output)
+                val palette = intArrayOf(
+                    0xFFFF453A.toInt(), 0xFF30D158.toInt(), 0xFF0A84FF.toInt(),
+                    0xFFFF9F0A.toInt(), 0xFFBF5AF2.toInt(), 0xFF64D2FF.toInt(),
+                    0xFFFF375F.toInt(), 0xFFAC8E68.toInt()
+                )
+                val contourPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style = Paint.Style.STROKE
+                    strokeWidth = max(2f, original.width / 500f)
+                }
+                var pointCount = 0
+                for ((i, contour) in contours.withIndex()) {
+                    val pts = contour.toArray()
+                    if (pts.size < 3) continue
+                    pointCount += pts.size
+                    val path = Path().apply {
+                        moveTo(pts[0].x.toFloat(), pts[0].y.toFloat())
+                        for (j in 1 until pts.size) lineTo(pts[j].x.toFloat(), pts[j].y.toFloat())
+                        close()
+                    }
+                    contourPaint.color = palette[i % palette.size]
+                    canvas.drawPath(path, contourPaint)
+                }
+
+                val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style = Paint.Style.STROKE
+                    strokeWidth = max(1.5f, original.width / 650f)
+                }
+                val groupPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style = Paint.Style.STROKE
+                    strokeWidth = max(2f, original.width / 450f)
+                }
+                val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = 0xFFFFFFFF.toInt()
+                    textSize = max(16f, original.width / 55f)
+                    typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
+                }
+                for ((i, box) in detection.boxes.withIndex()) {
+                    val groupIndex = groups.indexOfFirst { i in it.lineIndices }.coerceAtLeast(0)
+                    linePaint.color = palette[groupIndex % palette.size]
+                    val points = box.points
+                    val path = Path().apply {
+                        moveTo(points[0].x, points[0].y)
+                        for (j in 1 until points.size) lineTo(points[j].x, points[j].y)
+                        close()
+                    }
+                    canvas.drawPath(path, linePaint)
+                }
+                for (group in groups) {
+                    groupPaint.color = palette[(group.id - 1) % palette.size]
+                    canvas.drawRect(group.bounds, groupPaint)
+                    canvas.drawText("T${group.id}", group.bounds.left.coerceAtLeast(2f),
+                        (group.bounds.top - 3f).coerceAtLeast(textPaint.textSize), textPaint)
+                }
+
+                val elapsed = SystemClock.elapsedRealtime() - startedAt
+                val report = "PP-OCRv6 tiny: текстовых строк ${detection.boxes.size}, " +
+                    "групп текста ${groups.size}; загрузка модели ${ocr.coldLoadTimeMs} мс, " +
+                    "детекция ${detection.timeMs} мс.\n" +
+                    "OCR-защита: отклонено кандидатов разреза ${result.ocrProtectedRejectCount}.\n" +
+                    "BubblePop: исходных областей ${result.inputComponents}, после разделения " +
+                    "${result.outputComponents}, разделено крупных областей ${result.splitComponents}; " +
+                    "контуров ${contours.size}, вершин $pointCount; общее время ${elapsed} мс.\n" +
+                    result.geometrySummary
+                main.post {
+                    if (!isFinishing) {
+                        preview.setImageBitmap(output)
+                        status.text = report
+                    } else output.recycle()
+                }
+                overlay = null
+            } catch (t: Throwable) {
+                overlay?.recycle()
+                main.post {
+                    status.text = "Ошибка PP-OCRv6/BubblePop: ${t.javaClass.simpleName}: ${t.message}"
+                }
+            } finally {
+                contours.forEach { it.release() }
+                split?.mask?.release()
+                split?.instances?.release()
+                boundary?.release()
+                mask?.release()
+                pageMat?.release()
+                pageBgr?.release()
+                segmenter?.close()
+                detector?.close()
                 if (!inputBitmap.isRecycled) inputBitmap.recycle()
             }
         }
