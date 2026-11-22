@@ -483,9 +483,10 @@ class BubblePopDiagnosticActivity : Activity() {
                     for (componentId in 1 until componentCount) {
                         val area = componentStats.get(componentId, Imgproc.CC_STAT_AREA)?.get(0) ?: 0.0
                         if (area < 20.0) continue
-                        val center = componentCentroids.get(componentId, 0) ?: continue
-                        val cx = center[0].toFloat()
-                        val cy = center[1].toFloat()
+                        val centerX = componentCentroids.get(componentId, 0)?.firstOrNull() ?: continue
+                        val centerY = componentCentroids.get(componentId, 1)?.firstOrNull() ?: continue
+                        val cx = centerX.toFloat()
+                        val cy = centerY.toFloat()
                         val label = componentId.toString()
                         val halfWidth = max(textHeight * 0.72f, numberPaint.measureText(label) / 2f + 10f)
                         val halfHeight = textHeight * 0.62f
