@@ -242,6 +242,35 @@ jobs:
           echo "Final APK size:"
           ls -lh build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
 
+      - name: Verify BubblePop rendering and PP-OCRv6 live handoff
+        if: github.ref == 'refs/heads/bubblepop-text-regions-apk219'
+        shell: bash
+        run: |
+          set -euo pipefail
+          decoded="build/bubblepop-ppocr-final-check"
+          java -jar tools/apktool.jar d -f -o "$decoded" build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
+          root="$decoded/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr"
+          test -s "$root/BubblePopPageMaskDetector.smali"
+          test -s "$root/BubblePopSegmenter.smali"
+          test -s "$root/BubbleTextLayout.smali"
+          test -s "$root/PaddleOcrLiveBridge.smali"
+          test -s "$root/RtDetrLiveBridge.smali"
+          test -s "$decoded/assets/models/bubblepop/model_fp16.onnx"
+          test -s "$decoded/assets/models/det/inference.onnx"
+          test -s "$decoded/assets/models/rec/inference.onnx"
+          test -s "$decoded/assets/models/rec/inference.yml"
+          echo "d73e0058b7a8086bbd57f3d10b8bcd4ff95363f67e06e2762b5e814fe9c9410e  $decoded/assets/models/det/inference.onnx" | sha256sum -c -
+          echo "5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634  $decoded/assets/models/rec/inference.onnx" | sha256sum -c -
+          bridge="$root/RtDetrLiveBridge.smali"
+          grep -q 'PaddleOcrLiveBridge;->recognizeBlocking' "$bridge"
+          grep -q 'drawBubbleText' "$bridge"
+          grep -q 'createOverlayBubbleMask' "$bridge"
+          grep -q 'continuing OCR without region association' "$bridge"
+          grep -q 'ocr_bubblepop_page_mask_enabled' "$bridge"
+          grep -q 'drawBubbleText' "$decoded/smali_classes3/rh/f.smali"
+          grep -q 'drawBubbleText' "$decoded/smali_classes3/rh/g.smali"
+          echo "Verified BubblePop model, mask-to-overlay layout hooks, PP-OCRv6 models and independent OCR handoff."
+      
       - name: Verify hybrid OCR contracts were merged into classes5.dex
         if: github.ref == 'refs/heads/ocr-hybrid-prototype' || github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing' || github.ref == 'refs/heads/ocr-region-geometry' || github.ref == 'refs/heads/ocr-region-gesture-presets' || github.ref == 'refs/heads/bubblepop-text-regions-apk219'
         shell: bash
