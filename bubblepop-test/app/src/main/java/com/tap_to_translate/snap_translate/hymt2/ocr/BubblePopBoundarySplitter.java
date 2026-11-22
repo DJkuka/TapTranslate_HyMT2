@@ -252,6 +252,12 @@ public final class BubblePopBoundarySplitter {
                         }
                         Mat sourceRoi = source == null ? null : source.submat(rect);
                         try {
+                            if (concavityCandidate != null && options.maxParts > 2) {
+                                concavityCandidate = expandConcavityCandidate(
+                                        component, sourceRoi, concavityCandidate,
+                                        geometryStats, x, y, options, componentId,
+                                        new int[] {options.maxParts - 2});
+                            }
                             accepted = chooseCombinedCandidate(component, sourceRoi,
                                     boundaryCandidate, concavityCandidate, geometricCandidate,
                                     geometryStats, componentId);
@@ -964,6 +970,119 @@ public final class BubblePopBoundarySplitter {
         }
     }
 
+
+    /**
+     * Recursively split the parts produced by the first concavity cut.
+     * A chain of four touching balloons needs three cuts; a one-shot binary
+     * split can never produce more than two instances regardless of its score.
+     * Each additional cut is independently validated before it is kept.
+     */
+    private static Candidate expandConcavityCandidate(
+            Mat original, Mat source, Candidate initial, GeometryStats stats,
+            int offsetX, int offsetY, Options options, int componentId,
+            int[] remainingSplits) {
+        if (initial == null || remainingSplits[0] <= 0) return initial;
+
+        List<Candidate> children = new ArrayList<>();
+        int width = original.cols();
+        int height = original.rows();
+        int[] initialLabels = new int[width * height];
+        initial.labels.get(0, 0, initialLabels);
+        byte[] initialMask = new byte[width * height];
+        initial.mask.get(0, 0, initialMask);
+
+        try {
+            for (int part = 1; part <= initial.partCount; part++) {
+                byte[] partPixels = new byte[width * height];
+                int partArea = 0;
+                for (int i = 0; i < initialLabels.length; i++) {
+                    if (initialLabels[i] == part && (initialMask[i] & 0xFF) != 0) {
+                        partPixels[i] = (byte) 255;
+                        partArea++;
+                    }
+                }
+                Mat partMask = new Mat(height, width, CvType.CV_8UC1);
+                partMask.put(0, 0, partPixels);
+
+                Candidate child = singlePartCandidate(partMask);
+                if (remainingSplits[0] > 0 && partArea >= options.minComponentArea) {
+                    Candidate proposal = tryConcavitySplit(partMask, stats,
+                            offsetX, offsetY, options.minPartArea,
+                            options.minPartAreaFraction, options.minRetainedFraction);
+                    if (proposal != null) {
+                        Candidate checked = chooseCombinedCandidate(
+                                partMask, source, null, proposal, null, stats, componentId);
+                        if (checked == proposal) {
+                            remainingSplits[0]--;
+                            child.release();
+                            child = expandConcavityCandidate(
+                                    partMask, source, proposal, stats,
+                                    offsetX, offsetY, options, componentId, remainingSplits);
+                        } else {
+                            proposal.release();
+                        }
+                    }
+                }
+                partMask.release();
+                children.add(child);
+            }
+
+            int totalParts = 0;
+            for (Candidate child : children) totalParts += child.partCount;
+            Mat mergedMask = Mat.zeros(original.size(), CvType.CV_8UC1);
+            int[] mergedLabels = new int[width * height];
+            int nextPart = 1;
+            double proposalSum = 0.0;
+            int proposalCount = 0;
+            for (Candidate child : children) {
+                int[] childLabels = new int[width * height];
+                byte[] childMask = new byte[width * height];
+                child.labels.get(0, 0, childLabels);
+                child.mask.get(0, 0, childMask);
+                for (int i = 0; i < childLabels.length; i++) {
+                    int localId = childLabels[i];
+                    if (localId <= 0 || (childMask[i] & 0xFF) == 0) continue;
+                    int mapped = localId < child.idMap.length ? child.idMap[localId] : 0;
+                    if (mapped <= 0 || mapped > child.partCount) continue;
+                    mergedLabels[i] = nextPart + mapped - 1;
+                }
+                Core.bitwise_or(mergedMask, child.mask, mergedMask);
+                proposalSum += child.proposalScore * child.partCount;
+                proposalCount += child.partCount;
+                nextPart += child.partCount;
+            }
+            Mat labels = new Mat(height, width, CvType.CV_32SC1);
+            labels.put(0, 0, mergedLabels);
+            int[] idMap = new int[totalParts + 1];
+            for (int i = 1; i <= totalParts; i++) idMap[i] = i;
+            double score = proposalCount == 0 ? initial.proposalScore
+                    : proposalSum / proposalCount;
+            Candidate merged = new Candidate(mergedMask, labels, idMap,
+                    totalParts, "concavity", score);
+            initial.release();
+            for (Candidate child : children) child.release();
+            children.clear();
+            return merged;
+        } catch (Throwable error) {
+            for (Candidate child : children) child.release();
+            throw error;
+        }
+    }
+
+    private static Candidate singlePartCandidate(Mat partMask) {
+        Mat mask = partMask.clone();
+        int width = partMask.cols(), height = partMask.rows();
+        byte[] pixels = new byte[width * height];
+        partMask.get(0, 0, pixels);
+        int[] labelsData = new int[width * height];
+        for (int i = 0; i < pixels.length; i++) {
+            if ((pixels[i] & 0xFF) != 0) labelsData[i] = 1;
+        }
+        Mat labels = new Mat(height, width, CvType.CV_32SC1);
+        labels.put(0, 0, labelsData);
+        return new Candidate(mask, labels, new int[] {0, 1}, 1,
+                "concavity", 0.50);
+    }
 
     private static Candidate chooseCombinedCandidate(
             Mat component, Mat source, Candidate boundary, Candidate concavity,
