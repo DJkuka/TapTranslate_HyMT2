@@ -1124,47 +1124,60 @@ public final class BubblePopBoundarySplitter {
             Candidate geometric, GeometryStats stats, int componentId) {
         Candidate best = null;
         CandidateEvaluation bestEvaluation = null;
+        Candidate rejectedBest = null;
+        CandidateEvaluation rejectedEvaluation = null;
+        String rejectedReason = null;
         List<String> reports = new ArrayList<>();
         Candidate[] candidates = new Candidate[] {boundary, concavity, geometric};
         for (Candidate candidate : candidates) {
             if (candidate == null) continue;
             CandidateEvaluation evaluation = evaluateCandidate(
                     component, source, candidate, concavity, geometric);
-            reports.add(candidate.method + "=" + evaluation.describe());
+            String candidateRejection = candidateRejectionReason(candidate, evaluation);
+            reports.add(candidate.method + "=" + evaluation.describe()
+                    + (candidateRejection == null ? " [подходит]" : " [отклонён: " + candidateRejection + "]"));
+            if (candidateRejection != null) {
+                if (rejectedEvaluation == null
+                        || evaluation.totalScore > rejectedEvaluation.totalScore) {
+                    rejectedBest = candidate;
+                    rejectedEvaluation = evaluation;
+                    rejectedReason = candidateRejection;
+                }
+                continue;
+            }
             if (bestEvaluation == null || evaluation.totalScore > bestEvaluation.totalScore) {
                 best = candidate;
                 bestEvaluation = evaluation;
             }
         }
         if (best == null) {
-            stats.combinedSummaries.add("компонент " + componentId + ": кандидаты не сформированы");
-            return null;
-        }
-
-        String rejection = null;
-        if (bestEvaluation.crossedGlyphs >= 2
-                && bestEvaluation.crossedInkFraction >= 0.025) {
-            rejection = "разрез проходит через текст";
-        } else if (bestEvaluation.balance < 0.38) {
-            rejection = "части слишком несбалансированы";
-        } else if (bestEvaluation.retainedFraction < 0.82) {
-            rejection = "потеряно слишком много площади";
-        } else if ("distance/saddle".equals(best.method)
-                && bestEvaluation.distanceScore < 0.08) {
-            rejection = "нет подтверждения узкой перемычки";
-        } else if (bestEvaluation.totalScore < 0.58) {
-            rejection = "недостаточный общий балл";
-        }
-        if (rejection != null) {
-            stats.combinedSummaries.add("компонент " + componentId + ": отклонено (" +
-                    rejection + "; " + bestEvaluation.describe() + "); " +
-                    String.join("; ", reports));
+            if (rejectedBest == null) {
+                stats.combinedSummaries.add("компонент " + componentId + ": кандидаты не сформированы");
+            } else {
+                stats.combinedSummaries.add("компонент " + componentId + ": отклонено (" +
+                        rejectedReason + "; " + rejectedEvaluation.describe() + "); " +
+                        String.join("; ", reports));
+            }
             return null;
         }
         stats.combinedSummaries.add("компонент " + componentId + ": принято " +
                 best.method + " (" + bestEvaluation.describe() + "); " +
                 String.join("; ", reports));
         return best;
+    }
+
+    private static String candidateRejectionReason(
+            Candidate candidate, CandidateEvaluation evaluation) {
+        if (evaluation.crossedGlyphs >= 2 && evaluation.crossedInkFraction >= 0.025) {
+            return "разрез проходит через текст";
+        }
+        if (evaluation.balance < 0.38) return "части слишком несбалансированы";
+        if (evaluation.retainedFraction < 0.82) return "потеряно слишком много площади";
+        if ("distance/saddle".equals(candidate.method) && evaluation.distanceScore < 0.08) {
+            return "нет подтверждения узкой перемычки";
+        }
+        if (evaluation.totalScore < 0.58) return "недостаточный общий балл";
+        return null;
     }
 
     private static CandidateEvaluation evaluateCandidate(
