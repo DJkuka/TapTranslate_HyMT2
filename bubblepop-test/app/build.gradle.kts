@@ -10,7 +10,7 @@ android {
     defaultConfig {
         applicationId = "com.taptranslate.bubblepoptest"
         minSdk = 24
-        targetSdk = 28
+        targetSdk = 35
         versionCode = 1
         versionName = "0.1-diagnostic"
     }
