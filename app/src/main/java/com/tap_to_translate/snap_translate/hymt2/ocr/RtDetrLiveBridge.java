@@ -40,6 +40,7 @@ public final class RtDetrLiveBridge {
     private static final String FREE_ALPHA_ENABLED = "ocr_free_text_alpha_enabled";
     private static final String FREE_ALPHA_PERCENT = "ocr_free_text_alpha_percent";
     private static final String PADDLE_ENGINE_NAME = "PP-OCRv6 (Comics)";
+    private static final String BUBBLEPOP_PAGE_MASK_ENABLED = "ocr_bubblepop_page_mask_enabled";
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor(
             new ThreadFactory() {
                 @Override public Thread newThread(Runnable task) {
@@ -52,6 +53,8 @@ public final class RtDetrLiveBridge {
 
     private static volatile RtDetrComicRegionDetector detector;
     private static volatile Context detectorContext;
+    private static volatile BubblePopPageMaskDetector pageMaskDetector;
+    private static volatile Context pageMaskContext;
 
     private RtDetrLiveBridge() {}
 
@@ -67,7 +70,8 @@ public final class RtDetrLiveBridge {
 
         final boolean paddleEnabled = isPaddleSelected();
         final boolean classifyForFreeTextOpacity = isSeparateFreeTextAlphaEnabled(context);
-        if (!paddleEnabled && !classifyForFreeTextOpacity) {
+        final boolean pageMaskEnabled = isBubblePopPageMaskEnabled(context);
+        if (!paddleEnabled && !classifyForFreeTextOpacity && !pageMaskEnabled) {
             synchronized (LOCK) {
                 PendingFrame previous = PENDING.remove(owner);
                 if (previous != null && !previous.task.isDone()) previous.task.cancel(true);
@@ -104,6 +108,20 @@ public final class RtDetrLiveBridge {
                                     new Rect(0, 0, snapshot.getWidth(), snapshot.getHeight()),
                                     0, 0, 1f, 1f);
                             List<DetectedRegion> result = active.detect(frame);
+                            if (isBubblePopPageMaskEnabled(context)) {
+                                try {
+                                    DetectedRegion pageMask = getPageMaskDetector(context).detect(snapshot);
+                                    if (pageMask != null) {
+                                        ArrayList<DetectedRegion> merged = new ArrayList<>();
+                                        if (result != null) merged.addAll(result);
+                                        merged.add(pageMask);
+                                        result = merged;
+                                        Log.i(TAG, "BubblePop page mask attached; connected regions are not split");
+                                    }
+                                } catch (Throwable maskError) {
+                                    Log.e(TAG, "BubblePop page mask failed; OCR container geometry retained", maskError);
+                                }
+                            }
                             int containers = 0;
                             int bubbleText = 0;
                             int free = 0;
@@ -144,7 +162,8 @@ public final class RtDetrLiveBridge {
 
         final Context resolvedContext = resolveContext(owner);
         final boolean paddleEnabled = isPaddleSelected();
-        if (!paddleEnabled && !isSeparateFreeTextAlphaEnabled(resolvedContext)) {
+        if (!paddleEnabled && !isSeparateFreeTextAlphaEnabled(resolvedContext)
+                && !isBubblePopPageMaskEnabled(resolvedContext)) {
             synchronized (LOCK) {
                 ACTIVE_REGIONS.remove(owner);
             }
@@ -418,6 +437,34 @@ public final class RtDetrLiveBridge {
         } catch (Throwable error) {
             Log.w(TAG, "Cannot resolve OCR service context", error);
             return null;
+        }
+    }
+
+    private static boolean isBubblePopPageMaskEnabled(Context context) {
+        if (context == null) return false;
+        try {
+            return context.getSharedPreferences(OCR_PREFS, Context.MODE_PRIVATE)
+                    .getBoolean(BUBBLEPOP_PAGE_MASK_ENABLED, false);
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not read BubblePop page-mask preference; feature disabled", error);
+            return false;
+        }
+    }
+
+    private static BubblePopPageMaskDetector getPageMaskDetector(Context context) throws Exception {
+        BubblePopPageMaskDetector current = pageMaskDetector;
+        if (current != null && pageMaskContext == context) return current;
+        synchronized (RtDetrLiveBridge.class) {
+            current = pageMaskDetector;
+            if (current != null && pageMaskContext == context) return current;
+            if (current != null) {
+                try { current.close(); } catch (Throwable ignored) {}
+            }
+            current = new BubblePopPageMaskDetector(context);
+            pageMaskContext = context;
+            pageMaskDetector = current;
+            Log.i(TAG, "BubblePop page-mask model/runtime initialized");
+            return current;
         }
     }
 
