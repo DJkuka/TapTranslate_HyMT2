@@ -622,6 +622,9 @@ public final class BubblePopBoundarySplitter {
                 // Assign unclaimed foreground to the nearest seed, preserving
                 // every original mask pixel while supporting 2..maxParts lobes.
                 int marker = markerData[i];
+                // OpenCV marks the actual watershed separator as -1.
+                // Keep those pixels unassigned: they form the real neck-following cut.
+                if (marker == -1) continue;
                 if (marker < 2 || marker >= partCount + 2) {
                     int px = i % width;
                     int py = i / width;
@@ -665,9 +668,11 @@ public final class BubblePopBoundarySplitter {
             int[] splitLabels = new int[total];
             for (int i = 0; i < total; i++) {
                 if ((componentData[i] & 0xFF) == 0) continue;
+                // Preserve the complete balloon mask, but leave watershed-ridge
+                // pixels with instance ID 0 so adjacent instances remain separated.
+                splitMask[i] = (byte) 255;
                 int partId = markerData[i] - 1;
-                if (partId >= 1 && partId <= partCount) {
-                    splitMask[i] = (byte) 255;
+                if (partId >= 1 && partId <= partCount && markerData[i] != -1) {
                     splitLabels[i] = partId;
                 }
             }
@@ -981,7 +986,8 @@ public final class BubblePopBoundarySplitter {
             rejection = "части слишком несбалансированы";
         } else if (bestEvaluation.retainedFraction < 0.82) {
             rejection = "потеряно слишком много площади";
-        } else if (bestEvaluation.distanceScore < 0.08) {
+        } else if ("distance/saddle".equals(best.method)
+                && bestEvaluation.distanceScore < 0.08) {
             rejection = "нет подтверждения узкой перемычки";
         } else if (bestEvaluation.totalScore < 0.58) {
             rejection = "недостаточный общий балл";
@@ -1039,10 +1045,32 @@ public final class BubblePopBoundarySplitter {
         TextEvidence text = source == null
                 ? new TextEvidence(0.35, 0, 0, "исходное изображение недоступно", 0, 0.0)
                 : measureTextOnBothSides(source, component, labels, candidate.partCount);
-        double combined = 0.22 * proposalScore
-                + 0.30 * distanceScore
-                + 0.18 * text.score
-                + 0.30 * areaQuality;
+        double proposalWeight;
+        double distanceWeight;
+        double textWeight;
+        double qualityWeight;
+        if ("concavity".equals(candidate.method)) {
+            // Convexity-defect pairing is itself geometric evidence; requiring
+            // a second, unrelated saddle test here wrongly vetoed good concavities.
+            proposalWeight = 0.34;
+            distanceWeight = 0.12;
+            textWeight = 0.24;
+            qualityWeight = 0.30;
+        } else if ("boundary".equals(candidate.method)) {
+            proposalWeight = 0.32;
+            distanceWeight = 0.20;
+            textWeight = 0.18;
+            qualityWeight = 0.30;
+        } else {
+            proposalWeight = 0.22;
+            distanceWeight = 0.30;
+            textWeight = 0.18;
+            qualityWeight = 0.30;
+        }
+        double combined = proposalWeight * proposalScore
+                + distanceWeight * distanceScore
+                + textWeight * text.score
+                + qualityWeight * areaQuality;
         return new CandidateEvaluation(candidate.method, combined, proposalScore,
                 distanceScore, text.score, areaQuality, balance,
                 retainedFraction, text.firstCount, text.secondCount, text.note,
