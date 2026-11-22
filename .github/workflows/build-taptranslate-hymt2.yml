@@ -249,40 +249,61 @@ jobs:
           set -euo pipefail
           decoded="build/bubblepop-ppocr-final-check"
           java -jar tools/apktool.jar d -f -o "$decoded" build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
-          root="$decoded/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr"
-          test -s "$root/BubblePopPageMaskDetector.smali"
-          test -s "$root/BubblePopSegmenter.smali"
-          test -s "$root/BubbleTextLayout.smali"
-          test -s "$root/PaddleOcrLiveBridge.smali"
-          test -s "$root/RtDetrLiveBridge.smali"
+          find_one_smali() {
+            local rel="$1"
+            local -a matches
+            mapfile -t matches < <(find "$decoded" -type f -path "*/$rel" -print)
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "Expected exactly one DEX definition for $rel; found ${#matches[@]}" >&2
+              printf '%s\n' "${matches[@]}" >&2
+              exit 1
+            fi
+            printf '%s' "${matches[0]}"
+          }
+          for cls in BubblePopPageMaskDetector BubblePopSegmenter BubbleTextLayout PaddleOcrLiveBridge RtDetrLiveBridge; do
+            test -s "$(find_one_smali "com/tap_to_translate/snap_translate/hymt2/ocr/$cls.smali")"
+          done
+          bridge="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge.smali)"
+          renderer_f="$(find_one_smali rh/f.smali)"
+          renderer_g="$(find_one_smali rh/g.smali)"
           test -s "$decoded/assets/models/bubblepop/model_fp16.onnx"
           test -s "$decoded/assets/models/det/inference.onnx"
           test -s "$decoded/assets/models/rec/inference.onnx"
           test -s "$decoded/assets/models/rec/inference.yml"
           echo "d73e0058b7a8086bbd57f3d10b8bcd4ff95363f67e06e2762b5e814fe9c9410e  $decoded/assets/models/det/inference.onnx" | sha256sum -c -
           echo "5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634  $decoded/assets/models/rec/inference.onnx" | sha256sum -c -
-          bridge="$root/RtDetrLiveBridge.smali"
           grep -q 'PaddleOcrLiveBridge;->recognizeBlocking' "$bridge"
           grep -q 'drawBubbleText' "$bridge"
           grep -q 'createOverlayBubbleMask' "$bridge"
           grep -q 'continuing OCR without region association' "$bridge"
           grep -q 'ocr_bubblepop_page_mask_enabled' "$bridge"
-          grep -q 'drawBubbleText' "$decoded/smali_classes3/rh/f.smali"
-          grep -q 'drawBubbleText' "$decoded/smali_classes3/rh/g.smali"
+          grep -q 'drawBubbleText' "$renderer_f"
+          grep -q 'drawBubbleText' "$renderer_g"
           echo "Verified BubblePop model, mask-to-overlay layout hooks, PP-OCRv6 models and independent OCR handoff."
       
-      - name: Verify hybrid OCR contracts were merged into classes5.dex
+      - name: Verify hybrid OCR contracts are present in the final APK DEX files
         if: github.ref == 'refs/heads/ocr-hybrid-prototype' || github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing' || github.ref == 'refs/heads/ocr-region-geometry' || github.ref == 'refs/heads/ocr-region-gesture-presets' || github.ref == 'refs/heads/bubblepop-text-regions-apk219'
         shell: bash
         run: |
           set -euo pipefail
           java -jar tools/apktool.jar d -f -o build/ocr-final-check build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
-          root=build/ocr-final-check/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr
+          decoded="build/ocr-final-check"
+          find_one_smali() {
+            local rel="$1"
+            local -a matches
+            mapfile -t matches < <(find "$decoded" -type f -path "*/$rel" -print)
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "Expected exactly one DEX definition for $rel; found ${#matches[@]}" >&2
+              printf '%s\n' "${matches[@]}" >&2
+              exit 1
+            fi
+            printf '%s' "${matches[0]}"
+          }
           for cls in OcrRegionKind OcrFrame DetectedRegion RecognizedText OcrTextRegion OcrRegionDetector RegionTextRecognizer OcrPipelineResult HybridOcrPipeline BackgroundSample OuterRingColorEstimator BitmapOuterRingSampler RtDetrInference RtDetrInferenceOutput RtDetrOutputDecoder RtDetrModelProvider OnnxRuntimeRtDetrInference RtDetrComicRegionDetector RtDetrLiveBridge; do
-            test -s "$root/$cls.smali" || { echo "Missing merged OCR class: $cls"; exit 1; }
+            test -s "$(find_one_smali "com/tap_to_translate/snap_translate/hymt2/ocr/$cls.smali")" || { echo "Missing merged OCR class: $cls"; exit 1; }
           done
-          test -s build/ocr-final-check/smali_classes5/ai/onnxruntime/OrtEnvironment.smali
-          test -s build/ocr-final-check/smali_classes5/ai/onnxruntime/OrtSession.smali
+          test -s "$(find_one_smali ai/onnxruntime/OrtEnvironment.smali)"
+          test -s "$(find_one_smali ai/onnxruntime/OrtSession.smali)"
           live="build/ocr-final-check/smali_classes3/vh/j.smali"
           python - <<'PY'
           from pathlib import Path
@@ -343,19 +364,34 @@ jobs:
         run: |
           set -euo pipefail
           decoded="build/ocr-final-check"
-          test -s "$decoded/smali_classes5/com/paddle/ocr/PaddleOCR.smali"
-          test -s "$decoded/smali_classes5/com/paddle/ocr/engine/OCREngine.smali"
-          test -s "$decoded/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrLiveBridge.smali"
-          test -s "$decoded/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrTextLine.smali"
-          test -s "$decoded/smali_classes5/org/opencv/android/Utils.smali"
-          test -s "$decoded/smali_classes2/nf/b.smali"
+          find_one_smali() {
+            local rel="$1"
+            local -a matches
+            mapfile -t matches < <(find "$decoded" -type f -path "*/$rel" -print)
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "Expected exactly one DEX definition for $rel; found ${#matches[@]}" >&2
+              printf '%s\n' "${matches[@]}" >&2
+              exit 1
+            fi
+            printf '%s' "${matches[0]}"
+          }
+          test -s "$(find_one_smali com/paddle/ocr/PaddleOCR.smali)"
+          test -s "$(find_one_smali com/paddle/ocr/engine/OCREngine.smali)"
+          test -s "$(find_one_smali com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrLiveBridge.smali)"
+          test -s "$(find_one_smali com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrTextLine.smali)"
+          test -s "$(find_one_smali org/opencv/android/Utils.smali)"
+          test -s "$(find_one_smali nf/b.smali)"
+          bridge="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge.smali)"
+          child="$(find_one_smali nf/b.smali)"
+          paddle_bridge="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrLiveBridge.smali)"
           test -s "$decoded/assets/models/det/inference.onnx"
           test -s "$decoded/assets/models/rec/inference.onnx"
           test -s "$decoded/assets/models/rec/inference.yml"
           test -s "$decoded/lib/arm64-v8a/libopencv_java4.so"
-          python - <<'PY'
+          BRIDGE="$bridge" CHILD="$child" PADDLE_BRIDGE="$paddle_bridge" python - <<'PY'
           from pathlib import Path
-          bridge = Path("build/ocr-final-check/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge.smali").read_text()
+          import os
+          bridge = Path(os.environ["BRIDGE"]).read_text()
           required = (
               "PaddleOcrLiveBridge;->recognizeBlocking",
               "applyPaddleBubbleGroups",
@@ -366,11 +402,11 @@ jobs:
           missing = [marker for marker in required if marker not in bridge]
           if missing:
               raise SystemExit("Paddle-native OCR handoff contract is incomplete: " + ", ".join(missing))
-          child = Path("build/ocr-final-check/smali_classes2/nf/b.smali").read_text()
+          child = Path(os.environ["CHILD"]).read_text()
           constructor = "Ljava/lang/String;Landroid/graphics/Rect;Ljava/util/List;Ljava/lang/String;)V"
           if constructor not in child or "Lgf/j;-><init>" not in child:
               raise SystemExit("Host nf/b child OCR constructor for Paddle lines is missing")
-          paddle_bridge = Path("build/ocr-final-check/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrLiveBridge.smali").read_text()
+          paddle_bridge = Path(os.environ["PADDLE_BRIDGE"]).read_text()
           if "PaddleOcrTextLine" not in paddle_bridge:
               raise SystemExit("PP-OCRv6 per-line geometry is missing from the live adapter")
           print("Paddle OCR, OpenCV, native bubble/free-text geometry, host child constructor and ML Kit fallback verified.")
