@@ -399,8 +399,18 @@ def patch_ocr_engine_picker(base: Path) -> None:
 
     if PADDLE_OCR_NAME not in text or MLKIT_OCR_NAME not in text:
         raise RuntimeError("PP-OCRv6 / ML Kit entries were not added")
-    if "hymt2_ocr_selection_ready" not in text:
-        raise RuntimeError("Legacy Device Text Recognition was not migrated to PP-OCRv6")
+    # APK219 may already contain an updated selection getter with a direct
+    # Paddle branch, so the generated label is not a reliable migration test.
+    # Verify the actual getter instead: any remaining legacy default must have
+    # a Paddle mapping in the same method.
+    method = ".method public static c()Ljava/lang/String;"
+    getter_start = text.find(method)
+    getter_end = text.find(".end method", getter_start)
+    if getter_start < 0 or getter_end < 0:
+        raise RuntimeError("Could not verify OCR selection getter")
+    getter = text[getter_start:getter_end]
+    if "Device Text Recognition" in getter and PADDLE_OCR_NAME not in getter:
+        raise RuntimeError("Legacy Device Text Recognition still has no PP-OCRv6 mapping")
     path.write_text(text, encoding="utf-8")
     print("Added PP-OCRv6 and true ML Kit options; old Device default maps to PP-OCRv6")
 
