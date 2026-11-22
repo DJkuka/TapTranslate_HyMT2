@@ -486,30 +486,62 @@ class BubblePopDiagnosticActivity : Activity() {
                 // have ID 0 and are included when both sides are visible nearby.
                 val instanceValues = IntArray(result!!.instances.rows() * result!!.instances.cols())
                 result!!.instances.get(0, 0, instanceValues)
-                val maskValues = ByteArray(result!!.mask.rows() * result!!.mask.cols())
-                result!!.mask.get(0, 0, maskValues)
                 val imageWidth = result!!.instances.cols()
                 val imageHeight = result!!.instances.rows()
+
+                // Dilate only the foreground mask so that pixels removed by a
+                // concavity cut are included in the seam search. The old code
+                // skipped all zero-mask pixels, i.e. exactly the cut itself.
+                val expandedMask = Mat()
+                val seamKernel = Imgproc.getStructuringElement(
+                    Imgproc.MORPH_ELLIPSE, org.opencv.core.Size(9.0, 9.0))
+                val expandedValues = ByteArray(imageWidth * imageHeight)
+                try {
+                    Imgproc.dilate(result!!.mask, expandedMask, seamKernel)
+                    expandedMask.get(0, 0, expandedValues)
+                } finally {
+                    expandedMask.release()
+                    seamKernel.release()
+                }
+
                 val separatorPoints = ArrayList<Float>()
-                for (y in 1 until imageHeight - 1) {
-                    for (x in 1 until imageWidth - 1) {
+                val directions = arrayOf(
+                    intArrayOf(1, 0), intArrayOf(0, 1),
+                    intArrayOf(1, 1), intArrayOf(1, -1),
+                    intArrayOf(1, 2), intArrayOf(2, 1),
+                    intArrayOf(1, -2), intArrayOf(2, -1)
+                )
+                for (y in 5 until imageHeight - 5) {
+                    for (x in 5 until imageWidth - 5) {
                         val index = y * imageWidth + x
-                        if ((maskValues[index].toInt() and 0xFF) == 0) continue
-                        val ownId = instanceValues[index]
-                        val nearbyIds = HashSet<Int>()
-                        val radius = if (ownId == 0) 2 else 1
-                        for (dy in -radius..radius) {
-                            for (dx in -radius..radius) {
-                                if (dx == 0 && dy == 0) continue
-                                val otherId = instanceValues[(y + dy) * imageWidth + x + dx]
-                                if (otherId > 0 && (ownId == 0 || otherId != ownId)) {
-                                    nearbyIds.add(otherId)
+                        if ((expandedValues[index].toInt() and 0xFF) == 0) continue
+                        val foundIds = HashSet<Int>(4)
+                        for (direction in directions) {
+                            val dx = direction[0]
+                            val dy = direction[1]
+                            var before = 0
+                            var after = 0
+                            for (step in 1..4) {
+                                if (before == 0) {
+                                    val px = x - dx * step
+                                    val py = y - dy * step
+                                    val id = instanceValues[py * imageWidth + px]
+                                    if (id > 0) before = id
                                 }
+                                if (after == 0) {
+                                    val px = x + dx * step
+                                    val py = y + dy * step
+                                    val id = instanceValues[py * imageWidth + px]
+                                    if (id > 0) after = id
+                                }
+                                if (before > 0 && after > 0) break
+                            }
+                            if (before > 0 && after > 0 && before != after) {
+                                foundIds.add(before)
+                                foundIds.add(after)
                             }
                         }
-                        val isSeparator = if (ownId == 0) nearbyIds.size >= 2
-                            else nearbyIds.isNotEmpty()
-                        if (isSeparator) {
+                        if (foundIds.size >= 2) {
                             separatorPoints.add(x.toFloat())
                             separatorPoints.add(y.toFloat())
                         }
@@ -532,12 +564,12 @@ class BubblePopDiagnosticActivity : Activity() {
                 }
                 for (trace in concavityTraces) {
                     if (trace.x1 >= 0 && trace.x2 >= 0) {
+                        // Proposal endpoints only. Do not draw the straight chord:
+                        // it is a test hypothesis, not the final bubble boundary.
                         concavityPaint.color = if (trace.outcome == "accepted")
                             0xFF00E5FF.toInt() else 0xFFFF9F0A.toInt()
-                        canvas.drawLine(trace.x1.toFloat(), trace.y1.toFloat(),
-                            trace.x2.toFloat(), trace.y2.toFloat(), concavityPaint)
-                        canvas.drawCircle(trace.x1.toFloat(), trace.y1.toFloat(), 7f, concavityPaint)
-                        canvas.drawCircle(trace.x2.toFloat(), trace.y2.toFloat(), 7f, concavityPaint)
+                        canvas.drawCircle(trace.x1.toFloat(), trace.y1.toFloat(), 6f, concavityPaint)
+                        canvas.drawCircle(trace.x2.toFloat(), trace.y2.toFloat(), 6f, concavityPaint)
                     }
                 }
                 val concavityReport = concavityTraces.mapIndexed { index, trace ->
@@ -577,7 +609,7 @@ class BubblePopDiagnosticActivity : Activity() {
                 main.post {
                     if (!isFinishing) {
                         preview.setImageBitmap(finalBitmap)
-                        status.text = "Объединённая оценка (вогнутости + distance/saddle + текст по сторонам + качество частей): исходных областей $inputCount, итоговых областей $outputCount, разделено: $splitCount. $boundaryInfo. ${result!!.geometrySummary}.\\nТрассировка попыток:\\n$traceReport\\nConcavity-кандидаты (оранжевый — отклонённая хорда, голубой — принятая):\\n$concavityReport\\nМетки: жёлтые круги — кандидаты центров; зелёный/голубой — центры выбранной пары; красный — седловая точка; розовая линия — фактическая граница разделения. Контуров: $contourCount. Вершин: $points. Время: ${elapsedMs} мс."
+                        status.text = "Объединённая оценка (вогнутости + distance/saddle + текст по сторонам + качество частей): исходных областей $inputCount, итоговых областей $outputCount, разделено: $splitCount. $boundaryInfo. ${result!!.geometrySummary}.\\nТрассировка попыток:\\n$traceReport\\nConcavity-кандидаты (оранжевый — отклонённая хорда, голубой — принятая):\\n$concavityReport\\nМетки: жёлтые круги — кандидаты центров; зелёный/голубой — центры выбранной пары; красный — седловая точка; розовые точки — вычисленная граница разделения; голубые/оранжевые круги — концы пробной хорды, сама хорда не отображается. Контуров: $contourCount. Вершин: $points. Время: ${elapsedMs} мс."
                     } else {
                         finalBitmap.recycle()
                     }
