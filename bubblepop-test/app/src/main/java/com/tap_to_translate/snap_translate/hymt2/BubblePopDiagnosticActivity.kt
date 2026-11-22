@@ -469,9 +469,8 @@ class BubblePopDiagnosticActivity : Activity() {
                             max(5f, peak.radius * 0.45f), tracePaint)
                     }
                     if (trace.firstX >= 0 && trace.secondX >= 0) {
+                        // These circles are lobe-centre markers, not a proposed cut line.
                         tracePaint.color = 0xFF30D158.toInt()
-                        canvas.drawLine(trace.firstX.toFloat(), trace.firstY.toFloat(),
-                            trace.secondX.toFloat(), trace.secondY.toFloat(), tracePaint)
                         canvas.drawCircle(trace.firstX.toFloat(), trace.firstY.toFloat(), 9f, tracePaint)
                         tracePaint.color = 0xFF64D2FF.toInt()
                         canvas.drawCircle(trace.secondX.toFloat(), trace.secondY.toFloat(), 9f, tracePaint)
@@ -481,6 +480,51 @@ class BubblePopDiagnosticActivity : Activity() {
                         canvas.drawCircle(trace.saddleX.toFloat(), trace.saddleY.toFloat(), 8f, tracePaint)
                     }
                 }
+                // Draw the actual partition interface from the final instance labels.
+                // A pixel is part of the separator when neighbouring foreground pixels
+                // belong to two different positive instance IDs. Watershed ridge pixels
+                // have ID 0 and are included when both sides are visible nearby.
+                val instanceValues = IntArray(result!!.instances.rows() * result!!.instances.cols())
+                result!!.instances.get(0, 0, instanceValues)
+                val maskValues = ByteArray(result!!.mask.rows() * result!!.mask.cols())
+                result!!.mask.get(0, 0, maskValues)
+                val imageWidth = result!!.instances.cols()
+                val imageHeight = result!!.instances.rows()
+                val separatorPoints = ArrayList<Float>()
+                for (y in 1 until imageHeight - 1) {
+                    for (x in 1 until imageWidth - 1) {
+                        val index = y * imageWidth + x
+                        if ((maskValues[index].toInt() and 0xFF) == 0) continue
+                        val ownId = instanceValues[index]
+                        val nearbyIds = HashSet<Int>()
+                        val radius = if (ownId == 0) 2 else 1
+                        for (dy in -radius..radius) {
+                            for (dx in -radius..radius) {
+                                if (dx == 0 && dy == 0) continue
+                                val otherId = instanceValues[(y + dy) * imageWidth + x + dx]
+                                if (otherId > 0 && (ownId == 0 || otherId != ownId)) {
+                                    nearbyIds.add(otherId)
+                                }
+                            }
+                        }
+                        val isSeparator = if (ownId == 0) nearbyIds.size >= 2
+                            else nearbyIds.isNotEmpty()
+                        if (isSeparator) {
+                            separatorPoints.add(x.toFloat())
+                            separatorPoints.add(y.toFloat())
+                        }
+                    }
+                }
+                if (separatorPoints.isNotEmpty()) {
+                    val separatorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = 0xFFFF2D95.toInt()
+                        style = Paint.Style.STROKE
+                        strokeCap = Paint.Cap.ROUND
+                        strokeWidth = max(3f, original.width / 420f)
+                    }
+                    canvas.drawPoints(separatorPoints.toFloatArray(), separatorPaint)
+                }
+
                 val concavityTraces = result!!.concavityTraces
                 val concavityPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     style = Paint.Style.STROKE
@@ -533,7 +577,7 @@ class BubblePopDiagnosticActivity : Activity() {
                 main.post {
                     if (!isFinishing) {
                         preview.setImageBitmap(finalBitmap)
-                        status.text = "Объединённая оценка (вогнутости + distance/saddle + текст по сторонам + качество частей): исходных областей $inputCount, итоговых областей $outputCount, разделено: $splitCount. $boundaryInfo. ${result!!.geometrySummary}.\\nТрассировка попыток:\\n$traceReport\\nConcavity-кандидаты (оранжевый — отклонённая хорда, голубой — принятая):\\n$concavityReport\\nМетки: жёлтые круги — кандидаты центров; зелёный/голубой — выбранная пара; красный — седловая точка. Контуров: $contourCount. Вершин: $points. Время: ${elapsedMs} мс."
+                        status.text = "Объединённая оценка (вогнутости + distance/saddle + текст по сторонам + качество частей): исходных областей $inputCount, итоговых областей $outputCount, разделено: $splitCount. $boundaryInfo. ${result!!.geometrySummary}.\\nТрассировка попыток:\\n$traceReport\\nConcavity-кандидаты (оранжевый — отклонённая хорда, голубой — принятая):\\n$concavityReport\\nМетки: жёлтые круги — кандидаты центров; зелёный/голубой — центры выбранной пары; красный — седловая точка; розовая линия — фактическая граница разделения. Контуров: $contourCount. Вершин: $points. Время: ${elapsedMs} мс."
                     } else {
                         finalBitmap.recycle()
                     }
