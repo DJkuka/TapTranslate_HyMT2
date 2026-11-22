@@ -242,11 +242,11 @@ public final class BubblePopBoundarySplitter {
                                     }
                                 }
                             }
-                            concavityCandidate = tryConcavitySplit(component, geometryStats, x, y,
+                            concavityCandidate = tryConcavitySplit(component, geometryStats, componentId, x, y,
                                     options.minPartArea, options.minPartAreaFraction,
                                     options.minRetainedFraction);
                             geometricCandidate = tryGeometricSplit(component, boundaryRoi,
-                                    options, geometryStats, x, y);
+                                    options, geometryStats, componentId, x, y);
                         } finally {
                             boundaryRoi.release();
                         }
@@ -400,12 +400,12 @@ public final class BubblePopBoundarySplitter {
      */
     private static Candidate tryGeometricSplit(
             Mat component, Mat boundaryRoi, Options options, GeometryStats stats,
-            int offsetX, int offsetY) {
+            int componentId, int offsetX, int offsetY) {
         final int width = component.cols();
         final int height = component.rows();
         final int total = width * height;
         final int originalArea = Core.countNonZero(component);
-        GeometryTrace trace = new GeometryTrace(offsetX, offsetY, width, height, originalArea);
+        GeometryTrace trace = new GeometryTrace(componentId, offsetX, offsetY, width, height, originalArea);
         stats.traces.add(trace);
         if (originalArea < options.minComponentArea || width < 3 || height < 3) {
             stats.rejectedTooSmall++;
@@ -726,10 +726,10 @@ public final class BubblePopBoundarySplitter {
      * This is diagnostic-only and does not affect the live OCR path.
      */
     private static Candidate tryConcavitySplit(Mat component, GeometryStats stats,
-            int offsetX, int offsetY, int configuredMinPartArea,
+            int componentId, int offsetX, int offsetY, int configuredMinPartArea,
             double minPartAreaFraction, double minRetainedFraction) {
         stats.concavityAttempts++;
-        ConcavityTrace trace = new ConcavityTrace();
+        ConcavityTrace trace = new ConcavityTrace(componentId);
         stats.concavityTraces.add(trace);
         Mat contourInput = component.clone();
         List<MatOfPoint> contours = new ArrayList<>();
@@ -1042,7 +1042,7 @@ public final class BubblePopBoundarySplitter {
                 Candidate child = singlePartCandidate(partMask);
                 if (remainingSplits[0] > 0 && partArea >= options.minComponentArea) {
                     Candidate proposal = tryConcavitySplit(partMask, stats,
-                            offsetX, offsetY, options.minPartArea,
+                            componentId, offsetX, offsetY, options.minPartArea,
                             options.minPartAreaFraction, options.minRetainedFraction);
                     if (proposal != null) {
                         Candidate checked = chooseCombinedCandidate(
@@ -1616,6 +1616,7 @@ public final class BubblePopBoundarySplitter {
 
     /** One attempted source component, including the selected centers and watershed result. */
     public static final class GeometryTrace {
+        public final int componentId;
         public final int componentX, componentY, componentWidth, componentHeight, componentArea;
         public final List<PeakInfo> peaks = new ArrayList<>();
         public int rawPeakComponents;
@@ -1627,13 +1628,16 @@ public final class BubblePopBoundarySplitter {
         public int firstArea, secondArea, minimumPartArea, retainedArea;
         public double retainedFraction;
         public String outcome = "not_completed";
-        GeometryTrace(int x, int y, int width, int height, int area) {
+        GeometryTrace(int componentId, int x, int y, int width, int height, int area) {
+            this.componentId = componentId;
             componentX = x; componentY = y; componentWidth = width;
             componentHeight = height; componentArea = area;
         }
     }
 
     public static final class ConcavityTrace {
+        public final int componentId;
+        ConcavityTrace(int componentId) { this.componentId = componentId; }
         public int x1 = -1, y1 = -1, x2 = -1, y2 = -1;
         public int firstArea, secondArea, retainedArea;
         public int defectCount, deepDefects, facingPairs, neckPaths, disconnectedCuts;
