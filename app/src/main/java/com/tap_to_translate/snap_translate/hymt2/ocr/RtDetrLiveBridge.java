@@ -101,49 +101,57 @@ public final class RtDetrLiveBridge {
 
             FutureTask<List<DetectedRegion>> task = new FutureTask<>(
                     () -> {
+                        ArrayList<DetectedRegion> combined = new ArrayList<>();
                         try {
-                            RtDetrComicRegionDetector active = getDetector(context);
-                            OcrFrame frame = new OcrFrame(
-                                    snapshot,
-                                    new Rect(0, 0, snapshot.getWidth(), snapshot.getHeight()),
-                                    0, 0, 1f, 1f);
-                            List<DetectedRegion> result = active.detect(frame);
+                            try {
+                                RtDetrComicRegionDetector active = getDetector(context);
+                                OcrFrame frame = new OcrFrame(
+                                        snapshot,
+                                        new Rect(0, 0, snapshot.getWidth(), snapshot.getHeight()),
+                                        0, 0, 1f, 1f);
+                                List<DetectedRegion> detected = active.detect(frame);
+                                if (detected != null) combined.addAll(detected);
+                                Log.i(TAG, "RT-DETR completed: regions="
+                                        + (detected == null ? 0 : detected.size()));
+                            } catch (Throwable detectorError) {
+                                Log.e(TAG, "RT-DETR failed; continuing with independent BubblePop pass",
+                                        detectorError);
+                            }
+
                             if (isBubblePopPageMaskEnabled(context)) {
                                 try {
                                     DetectedRegion pageMask = getPageMaskDetector(context).detect(snapshot);
                                     if (pageMask != null) {
-                                        ArrayList<DetectedRegion> merged = new ArrayList<>();
-                                        if (result != null) merged.addAll(result);
-                                        merged.add(pageMask);
-                                        result = merged;
-                                        Log.i(TAG, "BubblePop page mask attached; connected regions are not split");
+                                        combined.add(pageMask);
+                                        Log.i(TAG, "BubblePop page mask attached: "
+                                                + pageMask.getMaskWidth() + "x" + pageMask.getMaskHeight());
+                                    } else {
+                                        Log.w(TAG, "BubblePop returned no usable page mask");
                                     }
                                 } catch (Throwable maskError) {
-                                    Log.e(TAG, "BubblePop page mask failed; OCR container geometry retained", maskError);
+                                    Log.e(TAG, "BubblePop failed independently; RT-DETR regions retained",
+                                            maskError);
                                 }
                             }
+
                             int containers = 0;
                             int bubbleText = 0;
                             int free = 0;
-                            if (result != null) {
-                                for (DetectedRegion region : result) {
-                                    if (region.getKind() == OcrRegionKind.BUBBLE_CONTAINER) containers++;
-                                    else if (region.getKind() == OcrRegionKind.SPEECH_BUBBLE) bubbleText++;
-                                    else if (region.getKind() == OcrRegionKind.FREE_TEXT) free++;
-                                }
+                            for (DetectedRegion region : combined) {
+                                if (region.getKind() == OcrRegionKind.BUBBLE_CONTAINER) containers++;
+                                else if (region.getKind() == OcrRegionKind.SPEECH_BUBBLE) bubbleText++;
+                                else if (region.getKind() == OcrRegionKind.FREE_TEXT) free++;
                             }
-                            Log.i(TAG, "detected: total=" + (result == null ? 0 : result.size())
+                            Log.i(TAG, "region pass complete: total=" + combined.size()
                                     + " bubble_containers=" + containers
                                     + " text_bubble=" + bubbleText + " text_free=" + free
                                     + " frame=" + snapshot.getWidth() + "x" + snapshot.getHeight());
-                            return result == null ? Collections.<DetectedRegion>emptyList() : result;
-                        } catch (Throwable error) {
-                            Log.e(TAG, "RT-DETR inference failed; original OCR will be used", error);
-                            return Collections.emptyList();
+                            return combined;
                         } finally {
                             if (!snapshot.isRecycled()) snapshot.recycle();
                         }
                     });
+
             PENDING.put(owner, new PendingFrame(source, task));
             EXECUTOR.execute(task);
         }
