@@ -470,7 +470,7 @@ class BubblePopDiagnosticActivity : Activity() {
                     val numberPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                         color = 0xFFFFFFFF.toInt()
                         textAlign = Paint.Align.CENTER
-                        textSize = max(24f, original.width / 42f)
+                        textSize = max(15f, original.width / 68f)
                         typeface = android.graphics.Typeface.create(
                             "sans-serif", android.graphics.Typeface.BOLD)
                     }
@@ -483,18 +483,33 @@ class BubblePopDiagnosticActivity : Activity() {
                     for (componentId in 1 until componentCount) {
                         val area = componentStats.get(componentId, Imgproc.CC_STAT_AREA)?.get(0) ?: 0.0
                         if (area < 20.0) continue
-                        val centerX = componentCentroids.get(componentId, 0)?.firstOrNull() ?: continue
-                        val centerY = componentCentroids.get(componentId, 1)?.firstOrNull() ?: continue
-                        val cx = centerX.toFloat()
-                        val cy = centerY.toFloat()
+                        val left = componentStats.get(componentId, Imgproc.CC_STAT_LEFT)?.get(0)?.toFloat() ?: continue
+                        val top = componentStats.get(componentId, Imgproc.CC_STAT_TOP)?.get(0)?.toFloat() ?: continue
+                        val width = componentStats.get(componentId, Imgproc.CC_STAT_WIDTH)?.get(0)?.toFloat() ?: continue
+                        val height = componentStats.get(componentId, Imgproc.CC_STAT_HEIGHT)?.get(0)?.toFloat() ?: continue
                         val label = componentId.toString()
-                        val halfWidth = max(textHeight * 0.72f, numberPaint.measureText(label) / 2f + 10f)
-                        val halfHeight = textHeight * 0.62f
+                        val halfWidth = max(textHeight * 0.48f, numberPaint.measureText(label) / 2f + 5f)
+                        val halfHeight = textHeight * 0.48f
+                        val gap = max(4f, original.width / 300f)
+                        // Put the component ID outside its mask: above when possible,
+                        // otherwise to the right, then to the left.
+                        val labelX = when {
+                            left + width + gap + halfWidth < original.width ->
+                                left + width + gap + halfWidth
+                            left - gap - halfWidth > 0f ->
+                                left - gap - halfWidth
+                            else -> (left + width / 2f).coerceIn(halfWidth, original.width - halfWidth)
+                        }
+                        val labelY = if (top - gap - halfHeight > 0f) {
+                            top - gap - halfHeight
+                        } else {
+                            (top + halfHeight + gap).coerceAtMost(original.height - halfHeight)
+                        }
                         canvas.drawRoundRect(
-                            cx - halfWidth, cy - halfHeight, cx + halfWidth, cy + halfHeight,
+                            labelX - halfWidth, labelY - halfHeight, labelX + halfWidth, labelY + halfHeight,
                             halfHeight * 0.35f, halfHeight * 0.35f, platePaint)
-                        val baseline = cy - (fontMetrics.ascent + fontMetrics.descent) / 2f
-                        canvas.drawText(label, cx, baseline, numberPaint)
+                        val baseline = labelY - (fontMetrics.ascent + fontMetrics.descent) / 2f
+                        canvas.drawText(label, labelX, baseline, numberPaint)
                     }
                 } finally {
                     componentLabels.release()
@@ -504,24 +519,24 @@ class BubblePopDiagnosticActivity : Activity() {
                 val geometryTraces = result!!.geometryTraces
                 val tracePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     style = Paint.Style.STROKE
-                    strokeWidth = max(3f, original.width / 350f)
+                    strokeWidth = max(1.5f, original.width / 700f)
                 }
                 for (trace in geometryTraces) {
                     tracePaint.color = 0xFFFFD60A.toInt()
                     for (peak in trace.peaks) {
                         canvas.drawCircle(peak.x.toFloat(), peak.y.toFloat(),
-                            max(5f, peak.radius * 0.45f), tracePaint)
+                            max(2.5f, peak.radius * 0.25f), tracePaint)
                     }
                     if (trace.firstX >= 0 && trace.secondX >= 0) {
                         // These circles are lobe-centre markers, not a proposed cut line.
                         tracePaint.color = 0xFF30D158.toInt()
-                        canvas.drawCircle(trace.firstX.toFloat(), trace.firstY.toFloat(), 9f, tracePaint)
+                        canvas.drawCircle(trace.firstX.toFloat(), trace.firstY.toFloat(), 4f, tracePaint)
                         tracePaint.color = 0xFF64D2FF.toInt()
-                        canvas.drawCircle(trace.secondX.toFloat(), trace.secondY.toFloat(), 9f, tracePaint)
+                        canvas.drawCircle(trace.secondX.toFloat(), trace.secondY.toFloat(), 4f, tracePaint)
                     }
                     if (trace.saddleX >= 0 && trace.saddleY >= 0) {
                         tracePaint.color = 0xFFFF453A.toInt()
-                        canvas.drawCircle(trace.saddleX.toFloat(), trace.saddleY.toFloat(), 8f, tracePaint)
+                        canvas.drawCircle(trace.saddleX.toFloat(), trace.saddleY.toFloat(), 3.5f, tracePaint)
                     }
                 }
                 // Draw the actual partition interface from the final instance labels.
@@ -604,7 +619,7 @@ class BubblePopDiagnosticActivity : Activity() {
                 val concavityTraces = result!!.concavityTraces
                 val concavityPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     style = Paint.Style.STROKE
-                    strokeWidth = max(4f, original.width / 300f)
+                    strokeWidth = max(2f, original.width / 600f)
                 }
                 for (trace in concavityTraces) {
                     if (trace.x1 >= 0 && trace.x2 >= 0) {
@@ -612,8 +627,8 @@ class BubblePopDiagnosticActivity : Activity() {
                         // it is a test hypothesis, not the final bubble boundary.
                         concavityPaint.color = if (trace.outcome == "accepted")
                             0xFF00E5FF.toInt() else 0xFFFF9F0A.toInt()
-                        canvas.drawCircle(trace.x1.toFloat(), trace.y1.toFloat(), 6f, concavityPaint)
-                        canvas.drawCircle(trace.x2.toFloat(), trace.y2.toFloat(), 6f, concavityPaint)
+                        canvas.drawCircle(trace.x1.toFloat(), trace.y1.toFloat(), 3f, concavityPaint)
+                        canvas.drawCircle(trace.x2.toFloat(), trace.y2.toFloat(), 3f, concavityPaint)
                     }
                 }
                 val concavityReport = concavityTraces.mapIndexed { index, trace ->
