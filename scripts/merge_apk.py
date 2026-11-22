@@ -1870,7 +1870,14 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
                         # layout. Refresh those exact class paths in-place instead of
                         # creating duplicate definitions in classes5.dex. This keeps
                         # each class in exactly one DEX and updates the helper runtime.
-                        if rel.startswith(("com/paddle/ocr/", "org/opencv/")):
+                        if rel.startswith((
+                            "com/paddle/ocr/",
+                            "org/opencv/",
+                            "com/tap_to_translate/snap_translate/hymt2/",
+                        )):
+                            # These are app-owned runtime classes. APK219 may place
+                            # them in any multidex shard; update that existing location
+                            # in-place to avoid duplicate class definitions.
                             shutil.copy2(source, existing_class)
                             replaced += 1
                             continue
