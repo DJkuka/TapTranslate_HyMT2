@@ -154,112 +154,71 @@ public final class RtDetrLiveBridge {
      * normal result but before the host groups it into translation overlays.
      */
     public static void filter(
-            Object owner, Context ignoredContext, Object mlKitResult, Bitmap source) {
+            Object owner, Context hostContext, Object mlKitResult, Bitmap source) {
         if (owner == null || mlKitResult == null || source == null) {
             Log.w(TAG, "hybrid OCR skipped: null owner/result/source");
             return;
         }
 
         final Context resolvedContext = resolveContext(owner);
+        final Context context = resolvedContext != null ? resolvedContext : hostContext;
         final boolean paddleEnabled = isPaddleSelected();
-        if (!paddleEnabled && !isSeparateFreeTextAlphaEnabled(resolvedContext)
-                && !isBubblePopPageMaskEnabled(resolvedContext)) {
-            synchronized (LOCK) {
-                ACTIVE_REGIONS.remove(owner);
-            }
+        final boolean freeAlphaEnabled = isSeparateFreeTextAlphaEnabled(context);
+        final boolean pageMaskEnabled = isBubblePopPageMaskEnabled(context);
+        if (!paddleEnabled && !freeAlphaEnabled && !pageMaskEnabled) {
+            synchronized (LOCK) { ACTIVE_REGIONS.remove(owner); }
             return;
         }
 
+        // OCR must not depend on RT-DETR/BubblePop succeeding. A missing frame,
+        // bitmap mismatch, detector exception or timeout disables only region
+        // association; PP-OCR still gets the actual screenshot and can recognize
+        // text as unmatched/free blocks. Never treat those blocks as bubble masks.
+        List<DetectedRegion> regions = Collections.emptyList();
         final PendingFrame pending;
-        synchronized (LOCK) {
-            pending = PENDING.get(owner);
-        }
+        synchronized (LOCK) { pending = PENDING.get(owner); }
         if (pending == null) {
-            Log.w(TAG, "hybrid OCR skipped: no pending RT-DETR frame for OCR owner");
-            return;
-        }
-        if (pending.source != source) {
-            Log.w(TAG, "hybrid OCR skipped: bitmap identity mismatch; frame="
-                    + source.getWidth() + "x" + source.getHeight()
-                    + " pending=" + pending.source.getWidth() + "x" + pending.source.getHeight());
-            return;
-        }
-
-        final List<DetectedRegion> regions;
-        try {
-            regions = pending.task.get(20, TimeUnit.SECONDS);
-        } catch (Throwable error) {
-            Log.w(TAG, "RT-DETR result unavailable; original OCR retained", error);
+            Log.w(TAG, "No pending RT-DETR frame; continuing OCR without region association");
+        } else if (pending.source != source) {
+            Log.w(TAG, "RT-DETR bitmap identity mismatch; continuing OCR without region association");
             removeIfCurrent(owner, pending);
-            return;
+        } else {
+            try {
+                List<DetectedRegion> detected = pending.task.get(20, TimeUnit.SECONDS);
+                if (detected != null) regions = detected;
+            } catch (Throwable error) {
+                Log.w(TAG, "RT-DETR/BubblePop unavailable; continuing OCR without region association", error);
+            } finally {
+                removeIfCurrent(owner, pending);
+            }
         }
-        removeIfCurrent(owner, pending);
+
         synchronized (LOCK) {
-            ACTIVE_REGIONS.put(owner, regions == null
-                    ? Collections.<DetectedRegion>emptyList()
-                    : new ArrayList<>(regions));
+            ACTIVE_REGIONS.put(owner, new ArrayList<>(regions));
         }
+        Log.i(TAG, "region association ready: regions=" + regions.size()
+                + " paddle=" + paddleEnabled + " bubblepop=" + pageMaskEnabled);
 
-        if (regions == null || regions.isEmpty()) {
-            Log.w(TAG, "RT-DETR returned no text regions; original OCR retained");
-            return;
-        }
-
-        if (!paddleEnabled) {
-            Log.i(TAG, "ML Kit selected; RT-DETR is used only for free-text/bubble classification; Paddle is bypassed");
-            return;
-        }
+        if (!paddleEnabled) return;
 
         try {
-            Field blocksField = mlKitResult.getClass().getField("a");
-            Object value = blocksField.get(mlKitResult);
-            if (!(value instanceof List<?>)) {
-                Log.w(TAG, "Unexpected ML Kit result container; original OCR retained");
-                return;
-            }
-
-            @SuppressWarnings("unchecked")
-            List<Object> blocks = (List<Object>) value;
-            int originalCount = blocks.size();
-            if (originalCount == 0) return;
-
-            // RT-DETR boxes are not accurate enough to be a destructive OCR gate.
-            // Keep every ML Kit block so a slightly clipped/missed detector box cannot
-            // silently remove words or a whole line. Use the detector only for bubble
-            // association/grouping; log coverage for later tuning.
-            int detectorMatched = 0;
-            int detectorUnmatched = 0;
-            int unreadable = 0;
-            for (Object block : blocks) {
-                Rect textBounds = readBlockBounds(block);
-                if (textBounds == null) {
-                    unreadable++;
-                } else if (overlapsDetectedText(textBounds, regions)) {
-                    detectorMatched++;
-                } else {
-                    detectorUnmatched++;
-                }
-            }
-            Log.i(TAG, "hybrid OCR classify: detector_regions=" + regions.size()
-                    + " mlkit_blocks=" + originalCount + " retained=" + originalCount
-                    + " detector_matched=" + detectorMatched
-                    + " detector_unmatched=" + detectorUnmatched
-                    + " filtering=disabled unreadable_bounds=" + unreadable);
-
-            // This method is reached from the host's dedicated OCR callback executor.
-            // Wait only there (never on the UI thread); keep ML Kit intact on timeout/failure.
             List<PaddleOcrTextGroup> paddleGroups = PaddleOcrLiveBridge.recognizeBlocking(
-                    ignoredContext, source, regions, 15000L);
+                    context, source, regions, 20000L);
             if (paddleGroups != null && !paddleGroups.isEmpty()) {
+                @SuppressWarnings("unchecked")
+                List<Object> blocks = (List<Object>) mlKitResult.getClass().getField("a").get(mlKitResult);
+                int originalCount = blocks.size();
                 int created = applyPaddleBubbleGroups(blocks, paddleGroups, regions);
                 Log.i(TAG, "Paddle host handoff completed: groups=" + paddleGroups.size()
-                        + " native_bubble_blocks=" + created
+                        + " native_blocks=" + created
+                        + " original_mlkit_blocks=" + originalCount
+                        + " region_association=" + (!regions.isEmpty())
                         + " mlkit_fallback=" + (created == 0));
             } else {
-                Log.i(TAG, "Paddle host handoff unavailable; ML Kit result retained");
+                Log.w(TAG, "PP-OCRv6 returned no groups; ML Kit result retained");
             }
         } catch (Throwable error) {
-            Log.w(TAG, "Hybrid OCR filtering failed; original OCR retained", error);
+            Log.e(TAG, "PP-OCRv6 handoff failed; ML Kit output retained", error);
         }
     }
 
