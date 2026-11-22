@@ -13,6 +13,11 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1-diagnostic"
+
+        // This diagnostic APK is built for the user's ARM64 Android device only.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     compileOptions {
