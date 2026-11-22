@@ -1430,10 +1430,13 @@ def patch_remove_nurik_attribution(base: Path) -> None:
     if lookup_guard:
         label = lookup_guard.group("label")
         label_text = f"    {label}\n"
+        method_start = smali.rfind(".method ", 0, lookup_guard.start())
+        method_end = smali.find(".end method", lookup_guard.end())
         click_call = "    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V"
-        click_pos = smali.find(click_call, lookup_guard.end())
-        label_pos = smali.find(label_text, click_pos + len(click_call)) if click_pos >= 0 else -1
-        if smali.count(label_text) != 1 or click_pos < 0 or label_pos < 0:
+        click_pos = smali.find(click_call, lookup_guard.end(), method_end)
+        label_pos = smali.find(label_text, click_pos + len(click_call), method_end) if click_pos >= 0 else -1
+        method_text = smali[method_start:method_end] if method_start >= 0 and method_end >= 0 else ""
+        if method_text.count(label_text) != 1 or click_pos < 0 or label_pos < 0:
             raise RuntimeError("APK219 NURIK null guard is incomplete or malformed")
         print(f"APK219 already guards the optional NURIK click target with {label}")
     else:
