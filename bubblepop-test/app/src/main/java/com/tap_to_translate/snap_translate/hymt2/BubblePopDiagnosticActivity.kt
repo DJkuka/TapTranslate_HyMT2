@@ -457,6 +457,48 @@ class BubblePopDiagnosticActivity : Activity() {
                     paint.color = palette[index % palette.size]
                     canvas.drawPath(path, paint)
                 }
+
+                // Draw original connected-component IDs, matching the splitter's trace IDs.
+                val componentLabels = Mat()
+                val componentStats = Mat()
+                val componentCentroids = Mat()
+                try {
+                    val componentCount = Imgproc.connectedComponentsWithStats(
+                        mask, componentLabels, componentStats, componentCentroids, 8,
+                        org.opencv.core.CvType.CV_32S)
+                    val numberPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = 0xFFFFFFFF.toInt()
+                        textAlign = Paint.Align.CENTER
+                        textSize = max(24f, original.width / 42f)
+                        typeface = android.graphics.Typeface.create(
+                            "sans-serif", android.graphics.Typeface.BOLD)
+                    }
+                    val platePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = 0xE6000000.toInt()
+                        style = Paint.Style.FILL
+                    }
+                    val fontMetrics = numberPaint.fontMetrics
+                    val textHeight = fontMetrics.descent - fontMetrics.ascent
+                    for (componentId in 1 until componentCount) {
+                        val area = componentStats.get(componentId, Imgproc.CC_STAT_AREA)?.get(0) ?: 0.0
+                        if (area < 20.0) continue
+                        val center = componentCentroids.get(componentId, 0) ?: continue
+                        val cx = center[0].toFloat()
+                        val cy = center[1].toFloat()
+                        val label = componentId.toString()
+                        val halfWidth = max(textHeight * 0.72f, numberPaint.measureText(label) / 2f + 10f)
+                        val halfHeight = textHeight * 0.62f
+                        canvas.drawRoundRect(
+                            cx - halfWidth, cy - halfHeight, cx + halfWidth, cy + halfHeight,
+                            halfHeight * 0.35f, halfHeight * 0.35f, platePaint)
+                        val baseline = cy - (fontMetrics.ascent + fontMetrics.descent) / 2f
+                        canvas.drawText(label, cx, baseline, numberPaint)
+                    }
+                } finally {
+                    componentLabels.release()
+                    componentStats.release()
+                    componentCentroids.release()
+                }
                 val geometryTraces = result!!.geometryTraces
                 val tracePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     style = Paint.Style.STROKE
@@ -573,7 +615,7 @@ class BubblePopDiagnosticActivity : Activity() {
                     }
                 }
                 val concavityReport = concavityTraces.mapIndexed { index, trace ->
-                    "#${index + 1}: дефекты ${trace.defectCount} (глубоких ${trace.deepDefects}), " +
+                    "#${trace.componentId}: дефекты ${trace.defectCount} (глубоких ${trace.deepDefects}), " +
                         "встречных пар ${trace.facingPairs}, путей ${trace.neckPaths}, разрезов ${trace.disconnectedCuts}; " +
                         "хорда (${trace.x1},${trace.y1})–(${trace.x2},${trace.y2}), " +
                         "части ${trace.firstArea}/${trace.secondArea}, площадь треугольников дефектов ${"%.1f".format(java.util.Locale.US, trace.triangleArea)}, " +
@@ -588,7 +630,7 @@ class BubblePopDiagnosticActivity : Activity() {
                     } else {
                         "центры не выбраны; кандидатов ${trace.rawPeakComponents}, после NMS ${trace.separatedPeaks}"
                     }
-                    "#${index + 1}: $centers; watershed ${trace.firstArea}/${trace.secondArea}, " +
+                    "#${trace.componentId}: $centers; watershed ${trace.firstArea}/${trace.secondArea}, " +
                         "минимум ${trace.minimumPartArea}, сохранено ${trace.retainedArea}/${trace.componentArea}; ${trace.outcome}"
                 }.joinToString("\\n")
                 val elapsedMs = SystemClock.elapsedRealtime() - startedAt
@@ -612,7 +654,7 @@ class BubblePopDiagnosticActivity : Activity() {
                 main.post {
                     if (!isFinishing) {
                         preview.setImageBitmap(finalBitmap)
-                        status.text = "Объединённая оценка (вогнутости + distance/saddle + текст по сторонам + качество частей): исходных областей $inputCount, итоговых областей $outputCount, разделено: $splitCount. $boundaryInfo. ${result!!.geometrySummary}.\\nТрассировка попыток:\\n$traceReport\\nConcavity-кандидаты (оранжевый — отклонённая хорда, голубой — принятая):\\n$concavityReport\\nМетки: жёлтые круги — кандидаты центров; зелёный/голубой — центры выбранной пары; красный — седловая точка; розовые точки — вычисленная граница разделения; голубые/оранжевые круги — концы пробной хорды, сама хорда не отображается. Контуров: $contourCount. Вершин: $points. Время: ${elapsedMs} мс."
+                        status.text = "Объединённая оценка (вогнутости + distance/saddle + текст по сторонам + качество частей): исходных областей $inputCount, итоговых областей $outputCount, разделено: $splitCount. $boundaryInfo. ${result!!.geometrySummary}.\\nТрассировка попыток:\\n$traceReport\\nConcavity-кандидаты (оранжевый — отклонённая хорда, голубой — принятая):\\n$concavityReport\\nНомера на тёмных плашках — исходные компоненты маски; они совпадают с номерами в трассировке. Метки: жёлтые круги — кандидаты центров; зелёный/голубой — центры выбранной пары; красный — седловая точка; розовые точки — вычисленная граница разделения; голубые/оранжевые круги — концы пробной хорды, сама хорда не отображается. Контуров: $contourCount. Вершин: $points. Время: ${elapsedMs} мс."
                     } else {
                         finalBitmap.recycle()
                     }
