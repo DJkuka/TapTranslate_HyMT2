@@ -76,6 +76,32 @@ jobs:
           echo "Base APK SHA-256:"
           sha256sum input/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk
 
+      - name: Export APK219 OCR renderer source for patch compatibility
+        if: github.ref == 'refs/heads/bubblepop-text-regions-apk219'
+        shell: bash
+        run: |
+          set -euo pipefail
+          decoded="build/apk219-renderer-inspect"
+          out="build/apk219-renderer-source"
+          java -jar tools/apktool.jar d -f -o "$decoded" input/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk
+          mkdir -p "$out"
+          for rel in smali_classes3/rh/f.smali smali_classes3/rh/g.smali smali_classes3/vh/l.smali smali_classes3/ca/c2.smali; do
+            test -s "$decoded/$rel" || { echo "Missing APK219 source: $rel"; exit 1; }
+            mkdir -p "$out/$(dirname "$rel")"
+            cp "$decoded/$rel" "$out/$rel"
+          done
+          grep -RInE 'HAWK_FIXED_FONT_SIZE|binary|goto_2|TextPaint;->setTextSize|StaticLayout' "$out/smali_classes3/rh" > "$out/renderer-markers.txt" || true
+          echo "APK219 renderer sources exported."
+      
+      - name: Upload APK219 OCR renderer source
+        if: github.ref == 'refs/heads/bubblepop-text-regions-apk219'
+        uses: actions/upload-artifact@v4
+        with:
+          name: APK219-renderer-source
+          path: build/apk219-renderer-source/
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Fetch pinned RT-DETR-v2 INT8 comic detector
         shell: bash
         run: |
