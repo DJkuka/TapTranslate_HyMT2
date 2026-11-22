@@ -1569,7 +1569,15 @@ def patch_fixed_font_size_renderers(base: Path) -> None:
     :hymt_fixed_font_done_f
     move-object/from16 v9, v19
     :goto_2"""
-    if "hymt_fixed_font_done_f" not in f_text:
+    # APK219's baksmali output has already regenerated branch labels (for
+    # example :cond_9 instead of our temporary :hymt_fixed_font_done_f).
+    # Detect the real behavior, not a transient label: the renderer must read
+    # HAWK_FIXED_FONT_SIZE and apply the verified 0.85 multiplier.
+    f_has_setting = 'const-string v6, "HAWK_FIXED_FONT_SIZE"' in f_text
+    f_has_floor = "0x3f59999a" in f_text
+    if f_has_setting and not f_has_floor:
+        raise RuntimeError("rh/f contains HAWK_FIXED_FONT_SIZE but no verified 85% floor")
+    if not f_has_setting:
         if f_text.count(f_anchor) != 1:
             raise RuntimeError("Cannot identify rh/f fixed-font binary-search prelude")
         f_text = f_text.replace(f_anchor, f_code, 1)
@@ -1619,12 +1627,21 @@ def patch_fixed_font_size_renderers(base: Path) -> None:
     :hymt_fixed_font_done_g
     move-object/from16 v9, v19
     const/4 v4, 0x1"""
-    if "hymt_fixed_font_done_g" not in g_text:
+    # As above, recognize the already-patched APK219 renderer after label
+    # canonicalization by baksmali.
+    g_has_setting = 'const-string v6, "HAWK_FIXED_FONT_SIZE"' in g_text
+    g_has_floor = "0x3f59999a" in g_text
+    if g_has_setting and not g_has_floor:
+        raise RuntimeError("rh/g contains HAWK_FIXED_FONT_SIZE but no verified 85% floor")
+    if not g_has_setting:
         if g_text.count(g_anchor) != 1:
             raise RuntimeError("Cannot identify rh/g fixed-font binary-search prelude")
         g_text = g_text.replace(g_anchor, g_code, 1)
         g_path.write_text(g_text, encoding="utf-8")
-    print("Added fixed-size floor with adaptive overflow fallback to both renderers")
+    if f_has_setting and g_has_setting:
+        print("APK219 already contains the verified 85% fixed-font floor in both renderers")
+    else:
+        print("Added fixed-size floor with adaptive overflow fallback where missing")
 
 
 def patch_max_font_size(base: Path) -> None:
