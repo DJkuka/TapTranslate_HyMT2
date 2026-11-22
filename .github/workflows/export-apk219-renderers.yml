@@ -1,0 +1,56 @@
+name: Export APK219 renderer sources
+
+on:
+  push:
+    branches: [bubblepop-text-regions-apk219]
+    paths:
+      - .github/workflows/export-apk219-renderers.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export-renderers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Download and verify final APK219 release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p input
+          curl --fail --location --retry 4 --retry-all-errors \
+            "https://github.com/DJkuka/TapTranslate_HyMT2/releases/download/v1.125-stq1.0/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk" \
+            -o input/apk219.apk
+          echo "ab5e3ca4fed3004668518161795c4c4c2b72ba5f3d3439f8081504b2bd0a2097  input/apk219.apk" | sha256sum -c -
+
+      - name: Decode and export actual APK219 smali
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -jar tools/apktool.jar d -f -o build/apk219-decoded input/apk219.apk
+          out="build/apk219-renderer-source"
+          mkdir -p "$out"
+          for rel in smali_classes3/rh/f.smali smali_classes3/rh/g.smali smali_classes3/vh/l.smali; do
+            test -s "build/apk219-decoded/$rel" || { echo "APK219 source missing: $rel"; exit 1; }
+            mkdir -p "$out/$(dirname "$rel")"
+            cp "build/apk219-decoded/$rel" "$out/$rel"
+          done
+          grep -nE 'HAWK_FIXED_FONT_SIZE|goto_|setTextSize|StaticLayout|TextPaint' "$out/smali_classes3/rh/f.smali" "$out/smali_classes3/rh/g.smali" > "$out/renderer-markers.txt" || true
+          echo "Exported APK219 renderer sources."
+
+      - name: Upload APK219 renderer source
+        uses: actions/upload-artifact@v4
+        with:
+          name: APK219-renderer-source
+          path: build/apk219-renderer-source/
+          if-no-files-found: error
+          retention-days: 7
