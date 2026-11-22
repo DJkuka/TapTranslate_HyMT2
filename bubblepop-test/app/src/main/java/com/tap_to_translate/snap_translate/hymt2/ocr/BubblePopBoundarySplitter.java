@@ -517,18 +517,21 @@ public final class BubblePopBoundarySplitter {
                 }
             }
 
+            List<Peak> seedPeaks = separated.size() > options.maxParts
+                    ? new ArrayList<>(separated.subList(0, options.maxParts))
+                    : new ArrayList<>(separated);
             Peak first = null;
             Peak second = null;
             double bestRatio = Double.POSITIVE_INFINITY;
             int bestBoundary = 0;
             int bestSaddleIndex = -1;
-            for (int i = 0; i < separated.size(); i++) {
-                Peak a = separated.get(i);
+            for (int i = 0; i < seedPeaks.size(); i++) {
+                Peak a = seedPeaks.get(i);
                 SaddleMap saddleMap = widestPathSaddles(a, distanceData,
                         componentData, width, height);
                 try {
-                    for (int j = i + 1; j < separated.size(); j++) {
-                        Peak b = separated.get(j);
+                    for (int j = i + 1; j < seedPeaks.size(); j++) {
+                        Peak b = seedPeaks.get(j);
                         int target = b.y * width + b.x;
                         float saddle = saddleMap.capacity[target];
                         if (saddle < 0.0f) continue;
@@ -586,12 +589,12 @@ public final class BubblePopBoundarySplitter {
             Core.bitwise_not(component, background);
             markers.setTo(new Scalar(1), background);
 
-            int firstRadius = Math.max(2, Math.min(4, Math.round(first.radius * 0.18f)));
-            int secondRadius = Math.max(2, Math.min(4, Math.round(second.radius * 0.18f)));
-            Imgproc.circle(markers, new Point(first.x, first.y), firstRadius,
-                    new Scalar(2), -1, Imgproc.LINE_8, 0);
-            Imgproc.circle(markers, new Point(second.x, second.y), secondRadius,
-                    new Scalar(3), -1, Imgproc.LINE_8, 0);
+            for (int seed = 0; seed < seedPeaks.size(); seed++) {
+                Peak peak = seedPeaks.get(seed);
+                int radius = Math.max(2, Math.min(4, Math.round(peak.radius * 0.18f)));
+                Imgproc.circle(markers, new Point(peak.x, peak.y), radius,
+                        new Scalar(seed + 2), -1, Imgproc.LINE_8, 0);
+            }
 
             Core.normalize(distance, inverseDistance, 255.0, 0.0,
                     Core.NORM_MINMAX, CvType.CV_8UC1);
@@ -610,33 +613,49 @@ public final class BubblePopBoundarySplitter {
 
             int[] markerData = new int[total];
             markers.get(0, 0, markerData);
-            int firstArea = 0;
-            int secondArea = 0;
+            int partCount = seedPeaks.size();
+            int[] partAreas = new int[partCount + 1];
             int retainedArea = 0;
             for (int i = 0; i < total; i++) {
                 if ((componentData[i] & 0xFF) == 0) continue;
                 // Watershed can leave foreground pixels as label 1 or -1.
-                // Assign those unclaimed pixels to the nearest detected lobe
-                // centre instead of silently dropping most of the balloon area.
-                if (markerData[i] != 2 && markerData[i] != 3) {
+                // Assign unclaimed foreground to the nearest seed, preserving
+                // every original mask pixel while supporting 2..maxParts lobes.
+                int marker = markerData[i];
+                if (marker < 2 || marker >= partCount + 2) {
                     int px = i % width;
                     int py = i / width;
-                    double d1 = (px - first.x) * (double) (px - first.x)
-                            + (py - first.y) * (double) (py - first.y);
-                    double d2 = (px - second.x) * (double) (px - second.x)
-                            + (py - second.y) * (double) (py - second.y);
-                    markerData[i] = d1 <= d2 ? 2 : 3;
+                    int nearest = 0;
+                    double nearestDistance = Double.POSITIVE_INFINITY;
+                    for (int seed = 0; seed < partCount; seed++) {
+                        Peak peak = seedPeaks.get(seed);
+                        double dx = px - peak.x, dy = py - peak.y;
+                        double distanceToSeed = dx * dx + dy * dy;
+                        if (distanceToSeed < nearestDistance) {
+                            nearestDistance = distanceToSeed;
+                            nearest = seed;
+                        }
+                    }
+                    marker = nearest + 2;
+                    markerData[i] = marker;
                 }
-                if (markerData[i] == 2) firstArea++;
-                else if (markerData[i] == 3) secondArea++;
+                int partId = marker - 1;
+                if (partId >= 1 && partId <= partCount) {
+                    partAreas[partId]++;
+                    retainedArea++;
+                }
             }
 
             int minimumArea = Math.max(options.minPartArea,
                     (int) Math.ceil(originalArea * options.minPartAreaFraction));
-            trace.firstArea = firstArea;
-            trace.secondArea = secondArea;
+            int smallestPart = Integer.MAX_VALUE;
+            for (int part = 1; part <= partCount; part++) {
+                smallestPart = Math.min(smallestPart, partAreas[part]);
+            }
+            trace.firstArea = partAreas[1];
+            trace.secondArea = partCount >= 2 ? partAreas[2] : 0;
             trace.minimumPartArea = minimumArea;
-            if (firstArea < minimumArea || secondArea < minimumArea) {
+            if (smallestPart < minimumArea) {
                 stats.rejectedPartTooSmall++;
                 trace.outcome = "part_too_small";
                 return null;
@@ -646,10 +665,10 @@ public final class BubblePopBoundarySplitter {
             int[] splitLabels = new int[total];
             for (int i = 0; i < total; i++) {
                 if ((componentData[i] & 0xFF) == 0) continue;
-                if (markerData[i] == 2 || markerData[i] == 3) {
+                int partId = markerData[i] - 1;
+                if (partId >= 1 && partId <= partCount) {
                     splitMask[i] = (byte) 255;
-                    splitLabels[i] = markerData[i] - 1;
-                    retainedArea++;
+                    splitLabels[i] = partId;
                 }
             }
             trace.retainedArea = retainedArea;
@@ -666,10 +685,11 @@ public final class BubblePopBoundarySplitter {
             retained.put(0, 0, splitMask);
             Mat labels = new Mat(height, width, CvType.CV_32SC1);
             labels.put(0, 0, splitLabels);
-            int[] idMap = new int[] {0, 1, 2};
+            int[] idMap = new int[partCount + 1];
+            for (int part = 1; part <= partCount; part++) idMap[part] = part;
             double geometricEvidence = clamp01(1.0 - bestRatio
                     / Math.max(0.45, options.geometryMaxSaddleRatio));
-            return new Candidate(retained, labels, idMap, 2,
+            return new Candidate(retained, labels, idMap, partCount,
                     "distance/saddle", geometricEvidence);
         } finally {
             distance.release();
@@ -954,7 +974,10 @@ public final class BubblePopBoundarySplitter {
         }
 
         String rejection = null;
-        if (bestEvaluation.balance < 0.38) {
+        if (bestEvaluation.crossedGlyphs >= 2
+                && bestEvaluation.crossedInkFraction >= 0.025) {
+            rejection = "разрез проходит через текст";
+        } else if (bestEvaluation.balance < 0.38) {
             rejection = "части слишком несбалансированы";
         } else if (bestEvaluation.retainedFraction < 0.82) {
             rejection = "потеряно слишком много площади";
@@ -1014,7 +1037,7 @@ public final class BubblePopBoundarySplitter {
         }
 
         TextEvidence text = source == null
-                ? new TextEvidence(0.35, 0, 0, "исходное изображение недоступно")
+                ? new TextEvidence(0.35, 0, 0, "исходное изображение недоступно", 0, 0.0)
                 : measureTextOnBothSides(source, component, labels, candidate.partCount);
         double combined = 0.22 * proposalScore
                 + 0.30 * distanceScore
@@ -1022,7 +1045,8 @@ public final class BubblePopBoundarySplitter {
                 + 0.30 * areaQuality;
         return new CandidateEvaluation(candidate.method, combined, proposalScore,
                 distanceScore, text.score, areaQuality, balance,
-                retainedFraction, text.firstCount, text.secondCount, text.note);
+                retainedFraction, text.firstCount, text.secondCount, text.note,
+                text.crossedGlyphs, text.crossedInkFraction);
     }
 
     /**
@@ -1120,6 +1144,10 @@ public final class BubblePopBoundarySplitter {
             int[] glyphCounts = new int[Math.max(3, partCount + 1)];
             int componentArea = Math.max(1, Core.countNonZero(component));
             int maxGlyphArea = Math.max(100, (int) (componentArea * 0.025));
+            int eligibleGlyphs = 0;
+            int crossedGlyphs = 0;
+            int eligibleInkPixels = 0;
+            int crossedInkPixels = 0;
             for (int id = 1; id < ccCount; id++) {
                 int area = (int) ccStats.get(id, Imgproc.CC_STAT_AREA)[0];
                 int x = (int) ccStats.get(id, Imgproc.CC_STAT_LEFT)[0];
@@ -1131,36 +1159,66 @@ public final class BubblePopBoundarySplitter {
                         || h > Math.max(26, height * 0.24)
                         || w > Math.max(12, h * 12)) continue;
                 int[] perPart = new int[glyphCounts.length];
+                int assignedPixels = 0;
                 for (int yy = y; yy < y + h; yy++) {
                     int row = yy * width;
                     for (int xx = x; xx < x + w; xx++) {
                         if (cc[row + xx] != id) continue;
                         int part = partLabels[row + xx];
-                        if (part > 0 && part < perPart.length) perPart[part]++;
+                        if (part > 0 && part < perPart.length) {
+                            perPart[part]++;
+                            assignedPixels++;
+                        }
                     }
                 }
-                int bestPart = 0, bestPixels = 0;
-                for (int part = 1; part < perPart.length; part++) {
-                    if (perPart[part] > bestPixels) {
-                        bestPixels = perPart[part];
+                if (assignedPixels < 2) continue;
+                eligibleGlyphs++;
+                eligibleInkPixels += assignedPixels;
+                int bestPart = 0, bestPixels = 0, secondPixels = 0;
+                for (int part = 1; part <= partCount && part < perPart.length; part++) {
+                    int count = perPart[part];
+                    if (count > bestPixels) {
+                        secondPixels = bestPixels;
+                        bestPixels = count;
                         bestPart = part;
+                    } else if (count > secondPixels) {
+                        secondPixels = count;
                     }
                 }
-                if (bestPart > 0 && bestPixels >= Math.max(2, (int) (area * 0.35))) {
+                // A connected ink component assigned substantially to multiple
+                // instance IDs means the proposed boundary cut through a glyph.
+                if (secondPixels >= Math.max(3, (int) Math.ceil(assignedPixels * 0.12))) {
+                    crossedGlyphs++;
+                    crossedInkPixels += assignedPixels;
+                }
+                if (bestPart > 0 && bestPixels >= Math.max(2, (int) (assignedPixels * 0.35))) {
                     glyphCounts[bestPart]++;
                 }
             }
             int first = glyphCounts.length > 1 ? glyphCounts[1] : 0;
             int second = glyphCounts.length > 2 ? glyphCounts[2] : 0;
+            int minCount = Integer.MAX_VALUE, maxCount = 0;
+            for (int part = 1; part <= partCount && part < glyphCounts.length; part++) {
+                minCount = Math.min(minCount, glyphCounts[part]);
+                maxCount = Math.max(maxCount, glyphCounts[part]);
+            }
+            if (minCount == Integer.MAX_VALUE) minCount = 0;
             double score;
-            if (first == 0 && second == 0) score = 0.35; // no reliable text-like marks: neutral, not an automatic veto
-            else if (first == 0 || second == 0) score = 0.0;
+            if (maxCount == 0) score = 0.35; // no reliable text-like marks: neutral, not an automatic veto
+            else if (minCount == 0) score = 0.0;
             else {
-                double balance = Math.min(first, second) / (double) Math.max(first, second);
-                double quantity = Math.min(1.0, Math.min(first, second) / 3.0);
+                double balance = minCount / (double) maxCount;
+                double quantity = Math.min(1.0, minCount / 3.0);
                 score = 0.60 * balance + 0.40 * quantity;
             }
-            return new TextEvidence(score, first, second, "ink-components");
+            double crossedFraction = eligibleInkPixels == 0 ? 0.0
+                    : crossedInkPixels / (double) eligibleInkPixels;
+            score *= Math.max(0.0, 1.0 - 3.0 * crossedFraction);
+            String note = String.format(java.util.Locale.US,
+                    "ink-components; cut=%d/%d, %.1f%%",
+                    crossedGlyphs, eligibleGlyphs, crossedFraction * 100.0);
+            return new TextEvidence(score, first, second, note,
+                    crossedGlyphs, crossedFraction);
         } finally {
             gray.release();
             ink.release();
@@ -1176,13 +1234,17 @@ public final class BubblePopBoundarySplitter {
 
     private static final class TextEvidence {
         final double score;
-        final int firstCount, secondCount;
+        final int firstCount, secondCount, crossedGlyphs;
+        final double crossedInkFraction;
         final String note;
-        TextEvidence(double score, int firstCount, int secondCount, String note) {
+        TextEvidence(double score, int firstCount, int secondCount, String note,
+                int crossedGlyphs, double crossedInkFraction) {
             this.score = score;
             this.firstCount = firstCount;
             this.secondCount = secondCount;
             this.note = note;
+            this.crossedGlyphs = crossedGlyphs;
+            this.crossedInkFraction = crossedInkFraction;
         }
     }
 
@@ -1190,12 +1252,14 @@ public final class BubblePopBoundarySplitter {
         final String method;
         final double totalScore, concavityScore, distanceScore, textScore, areaQuality;
         final double balance, retainedFraction;
-        final int firstTextCount, secondTextCount;
+        final int firstTextCount, secondTextCount, crossedGlyphs;
+        final double crossedInkFraction;
         final String textNote;
         CandidateEvaluation(String method, double totalScore, double concavityScore,
                 double distanceScore, double textScore, double areaQuality,
                 double balance, double retainedFraction, int firstTextCount,
-                int secondTextCount, String textNote) {
+                int secondTextCount, String textNote, int crossedGlyphs,
+                double crossedInkFraction) {
             this.method = method;
             this.totalScore = totalScore;
             this.concavityScore = concavityScore;
@@ -1207,13 +1271,18 @@ public final class BubblePopBoundarySplitter {
             this.firstTextCount = firstTextCount;
             this.secondTextCount = secondTextCount;
             this.textNote = textNote;
+            this.crossedGlyphs = crossedGlyphs;
+            this.crossedInkFraction = crossedInkFraction;
         }
         String describe() {
             return String.format(java.util.Locale.US,
                     "score=%.3f [proposal=%.2f, saddle=%.2f, text=%.2f (%d/%d %s), result=%.2f, balance=%.2f, retained=%.2f]",
                     totalScore, concavityScore, distanceScore, textScore,
-                    firstTextCount, secondTextCount, textNote, areaQuality,
-                    balance, retainedFraction);
+                    firstTextCount, secondTextCount,
+                    textNote + String.format(java.util.Locale.US,
+                            " [crossed=%d, ink=%.1f%%]",
+                            crossedGlyphs, crossedInkFraction * 100.0),
+                    areaQuality, balance, retainedFraction);
         }
     }
 
