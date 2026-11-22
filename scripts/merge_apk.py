@@ -416,7 +416,7 @@ def patch_ocr_engine_picker(base: Path) -> None:
 
 
 def patch_free_text_alpha_renderers(base: Path) -> None:
-    """Resolve a separate fill alpha for each overlay in both original renderers."""
+    """Patch free-text alpha and invoke BubblePop layout before rectangular fallback."""
     for rel, owner in (
         ("smali_classes3/rh/f.smali", "f"),
         ("smali_classes3/rh/g.smali", "g"),
@@ -430,13 +430,29 @@ def patch_free_text_alpha_renderers(base: Path) -> None:
         if start < 0 or end < 0:
             raise RuntimeError("Could not isolate onDraw in " + rel)
         method = text[start:end]
+
         if "resolveBackgroundAlpha" not in method:
-            if "    .locals 20\n" not in method:
-                raise RuntimeError("Unexpected renderer local-register count in " + rel)
-            method = method.replace("    .locals 20\n", "    .locals 23\n", 1)
+            locals_match = re.search(r"(?m)^    \.locals (\d+)$", method)
+            if not locals_match:
+                raise RuntimeError("Could not read renderer local-register count in " + rel)
+            local_count = int(locals_match.group(1))
+            if local_count < 23:
+                method = method[:locals_match.start(1)] + "23" + method[locals_match.end(1):]
             anchor = f"""    iget-object v1, v0, Lrh/{owner};->e:Landroid/graphics/Paint;
 
     iget v2, v0, Lrh/{owner};->d:I
+
+    invoke-virtual {{v0}}, Landroid/view/View;->getContext()Landroid/content/Context;
+
+    move-result-object v20
+
+    move-object/from16 v21, v11
+
+    move/from16 v22, v2
+
+    invoke-static/range {{v20 .. v22}}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->resolveBackgroundAlpha(Landroid/content/Context;Ljava/lang/Object;I)I
+
+    move-result v2
 
     invoke-virtual {{v1, v2}}, Landroid/graphics/Paint;->setAlpha(I)V"""
             replacement = f"""    iget-object v1, v0, Lrh/{owner};->e:Landroid/graphics/Paint;
@@ -456,12 +472,32 @@ def patch_free_text_alpha_renderers(base: Path) -> None:
     move-result v2
 
     invoke-virtual {{v1, v2}}, Landroid/graphics/Paint;->setAlpha(I)V"""
-            if method.count(anchor) != 1:
+            if method.count(anchor) == 1:
+                method = method.replace(anchor, replacement, 1)
+            elif "resolveBackgroundAlpha" not in method:
                 raise RuntimeError("Could not uniquely find fill alpha operation in " + rel)
-            method = method.replace(anchor, replacement, 1)
-            text = text[:start] + method + text[end:]
-            path.write_text(text, encoding="utf-8")
-    print("Added separate free-text fill alpha to both host renderers")
+
+        if "drawBubbleText" not in method:
+            locals_match = re.search(r"(?m)^    \.locals (\d+)$", method)
+            if not locals_match:
+                raise RuntimeError("Could not read renderer local-register count for BubblePop in " + rel)
+            local_count = int(locals_match.group(1))
+            if local_count < 30:
+                method = method[:locals_match.start(1)] + "30" + method[locals_match.end(1):]
+            min_register, max_register = ("v3", "v4") if owner == "f" else ("v2", "v3")
+            marker = f"    iget {max_register}, v0, Lrh/{owner};->m:F"
+            if method.count(marker) != 1:
+                raise RuntimeError("Could not locate unique max-font register in " + rel)
+            shape_hook = "    move-object/from16 v23, v1\n    move-object/from16 v24, v11\n    move-object/from16 v25, v13\n    iget-object v7, v0, Lrh/OWNER;->g:Landroid/text/TextPaint;\n    move-object/from16 v26, v7\n    move/from16 v27, MIN_REGISTER\n    move/from16 v28, MAX_REGISTER\n    const/16 v29, 0x4\n    invoke-static/range {v23 .. v29}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->drawBubbleText(Landroid/graphics/Canvas;Ljava/lang/Object;Ljava/lang/CharSequence;Landroid/text/TextPaint;FFI)Z\n    move-result v23\n    if-nez v23, :goto_0\n"
+            shape_hook = shape_hook.replace("OWNER", owner)
+            shape_hook = shape_hook.replace("MIN_REGISTER", min_register)
+            shape_hook = shape_hook.replace("MAX_REGISTER", max_register)
+            method = method.replace(marker, marker + "\n" + shape_hook, 1)
+
+        text = text[:start] + method + text[end:]
+        path.write_text(text, encoding="utf-8")
+    print("Added free-text alpha and BubblePop-shaped text layout to both host renderers")
+
 
 
 def patch_ocr_settings_click(base: Path) -> None:
