@@ -98,7 +98,7 @@ class BubblePopDiagnosticActivity : Activity() {
             setOnClickListener { runBoundaryDiagnostic() }
         })
         root.addView(Button(this).apply {
-            text = "Разделить по карте границ (новый метод)"
+            text = "Объединённое разделение: 4 метода"
             setOnClickListener { runBoundarySplitDiagnostic() }
         })
         root.addView(Button(this).apply {
@@ -415,7 +415,7 @@ class BubblePopDiagnosticActivity : Activity() {
                 Utils.bitmapToMat(inputBitmap, mat)
                 mask = segmenter.getMask(mat, null)
                 boundary = segmenter.getBoundaryMap(mat)
-                result = BubblePopBoundarySplitter.split(mask, boundary, boundaryOptions())
+                result = BubblePopBoundarySplitter.split(mat, mask, boundary, boundaryOptions())
 
                 val instanceMask = Mat()
                 val hierarchy = Mat()
@@ -533,7 +533,7 @@ class BubblePopDiagnosticActivity : Activity() {
                 main.post {
                     if (!isFinishing) {
                         preview.setImageBitmap(finalBitmap)
-                        status.text = "Boundary + geometry + concavity: исходных областей $inputCount, итоговых областей $outputCount, разделено: $splitCount. $boundaryInfo. ${result!!.geometrySummary}.\\nТрассировка попыток:\\n$traceReport\\nConcavity-кандидаты (оранжевый — отклонённая хорда, голубой — принятая):\\n$concavityReport\\nМетки: жёлтые круги — кандидаты центров; зелёный/голубой — выбранная пара; красный — седловая точка. Контуров: $contourCount. Вершин: $points. Время: ${elapsedMs} мс."
+                        status.text = "Объединённая оценка (вогнутости + distance/saddle + текст по сторонам + качество частей): исходных областей $inputCount, итоговых областей $outputCount, разделено: $splitCount. $boundaryInfo. ${result!!.geometrySummary}.\\nТрассировка попыток:\\n$traceReport\\nConcavity-кандидаты (оранжевый — отклонённая хорда, голубой — принятая):\\n$concavityReport\\nМетки: жёлтые круги — кандидаты центров; зелёный/голубой — выбранная пара; красный — седловая точка. Контуров: $contourCount. Вершин: $points. Время: ${elapsedMs} мс."
                     } else {
                         finalBitmap.recycle()
                     }
