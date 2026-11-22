@@ -77,7 +77,7 @@ public final class BubblePopBoundarySplitter {
         }
 
         public static Options defaults() {
-            return new Options(176, 16, 5, 700, 120, 0.08, 4, 0.82, 3, 0.92, 5.0, 16.0);
+            return new Options(176, 16, 5, 700, 120, 0.08, 4, 0.82, 3, 0.92, 3.0, 9.0);
         }
 
         private static int clamp(int value, int min, int max) {
@@ -213,18 +213,38 @@ public final class BubblePopBoundarySplitter {
                     Core.compare(labelRoi, new Scalar(componentId), component, Core.CMP_EQ);
                     labelRoi.release();
 
+                    Candidate boundaryCandidate = null;
                     Candidate concavityCandidate = null;
                     Candidate geometricCandidate = null;
                     Candidate accepted = null;
                     if (area >= options.minComponentArea) {
-                        // Both independent proposal generators run for every eligible
-                        // merged component. Neither is allowed to accept a split alone:
-                        // every proposal goes through the same four-signal evaluator.
-                        concavityCandidate = tryConcavitySplit(component, geometryStats, x, y,
-                                options.minPartArea, options.minPartAreaFraction,
-                                options.minRetainedFraction);
                         Mat boundaryRoi = boundary8.submat(rect);
                         try {
+                            // Boundary head is a real third proposal source. Test a
+                            // descending threshold range and keep the strongest valid cut.
+                            for (int attempt = 0; attempt < options.boundaryThresholdAttempts; attempt++) {
+                                int threshold = Math.max(1,
+                                        options.boundaryThresholdStart - attempt * options.boundaryThresholdStep);
+                                boundaryAttemptCount++;
+                                boundaryMinThresholdTried = Math.min(boundaryMinThresholdTried, threshold);
+                                boundaryMaxThresholdTried = Math.max(boundaryMaxThresholdTried, threshold);
+                                Candidate proposal = tryBoundarySplit(
+                                        component, boundaryRoi, threshold, closeKernel, options);
+                                if (proposal != null) {
+                                    boundaryAcceptedCount++;
+                                    if (boundaryCandidate == null
+                                            || proposal.proposalScore > boundaryCandidate.proposalScore) {
+                                        if (boundaryCandidate != null) boundaryCandidate.release();
+                                        boundaryCandidate = proposal;
+                                        usedThreshold = threshold;
+                                    } else {
+                                        proposal.release();
+                                    }
+                                }
+                            }
+                            concavityCandidate = tryConcavitySplit(component, geometryStats, x, y,
+                                    options.minPartArea, options.minPartAreaFraction,
+                                    options.minRetainedFraction);
                             geometricCandidate = tryGeometricSplit(component, boundaryRoi,
                                     options, geometryStats, x, y);
                         } finally {
@@ -233,13 +253,16 @@ public final class BubblePopBoundarySplitter {
                         Mat sourceRoi = source == null ? null : source.submat(rect);
                         try {
                             accepted = chooseCombinedCandidate(component, sourceRoi,
-                                    concavityCandidate, geometricCandidate, geometryStats,
-                                    componentId);
+                                    boundaryCandidate, concavityCandidate, geometricCandidate,
+                                    geometryStats, componentId);
                         } finally {
                             if (sourceRoi != null) sourceRoi.release();
                         }
                     }
 
+                    if (boundaryCandidate != null && boundaryCandidate != accepted) {
+                        boundaryCandidate.release();
+                    }
                     if (concavityCandidate != null && concavityCandidate != accepted) {
                         concavityCandidate.release();
                     }
@@ -345,7 +368,9 @@ public final class BubblePopBoundarySplitter {
                 Core.bitwise_or(retained, part, retained);
                 part.release();
             }
-            Candidate result = new Candidate(retained, labels.clone(), idMap, accepted);
+            double boundaryEvidence = Core.mean(boundaryRoi, insideBarrier).val[0] / 255.0;
+            Candidate result = new Candidate(retained, labels.clone(), idMap, accepted,
+                    "boundary", clamp01(boundaryEvidence));
             return result;
         } finally {
             barrier.release();
@@ -398,8 +423,11 @@ public final class BubblePopBoundarySplitter {
         Mat watershedImage = new Mat();
         try {
             Imgproc.distanceTransform(component, distance, Imgproc.DIST_L2, 5);
+            int peakKernelSize = Math.max(5, Math.min(11,
+                    (Math.min(width, height) / 5) | 1));
+            if ((peakKernelSize & 1) == 0) peakKernelSize--;
             Mat peakKernel = Imgproc.getStructuringElement(
-                    Imgproc.MORPH_ELLIPSE, new Size(15, 15));
+                    Imgproc.MORPH_ELLIPSE, new Size(peakKernelSize, peakKernelSize));
             try {
                 Imgproc.dilate(distance, dilated, peakKernel);
             } finally {
@@ -587,6 +615,18 @@ public final class BubblePopBoundarySplitter {
             int retainedArea = 0;
             for (int i = 0; i < total; i++) {
                 if ((componentData[i] & 0xFF) == 0) continue;
+                // Watershed can leave foreground pixels as label 1 or -1.
+                // Assign those unclaimed pixels to the nearest detected lobe
+                // centre instead of silently dropping most of the balloon area.
+                if (markerData[i] != 2 && markerData[i] != 3) {
+                    int px = i % width;
+                    int py = i / width;
+                    double d1 = (px - first.x) * (double) (px - first.x)
+                            + (py - first.y) * (double) (py - first.y);
+                    double d2 = (px - second.x) * (double) (px - second.x)
+                            + (py - second.y) * (double) (py - second.y);
+                    markerData[i] = d1 <= d2 ? 2 : 3;
+                }
                 if (markerData[i] == 2) firstArea++;
                 else if (markerData[i] == 3) secondArea++;
             }
@@ -627,7 +667,10 @@ public final class BubblePopBoundarySplitter {
             Mat labels = new Mat(height, width, CvType.CV_32SC1);
             labels.put(0, 0, splitLabels);
             int[] idMap = new int[] {0, 1, 2};
-            return new Candidate(retained, labels, idMap, 2);
+            double geometricEvidence = clamp01(1.0 - bestRatio
+                    / Math.max(0.45, options.geometryMaxSaddleRatio));
+            return new Candidate(retained, labels, idMap, 2,
+                    "distance/saddle", geometricEvidence);
         } finally {
             distance.release();
             dilated.release();
@@ -735,6 +778,7 @@ public final class BubblePopBoundarySplitter {
             double bestScore = Double.NEGATIVE_INFINITY;
             int bestRetained = 0, bestAreaA = 0, bestAreaB = 0;
             double bestTriangleArea = 0.0;
+            double bestProposalScore = 0.0;
             int[] bestLabels = null;
             int[] bestIdMap = null;
             int defectCount = d.length / 4;
@@ -840,6 +884,10 @@ public final class BubblePopBoundarySplitter {
                     bestAreaB = secondSize;
                     bestTriangleArea = pairedTriangleArea;
                     trace.triangleArea = pairedTriangleArea;
+                    bestProposalScore = clamp01(0.30 * balance
+                            + 0.25 * retainedFraction
+                            + 0.25 * clamp01(depthScore / 12.0)
+                            + 0.20 * triangleScore);
                     bestLabels = remappedLabels;
                     bestIdMap = new int[] {0, 1, 2};
                     stats.concavityBestDepth = Math.max(stats.concavityBestDepth,
@@ -866,7 +914,8 @@ public final class BubblePopBoundarySplitter {
             retainedLabels.put(0, 0, bestLabels);
             stats.concavityAccepted++;
             trace.outcome = "accepted";
-            return new Candidate(retainedMask, retainedLabels, new int[] {0, 1, 2}, 2);
+            return new Candidate(retainedMask, retainedLabels, new int[] {0, 1, 2}, 2,
+                    "concavity", bestProposalScore);
         } finally {
             contourInput.release();
             hierarchy.release();
@@ -883,24 +932,19 @@ public final class BubblePopBoundarySplitter {
 
 
     private static Candidate chooseCombinedCandidate(
-            Mat component, Mat source, Candidate concavity, Candidate geometric,
-            GeometryStats stats, int componentId) {
+            Mat component, Mat source, Candidate boundary, Candidate concavity,
+            Candidate geometric, GeometryStats stats, int componentId) {
         Candidate best = null;
         CandidateEvaluation bestEvaluation = null;
         List<String> reports = new ArrayList<>();
-        if (concavity != null) {
+        Candidate[] candidates = new Candidate[] {boundary, concavity, geometric};
+        for (Candidate candidate : candidates) {
+            if (candidate == null) continue;
             CandidateEvaluation evaluation = evaluateCandidate(
-                    component, source, concavity, concavity, geometric);
-            reports.add("concavity=" + evaluation.describe());
-            best = concavity;
-            bestEvaluation = evaluation;
-        }
-        if (geometric != null) {
-            CandidateEvaluation evaluation = evaluateCandidate(
-                    component, source, geometric, concavity, geometric);
-            reports.add("distance/saddle=" + evaluation.describe());
+                    component, source, candidate, concavity, geometric);
+            reports.add(candidate.method + "=" + evaluation.describe());
             if (bestEvaluation == null || evaluation.totalScore > bestEvaluation.totalScore) {
-                best = geometric;
+                best = candidate;
                 bestEvaluation = evaluation;
             }
         }
@@ -908,16 +952,26 @@ public final class BubblePopBoundarySplitter {
             stats.combinedSummaries.add("компонент " + componentId + ": кандидаты не сформированы");
             return null;
         }
-        // Both proposal generators already enforce minimum part and retained-area
-        // constraints. This final floor blocks a low-quality, weakly corroborated cut.
-        if (bestEvaluation.totalScore < 0.38) {
+
+        String rejection = null;
+        if (bestEvaluation.balance < 0.38) {
+            rejection = "части слишком несбалансированы";
+        } else if (bestEvaluation.retainedFraction < 0.82) {
+            rejection = "потеряно слишком много площади";
+        } else if (bestEvaluation.distanceScore < 0.08) {
+            rejection = "нет подтверждения узкой перемычки";
+        } else if (bestEvaluation.totalScore < 0.58) {
+            rejection = "недостаточный общий балл";
+        }
+        if (rejection != null) {
             stats.combinedSummaries.add("компонент " + componentId + ": отклонено (" +
-                    bestEvaluation.describe() + "); " + String.join("; ", reports));
+                    rejection + "; " + bestEvaluation.describe() + "); " +
+                    String.join("; ", reports));
             return null;
         }
         stats.combinedSummaries.add("компонент " + componentId + ": принято " +
-                bestEvaluation.method + " (" + bestEvaluation.describe() +
-                "); " + String.join("; ", reports));
+                best.method + " (" + bestEvaluation.describe() + "); " +
+                String.join("; ", reports));
         return best;
     }
 
@@ -950,32 +1004,32 @@ public final class BubblePopBoundarySplitter {
         double areaQuality = 0.58 * balance + 0.42 * retainedFraction;
 
         double distanceScore = measureDistanceSaddleEvidence(component, labels, candidate.partCount);
-        double concavityScore;
-        String method;
-        if (candidate == concavityCandidate) {
-            concavityScore = 1.0;
-            method = "concavity";
-        } else if (concavityCandidate != null) {
-            concavityScore = partitionAgreement(labels, concavityCandidate, total);
-            method = "distance";
-        } else {
-            concavityScore = 0.25;
-            method = "distance";
+        double proposalScore = candidate.proposalScore;
+        if (candidate != concavityCandidate && concavityCandidate != null) {
+            proposalScore = 0.55 * proposalScore
+                    + 0.45 * partitionAgreement(labels, concavityCandidate, total);
+        } else if (candidate == concavityCandidate && geometricCandidate != null) {
+            proposalScore = 0.70 * proposalScore
+                    + 0.30 * partitionAgreement(labels, geometricCandidate, total);
         }
 
         TextEvidence text = source == null
-                ? new TextEvidence(0.50, 0, 0, "нет исходных пикселей")
+                ? new TextEvidence(0.35, 0, 0, "исходное изображение недоступно")
                 : measureTextOnBothSides(source, component, labels, candidate.partCount);
-        double combined = 0.27 * concavityScore
-                + 0.28 * distanceScore
-                + 0.20 * text.score
-                + 0.25 * areaQuality;
-        return new CandidateEvaluation(method, combined, concavityScore,
+        double combined = 0.22 * proposalScore
+                + 0.30 * distanceScore
+                + 0.18 * text.score
+                + 0.30 * areaQuality;
+        return new CandidateEvaluation(candidate.method, combined, proposalScore,
                 distanceScore, text.score, areaQuality, balance,
                 retainedFraction, text.firstCount, text.secondCount, text.note);
     }
 
-    /** Distance-transform support: a convincing cut lies at a narrow saddle between broad lobes. */
+    /**
+     * Independent saddle validation of a proposed cut. The seam is the band
+     * where the two instance labels approach within four pixels; the median
+     * distance-transform radius there is compared with each lobe's peak radius.
+     */
     private static double measureDistanceSaddleEvidence(Mat component, int[] labels, int partCount) {
         int width = component.cols();
         int height = component.rows();
@@ -985,24 +1039,27 @@ public final class BubblePopBoundarySplitter {
             float[] values = new float[width * height];
             distance.get(0, 0, values);
             float[] peak = new float[Math.max(3, partCount + 1)];
-            float saddle = Float.POSITIVE_INFINITY;
+            List<Float> seamValues = new ArrayList<>();
             for (int y = 0; y < height; y++) {
                 for (int x = 0; x < width; x++) {
                     int index = y * width + x;
                     int id = labels[index];
                     if (id <= 0 || id >= peak.length) continue;
                     peak[id] = Math.max(peak[id], values[index]);
-                    boolean border = false;
-                    for (int dy = -1; dy <= 1 && !border; dy++) {
-                        for (int dx = -1; dx <= 1; dx++) {
-                            if (dx == 0 && dy == 0) continue;
+                    boolean nearOtherPart = false;
+                    for (int dy = -4; dy <= 4 && !nearOtherPart; dy++) {
+                        for (int dx = -4; dx <= 4; dx++) {
+                            if (dx * dx + dy * dy > 16 || (dx == 0 && dy == 0)) continue;
                             int nx = x + dx, ny = y + dy;
                             if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
                             int other = labels[ny * width + nx];
-                            if (other > 0 && other != id) { border = true; break; }
+                            if (other > 0 && other != id) {
+                                nearOtherPart = true;
+                                break;
+                            }
                         }
                     }
-                    if (border) saddle = Math.min(saddle, values[index]);
+                    if (nearOtherPart) seamValues.add(values[index]);
                 }
             }
             float smallerPeak = Float.POSITIVE_INFINITY;
@@ -1010,9 +1067,11 @@ public final class BubblePopBoundarySplitter {
                 if (peak[id] <= 0) return 0.0;
                 smallerPeak = Math.min(smallerPeak, peak[id]);
             }
-            if (!Float.isFinite(saddle) || smallerPeak <= 0) return 0.35;
-            double ratio = saddle / smallerPeak;
-            return clamp01(1.0 - ratio / 1.15);
+            if (seamValues.isEmpty() || smallerPeak <= 0) return 0.0;
+            Collections.sort(seamValues);
+            float medianSeam = seamValues.get(seamValues.size() / 2);
+            double ratio = medianSeam / smallerPeak;
+            return clamp01(1.0 - ratio / 0.85);
         } finally {
             distance.release();
         }
@@ -1151,7 +1210,7 @@ public final class BubblePopBoundarySplitter {
         }
         String describe() {
             return String.format(java.util.Locale.US,
-                    "score=%.3f [concavity=%.2f, saddle=%.2f, text=%.2f (%d/%d %s), result=%.2f, balance=%.2f, retained=%.2f]",
+                    "score=%.3f [proposal=%.2f, saddle=%.2f, text=%.2f (%d/%d %s), result=%.2f, balance=%.2f, retained=%.2f]",
                     totalScore, concavityScore, distanceScore, textScore,
                     firstTextCount, secondTextCount, textNote, areaQuality,
                     balance, retainedFraction);
@@ -1352,12 +1411,17 @@ public final class BubblePopBoundarySplitter {
         final Mat labels;
         final int[] idMap;
         final int partCount;
+        final String method;
+        final double proposalScore;
 
-        Candidate(Mat mask, Mat labels, int[] idMap, int partCount) {
+        Candidate(Mat mask, Mat labels, int[] idMap, int partCount,
+                  String method, double proposalScore) {
             this.mask = mask;
             this.labels = labels;
             this.idMap = idMap;
             this.partCount = partCount;
+            this.method = method;
+            this.proposalScore = clamp01(proposalScore);
         }
 
         void release() {
