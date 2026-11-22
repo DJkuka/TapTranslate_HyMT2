@@ -128,11 +128,23 @@ public final class BubblePopBoundarySplitter {
 
     /** Caller must release both returned Mats. */
     public static Result split(Mat inputMask, Mat boundaryMap) {
-        return split(inputMask, boundaryMap, Options.defaults());
+        return split(null, inputMask, boundaryMap, Options.defaults());
     }
 
-    /** Caller must release both returned Mats. */
+    /** Backwards-compatible overload; text evidence is neutral when source pixels are unavailable. */
     public static Result split(Mat inputMask, Mat boundaryMap, Options options) {
+        return split(null, inputMask, boundaryMap, options);
+    }
+
+    /**
+     * Unified four-signal splitter:
+     * 1) convexity-defect concavities propose cuts;
+     * 2) distance-transform peaks and the widest-path saddle propose/check cuts;
+     * 3) dark text-like glyph components are checked on both sides;
+     * 4) each resulting partition is scored for balance, retained area and topology.
+     * The source image is used only for text evidence; no artwork-intensity watershed is used.
+     */
+    public static Result split(Mat source, Mat inputMask, Mat boundaryMap, Options options) {
         if (options == null) options = Options.defaults();
         if (inputMask == null || boundaryMap == null
                 || inputMask.empty() || boundaryMap.empty()) {
@@ -141,6 +153,10 @@ public final class BubblePopBoundarySplitter {
         if (inputMask.rows() != boundaryMap.rows()
                 || inputMask.cols() != boundaryMap.cols()) {
             throw new IllegalArgumentException("mask and boundary map dimensions differ");
+        }
+        if (source != null && (source.empty()
+                || source.rows() != inputMask.rows() || source.cols() != inputMask.cols())) {
+            throw new IllegalArgumentException("source and mask dimensions differ");
         }
 
         Mat binary = new Mat();
@@ -197,15 +213,38 @@ public final class BubblePopBoundarySplitter {
                     Core.compare(labelRoi, new Scalar(componentId), component, Core.CMP_EQ);
                     labelRoi.release();
 
+                    Candidate concavityCandidate = null;
+                    Candidate geometricCandidate = null;
                     Candidate accepted = null;
-                    // Isolated diagnostic mode: use only contour-concavity splitting.
-                    // Boundary-head and distance-transform/center-based methods are
-                    // deliberately bypassed so their decisions cannot pre-empt or
-                    // interfere with this method during evaluation.
                     if (area >= options.minComponentArea) {
-                        accepted = tryConcavitySplit(component, geometryStats, x, y,
+                        // Both independent proposal generators run for every eligible
+                        // merged component. Neither is allowed to accept a split alone:
+                        // every proposal goes through the same four-signal evaluator.
+                        concavityCandidate = tryConcavitySplit(component, geometryStats, x, y,
                                 options.minPartArea, options.minPartAreaFraction,
                                 options.minRetainedFraction);
+                        Mat boundaryRoi = boundary8.submat(rect);
+                        try {
+                            geometricCandidate = tryGeometricSplit(component, boundaryRoi,
+                                    options, geometryStats, x, y);
+                        } finally {
+                            boundaryRoi.release();
+                        }
+                        Mat sourceRoi = source == null ? null : source.submat(rect);
+                        try {
+                            accepted = chooseCombinedCandidate(component, sourceRoi,
+                                    concavityCandidate, geometricCandidate, geometryStats,
+                                    componentId);
+                        } finally {
+                            if (sourceRoi != null) sourceRoi.release();
+                        }
+                    }
+
+                    if (concavityCandidate != null && concavityCandidate != accepted) {
+                        concavityCandidate.release();
+                    }
+                    if (geometricCandidate != null && geometricCandidate != accepted) {
+                        geometricCandidate.release();
                     }
 
                     if (accepted == null) {
@@ -826,6 +865,283 @@ public final class BubblePopBoundarySplitter {
         }
     }
 
+
+    private static Candidate chooseCombinedCandidate(
+            Mat component, Mat source, Candidate concavity, Candidate geometric,
+            GeometryStats stats, int componentId) {
+        Candidate best = null;
+        CandidateEvaluation bestEvaluation = null;
+        List<String> reports = new ArrayList<>();
+        if (concavity != null) {
+            CandidateEvaluation evaluation = evaluateCandidate(
+                    component, source, concavity, concavity, geometric);
+            reports.add("concavity=" + evaluation.describe());
+            best = concavity;
+            bestEvaluation = evaluation;
+        }
+        if (geometric != null) {
+            CandidateEvaluation evaluation = evaluateCandidate(
+                    component, source, geometric, concavity, geometric);
+            reports.add("distance/saddle=" + evaluation.describe());
+            if (bestEvaluation == null || evaluation.totalScore > bestEvaluation.totalScore) {
+                best = geometric;
+                bestEvaluation = evaluation;
+            }
+        }
+        if (best == null) {
+            stats.combinedSummaries.add("компонент " + componentId + ": кандидаты не сформированы");
+            return null;
+        }
+        // Both proposal generators already enforce minimum part and retained-area
+        // constraints. This final floor blocks a low-quality, weakly corroborated cut.
+        if (bestEvaluation.totalScore < 0.38) {
+            stats.combinedSummaries.add("компонент " + componentId + ": отклонено (" +
+                    bestEvaluation.describe() + "); " + String.join("; ", reports));
+            return null;
+        }
+        stats.combinedSummaries.add("компонент " + componentId + ": принято " +
+                bestEvaluation.method + " (" + bestEvaluation.describe() +
+                "); " + String.join("; ", reports));
+        return best;
+    }
+
+    private static CandidateEvaluation evaluateCandidate(
+            Mat component, Mat source, Candidate candidate,
+            Candidate concavityCandidate, Candidate geometricCandidate) {
+        int width = component.cols();
+        int height = component.rows();
+        int total = width * height;
+        int[] labels = new int[total];
+        candidate.labels.get(0, 0, labels);
+        int[] partAreas = new int[Math.max(3, candidate.partCount + 1)];
+        int retained = 0;
+        for (int value : labels) {
+            if (value > 0 && value < partAreas.length) {
+                partAreas[value]++;
+                retained++;
+            }
+        }
+        int minPart = Integer.MAX_VALUE;
+        int maxPart = 0;
+        for (int id = 1; id <= candidate.partCount && id < partAreas.length; id++) {
+            minPart = Math.min(minPart, partAreas[id]);
+            maxPart = Math.max(maxPart, partAreas[id]);
+        }
+        if (minPart == Integer.MAX_VALUE) minPart = 0;
+        double balance = maxPart == 0 ? 0.0 : minPart / (double) maxPart;
+        int originalArea = Math.max(1, Core.countNonZero(component));
+        double retainedFraction = retained / (double) originalArea;
+        double areaQuality = 0.58 * balance + 0.42 * retainedFraction;
+
+        double distanceScore = measureDistanceSaddleEvidence(component, labels, candidate.partCount);
+        double concavityScore;
+        String method;
+        if (candidate == concavityCandidate) {
+            concavityScore = 1.0;
+            method = "concavity";
+        } else if (concavityCandidate != null) {
+            concavityScore = partitionAgreement(labels, concavityCandidate, total);
+            method = "distance";
+        } else {
+            concavityScore = 0.25;
+            method = "distance";
+        }
+
+        TextEvidence text = source == null
+                ? new TextEvidence(0.50, 0, 0, "нет исходных пикселей")
+                : measureTextOnBothSides(source, component, labels, candidate.partCount);
+        double combined = 0.27 * concavityScore
+                + 0.28 * distanceScore
+                + 0.20 * text.score
+                + 0.25 * areaQuality;
+        return new CandidateEvaluation(method, combined, concavityScore,
+                distanceScore, text.score, areaQuality, balance,
+                retainedFraction, text.firstCount, text.secondCount, text.note);
+    }
+
+    /** Distance-transform support: a convincing cut lies at a narrow saddle between broad lobes. */
+    private static double measureDistanceSaddleEvidence(Mat component, int[] labels, int partCount) {
+        int width = component.cols();
+        int height = component.rows();
+        Mat distance = new Mat();
+        try {
+            Imgproc.distanceTransform(component, distance, Imgproc.DIST_L2, 5);
+            float[] values = new float[width * height];
+            distance.get(0, 0, values);
+            float[] peak = new float[Math.max(3, partCount + 1)];
+            float saddle = Float.POSITIVE_INFINITY;
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    int index = y * width + x;
+                    int id = labels[index];
+                    if (id <= 0 || id >= peak.length) continue;
+                    peak[id] = Math.max(peak[id], values[index]);
+                    boolean border = false;
+                    for (int dy = -1; dy <= 1 && !border; dy++) {
+                        for (int dx = -1; dx <= 1; dx++) {
+                            if (dx == 0 && dy == 0) continue;
+                            int nx = x + dx, ny = y + dy;
+                            if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+                            int other = labels[ny * width + nx];
+                            if (other > 0 && other != id) { border = true; break; }
+                        }
+                    }
+                    if (border) saddle = Math.min(saddle, values[index]);
+                }
+            }
+            float smallerPeak = Float.POSITIVE_INFINITY;
+            for (int id = 1; id <= partCount && id < peak.length; id++) {
+                if (peak[id] <= 0) return 0.0;
+                smallerPeak = Math.min(smallerPeak, peak[id]);
+            }
+            if (!Float.isFinite(saddle) || smallerPeak <= 0) return 0.35;
+            double ratio = saddle / smallerPeak;
+            return clamp01(1.0 - ratio / 1.15);
+        } finally {
+            distance.release();
+        }
+    }
+
+    /** Agreement between independently proposed two-way partitions (labels may be reversed). */
+    private static double partitionAgreement(int[] candidateLabels, Candidate other, int total) {
+        int[] otherLabels = new int[total];
+        other.labels.get(0, 0, otherLabels);
+        int direct = 0, reversed = 0, eligible = 0;
+        for (int i = 0; i < total; i++) {
+            int a = candidateLabels[i], b = otherLabels[i];
+            if (a <= 0 || b <= 0) continue;
+            eligible++;
+            if (a == b) direct++;
+            if ((a == 1 && b == 2) || (a == 2 && b == 1)) reversed++;
+        }
+        if (eligible == 0) return 0.0;
+        return Math.max(direct, reversed) / (double) eligible;
+    }
+
+    /**
+     * OpenCV-only text proxy for the standalone APK: Otsu dark-ink components
+     * inside each proposed region. It does not claim OCR recognition; it checks
+     * whether glyph-sized marks occur on both sides of a proposed cut.
+     */
+    private static TextEvidence measureTextOnBothSides(
+            Mat source, Mat component, int[] partLabels, int partCount) {
+        Mat gray = new Mat();
+        Mat ink = new Mat();
+        Mat ccLabels = new Mat();
+        Mat ccStats = new Mat();
+        Mat centroids = new Mat();
+        try {
+            if (source.channels() == 1) source.copyTo(gray);
+            else if (source.channels() == 4) Imgproc.cvtColor(source, gray, Imgproc.COLOR_BGRA2GRAY);
+            else Imgproc.cvtColor(source, gray, Imgproc.COLOR_BGR2GRAY);
+            Imgproc.threshold(gray, ink, 0, 255,
+                    Imgproc.THRESH_BINARY_INV | Imgproc.THRESH_OTSU);
+            Core.bitwise_and(ink, component, ink);
+            int ccCount = Imgproc.connectedComponentsWithStats(
+                    ink, ccLabels, ccStats, centroids, 8, CvType.CV_32S);
+            int width = component.cols(), height = component.rows();
+            int[] cc = new int[width * height];
+            ccLabels.get(0, 0, cc);
+            int[] glyphCounts = new int[Math.max(3, partCount + 1)];
+            int componentArea = Math.max(1, Core.countNonZero(component));
+            int maxGlyphArea = Math.max(100, (int) (componentArea * 0.025));
+            for (int id = 1; id < ccCount; id++) {
+                int area = (int) ccStats.get(id, Imgproc.CC_STAT_AREA)[0];
+                int x = (int) ccStats.get(id, Imgproc.CC_STAT_LEFT)[0];
+                int y = (int) ccStats.get(id, Imgproc.CC_STAT_TOP)[0];
+                int w = (int) ccStats.get(id, Imgproc.CC_STAT_WIDTH)[0];
+                int h = (int) ccStats.get(id, Imgproc.CC_STAT_HEIGHT)[0];
+                if (area < 2 || area > maxGlyphArea
+                        || w > Math.max(30, width * 0.30)
+                        || h > Math.max(26, height * 0.24)
+                        || w > Math.max(12, h * 12)) continue;
+                int[] perPart = new int[glyphCounts.length];
+                for (int yy = y; yy < y + h; yy++) {
+                    int row = yy * width;
+                    for (int xx = x; xx < x + w; xx++) {
+                        if (cc[row + xx] != id) continue;
+                        int part = partLabels[row + xx];
+                        if (part > 0 && part < perPart.length) perPart[part]++;
+                    }
+                }
+                int bestPart = 0, bestPixels = 0;
+                for (int part = 1; part < perPart.length; part++) {
+                    if (perPart[part] > bestPixels) {
+                        bestPixels = perPart[part];
+                        bestPart = part;
+                    }
+                }
+                if (bestPart > 0 && bestPixels >= Math.max(2, (int) (area * 0.35))) {
+                    glyphCounts[bestPart]++;
+                }
+            }
+            int first = glyphCounts.length > 1 ? glyphCounts[1] : 0;
+            int second = glyphCounts.length > 2 ? glyphCounts[2] : 0;
+            double score;
+            if (first == 0 && second == 0) score = 0.35; // no reliable text-like marks: neutral, not an automatic veto
+            else if (first == 0 || second == 0) score = 0.0;
+            else {
+                double balance = Math.min(first, second) / (double) Math.max(first, second);
+                double quantity = Math.min(1.0, Math.min(first, second) / 3.0);
+                score = 0.60 * balance + 0.40 * quantity;
+            }
+            return new TextEvidence(score, first, second, "ink-components");
+        } finally {
+            gray.release();
+            ink.release();
+            ccLabels.release();
+            ccStats.release();
+            centroids.release();
+        }
+    }
+
+    private static double clamp01(double value) {
+        return Math.max(0.0, Math.min(1.0, value));
+    }
+
+    private static final class TextEvidence {
+        final double score;
+        final int firstCount, secondCount;
+        final String note;
+        TextEvidence(double score, int firstCount, int secondCount, String note) {
+            this.score = score;
+            this.firstCount = firstCount;
+            this.secondCount = secondCount;
+            this.note = note;
+        }
+    }
+
+    private static final class CandidateEvaluation {
+        final String method;
+        final double totalScore, concavityScore, distanceScore, textScore, areaQuality;
+        final double balance, retainedFraction;
+        final int firstTextCount, secondTextCount;
+        final String textNote;
+        CandidateEvaluation(String method, double totalScore, double concavityScore,
+                double distanceScore, double textScore, double areaQuality,
+                double balance, double retainedFraction, int firstTextCount,
+                int secondTextCount, String textNote) {
+            this.method = method;
+            this.totalScore = totalScore;
+            this.concavityScore = concavityScore;
+            this.distanceScore = distanceScore;
+            this.textScore = textScore;
+            this.areaQuality = areaQuality;
+            this.balance = balance;
+            this.retainedFraction = retainedFraction;
+            this.firstTextCount = firstTextCount;
+            this.secondTextCount = secondTextCount;
+            this.textNote = textNote;
+        }
+        String describe() {
+            return String.format(java.util.Locale.US,
+                    "score=%.3f [concavity=%.2f, saddle=%.2f, text=%.2f (%d/%d %s), result=%.2f, balance=%.2f, retained=%.2f]",
+                    totalScore, concavityScore, distanceScore, textScore,
+                    firstTextCount, secondTextCount, textNote, areaQuality,
+                    balance, retainedFraction);
+        }
+    }
+
     private static SaddleMap widestPathSaddles(Peak start, float[] distance,
                                                 byte[] mask, int width, int height) {
         int total = width * height;
@@ -936,6 +1252,7 @@ public final class BubblePopBoundarySplitter {
         byte[] concavityMask;
         double bestSaddleRatio = Double.POSITIVE_INFINITY;
         int bestBoundary;
+        final List<String> combinedSummaries = new ArrayList<>();
 
         void recordSaddle(double ratio, int boundary) {
             if (ratio < bestSaddleRatio) {
@@ -961,7 +1278,10 @@ public final class BubblePopBoundarySplitter {
                     + ", boundary start = " + options.boundaryThresholdStart
                     + "; concavity: попыток " + concavityAttempts + ", разделено " + concavityAccepted
                     + ", нет глубоких дефектов " + concavityRejectedNoDefects
-                    + ", неподходящая геометрия " + concavityRejectedGeometry;
+                    + ", неподходящая геометрия " + concavityRejectedGeometry
+                    + "; объединённая оценка (вогнутости + saddle + текст + качество результата): "
+                    + (combinedSummaries.isEmpty() ? "нет подходящих компонентов"
+                        : String.join(" | ", combinedSummaries));
         }
     }
 
