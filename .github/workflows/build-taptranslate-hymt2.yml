@@ -32,15 +32,15 @@ jobs:
       - name: Install Android platform, build tools, NDK and CMake
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
 
-      - name: Download the exact Hy-MT2 base APK from the user's Release
+      - name: Download the exact final APK219 Release base APK
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p input app/libs
           curl --fail --location --retry 4 --retry-all-errors \
-            "https://github.com/DJkuka/TapTranslate_HyMT2/releases/download/1/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk" \
-            -o input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
-          echo "dfe0463c9d9c0bf39451586e4e7aa405f5721504c61f20cef9fd122618418d83  input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk" | sha256sum -c -
+            "https://github.com/DJkuka/TapTranslate_HyMT2/releases/download/v1.125-stq1.0/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk" \
+            -o input/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk
+          echo "ab5e3ca4fed3004668518161795c4c4c2b72ba5f3d3439f8081504b2bd0a2097  input/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk" | sha256sum -c -
 
       - name: Fetch verified Vulkan AAR and pinned llama.cpp headers
         shell: bash
@@ -66,15 +66,15 @@ jobs:
 
       - name: Verify integration inputs
         run: |
-          test -s input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
+          test -s input/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk
           test -s app/libs/llama-android-vulkan.aar
           test -s tools/apktool.jar
           test -s scripts/merge_apk.py
           test -s scripts/verify_vulkan_base_apk.py
           python3 -m py_compile scripts/merge_apk.py scripts/verify_vulkan_base_apk.py
-          python3 scripts/verify_vulkan_base_apk.py input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
+          python3 scripts/verify_vulkan_base_apk.py input/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk
           echo "Base APK SHA-256:"
-          sha256sum input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
+          sha256sum input/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk
 
       - name: Fetch pinned RT-DETR-v2 INT8 comic detector
         shell: bash
@@ -139,7 +139,7 @@ jobs:
       - name: Merge Hy-MT2 runtime into the original Tap Translate APK
         run: |
           python3 scripts/merge_apk.py \
-            --base-apk input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk \
+            --base-apk input/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk \
             --helper-apk app/build/outputs/apk/debug/app-debug.apk \
             --apktool tools/apktool.jar \
             --work build/merge \
