@@ -14,6 +14,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.ImageView
@@ -661,7 +662,11 @@ class BubblePopDiagnosticActivity : Activity() {
                 }
             } catch (t: Throwable) {
                 overlay?.recycle()
-                main.post { status.text = "Ошибка разделения по карте границ: ${t.javaClass.simpleName}: ${t.message}" }
+                Log.e("BubblePopDiagnostic", "Boundary-map split failed", t)
+                val details = t.stackTraceToString()
+                main.post {
+                    status.text = "Ошибка разделения по карте границ: ${t.javaClass.simpleName}: ${t.message}\n\n$details"
+                }
             } finally {
                 contours.forEach { it.release() }
                 result?.instances?.release()
