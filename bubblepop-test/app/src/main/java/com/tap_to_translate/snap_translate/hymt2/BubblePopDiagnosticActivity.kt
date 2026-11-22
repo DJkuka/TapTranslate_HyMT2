@@ -498,7 +498,7 @@ class BubblePopDiagnosticActivity : Activity() {
                 }
                 val concavityReport = concavityTraces.mapIndexed { index, trace ->
                     "#${index + 1}: хорда (${trace.x1},${trace.y1})–(${trace.x2},${trace.y2}), " +
-                        "части ${trace.firstArea}/${trace.secondArea}, сохранено ${trace.retainedArea}; ${trace.outcome}"
+                        "части ${trace.firstArea}/${trace.secondArea}, площадь треугольников дефектов ${"%.1f".format(java.util.Locale.US, trace.triangleArea)}, сохранено ${trace.retainedArea}; ${trace.outcome}"
                 }.joinToString("\\n")
                 val traceReport = geometryTraces.mapIndexed { index, trace ->
                     val centers = if (trace.firstX >= 0) {
