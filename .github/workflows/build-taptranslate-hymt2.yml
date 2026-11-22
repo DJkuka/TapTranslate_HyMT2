@@ -3,7 +3,7 @@ name: Build Tap Translate 1.125 FontFit AutoFill + Hy-MT2 Vulkan
 on:
   workflow_dispatch:
   push:
-    branches: [ main, vulkan-v12-integration, ocr-hybrid-prototype, ocr-paddle-prototype, ocr-region-editing, ocr-region-geometry, ocr-region-gesture-presets ]
+    branches: [ main, vulkan-v12-integration, ocr-hybrid-prototype, ocr-paddle-prototype, ocr-region-editing, ocr-region-geometry, ocr-region-gesture-presets, bubblepop-text-regions-apk219 ]
 
 permissions:
   contents: write
@@ -107,6 +107,18 @@ jobs:
           cp app/src/main/assets/models/ppocrv6/rec/inference.yml app/src/main/assets/models/rec/inference.yml
           test -s app/src/main/assets/models/rec/inference.yml
           echo "PP-OCRv6 models and matching 18,708-character dictionary are ready."
+
+      - name: Fetch pinned BubblePop page-mask model
+        if: github.ref == 'refs/heads/bubblepop-text-regions-apk219'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/src/main/assets/models/bubblepop
+          base="https://raw.githubusercontent.com/xulihang/speech-balloon-segmentation/a6a5abae641891e80ef6eaf28d307c808ad5657d"
+          curl --fail --location --retry 4 --retry-all-errors "$base/models/model_fp16.onnx" -o app/src/main/assets/models/bubblepop/model_fp16.onnx
+          curl --fail --location --retry 4 --retry-all-errors "$base/LICENSE.bubble-pop" -o app/src/main/assets/models/bubblepop/LICENSE.bubble-pop
+          test "$(stat -c%s app/src/main/assets/models/bubblepop/model_fp16.onnx)" -gt 100000
+          echo "BubblePop page-mask model and license verified."
 
       - name: Run OCR geometry and outer-ring colour unit tests
         run: gradle --no-daemon -PllamaRoot="$LLAMA_ROOT" -PvulkanAarNativeDir="$VULKAN_AAR_NATIVE_DIR" :app:testDebugUnitTest
