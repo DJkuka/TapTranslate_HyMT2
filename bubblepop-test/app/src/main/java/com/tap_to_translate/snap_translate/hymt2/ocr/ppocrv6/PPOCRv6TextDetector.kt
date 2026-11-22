@@ -18,8 +18,8 @@ class PPOCRv6TextDetector(context: Context) : AutoCloseable {
             manager.loadDetectionModel("models/ppocrv6_tiny_det/inference.onnx")
             engine = DetectionEngine(manager, PaddleOCRConfig(
                 detImgMode = "BGR", detLimitSideLen = 960, detLimitType = "max",
-                detMaxSideLimit = 4000, detThresh = 0.3f, detBoxThresh = 0.6f,
-                detUnclipRatio = 1.5f, detMaxCandidates = 3000,
+                detMaxSideLimit = 4000, detThresh = 0.2f, detBoxThresh = 0.4f,
+                detUnclipRatio = 1.4f, detMaxCandidates = 3000,
                 detUseDilation = false, detScoreMode = "fast", detBoxType = "quad"
             ))
         } catch (t: Throwable) {
