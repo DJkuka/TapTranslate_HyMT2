@@ -1863,7 +1863,16 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
                     # Do not silently introduce duplicate app/runtime classes across DEX files.
                     other = [d for d in base.glob("smali*") if d.is_dir() and d != target_root and (d / rel).is_file()]
                     if other:
-                        if (other[0] / rel).read_bytes() == source.read_bytes():
+                        existing_class = other[0] / rel
+                        if existing_class.read_bytes() == source.read_bytes():
+                            continue
+                        # APK219 already ships Paddle OCR/OpenCV in its original DEX
+                        # layout. Refresh those exact class paths in-place instead of
+                        # creating duplicate definitions in classes5.dex. This keeps
+                        # each class in exactly one DEX and updates the helper runtime.
+                        if rel.startswith(("com/paddle/ocr/", "org/opencv/")):
+                            shutil.copy2(source, existing_class)
+                            replaced += 1
                             continue
                         raise RuntimeError(f"Cannot safely replace {rel}: existing definition is outside classes5.dex")
                     continue
