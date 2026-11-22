@@ -799,6 +799,11 @@ public final class BubblePopBoundarySplitter {
                     (int) Math.ceil(originalArea * minPartAreaFraction));
             byte[] maskData = new byte[width * height];
             component.get(0, 0, maskData);
+            Mat distanceMap = new Mat();
+            Imgproc.distanceTransform(component, distanceMap, Imgproc.DIST_L2, 5);
+            float[] distanceValues = new float[width * height];
+            distanceMap.get(0, 0, distanceValues);
+            distanceMap.release();
             int bestA = -1, bestB = -1;
             double bestScore = Double.NEGATIVE_INFINITY;
             int bestRetained = 0, bestAreaA = 0, bestAreaB = 0;
@@ -830,20 +835,24 @@ public final class BubblePopBoundarySplitter {
                     double span = Math.hypot(pi.x - pj.x, pi.y - pj.y);
                     if (span < 8.0 || span > maxSpan) continue;
 
-                    // A candidate chord must stay inside the foreground mask.
-                    int samples = Math.max(8, (int) Math.ceil(span));
-                    int inside = 0;
-                    for (int k = 0; k <= samples; k++) {
-                        double t = k / (double) samples;
-                        int sx = (int) Math.round(pi.x + (pj.x - pi.x) * t);
-                        int sy = (int) Math.round(pi.y + (pj.y - pi.y) * t);
-                        if (sx >= 0 && sy >= 0 && sx < width && sy < height
-                                && (maskData[sy * width + sx] & 0xFF) != 0) inside++;
-                    }
-                    if (inside < samples * 0.96) continue;
+                    // Trace a minimum-cost path through the narrowest foreground
+                    // corridor between the two concavity valleys. A straight chord
+                    // cuts diagonally across lobes; this path follows the neck.
+                    List<Integer> neckPath = shortestNeckPath(maskData, distanceValues,
+                            width, height, (int) Math.round(pi.x), (int) Math.round(pi.y),
+                            (int) Math.round(pj.x), (int) Math.round(pj.y));
+                    if (neckPath == null || neckPath.size() < 2) continue;
 
                     barrier.setTo(new Scalar(0));
-                    Imgproc.line(barrier, pi, pj, new Scalar(255), 3, Imgproc.LINE_8, 0);
+                    int previous = neckPath.get(0);
+                    for (int pathIndex = 1; pathIndex < neckPath.size(); pathIndex++) {
+                        int current = neckPath.get(pathIndex);
+                        Imgproc.line(barrier,
+                                new Point(previous % width, previous / width),
+                                new Point(current % width, current / width),
+                                new Scalar(255), 3, Imgproc.LINE_8, 0);
+                        previous = current;
+                    }
                     Core.bitwise_not(barrier, cut);
                     Core.bitwise_and(component, cut, cut);
                     int count = Imgproc.connectedComponentsWithStats(
@@ -1254,6 +1263,72 @@ public final class BubblePopBoundarySplitter {
             ccStats.release();
             centroids.release();
         }
+    }
+
+    /**
+     * Minimum-cost path constrained to the foreground. Moving through thick
+     * lobe interiors is expensive; moving through a narrow neck (small distance
+     * to the exterior) is cheap. The returned pixel indices describe a curved seam.
+     */
+    private static List<Integer> shortestNeckPath(byte[] mask, float[] distance,
+            int width, int height, int sx, int sy, int ex, int ey) {
+        if (sx < 0 || sy < 0 || ex < 0 || ey < 0
+                || sx >= width || ex >= width || sy >= height || ey >= height) return null;
+        int start = sy * width + sx;
+        int end = ey * width + ex;
+        if ((mask[start] & 0xFF) == 0 || (mask[end] & 0xFF) == 0) return null;
+        int total = width * height;
+        double[] cost = new double[total];
+        Arrays.fill(cost, Double.POSITIVE_INFINITY);
+        int[] parent = new int[total];
+        Arrays.fill(parent, -1);
+        PriorityQueue<NeckNode> queue = new PriorityQueue<>(new Comparator<NeckNode>() {
+            @Override public int compare(NeckNode a, NeckNode b) {
+                return Double.compare(a.cost, b.cost);
+            }
+        });
+        cost[start] = 0.0;
+        queue.add(new NeckNode(start, 0.0));
+        final int[] dxs = {-1, 0, 1, -1, 1, -1, 0, 1};
+        final int[] dys = {-1, -1, -1, 0, 0, 1, 1, 1};
+        while (!queue.isEmpty()) {
+            NeckNode node = queue.poll();
+            if (node.cost != cost[node.index]) continue;
+            if (node.index == end) break;
+            int x = node.index % width;
+            int y = node.index / width;
+            for (int d = 0; d < dxs.length; d++) {
+                int nx = x + dxs[d], ny = y + dys[d];
+                if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+                int next = ny * width + nx;
+                if ((mask[next] & 0xFF) == 0) continue;
+                double step = (dxs[d] == 0 || dys[d] == 0) ? 1.0 : 1.41421356237;
+                double radius = Math.max(0.0, distance[next]);
+                double nextCost = node.cost + step * (1.0 + 0.45 * radius * radius);
+                if (nextCost < cost[next]) {
+                    cost[next] = nextCost;
+                    parent[next] = node.index;
+                    queue.add(new NeckNode(next, nextCost));
+                }
+            }
+        }
+        if (parent[end] < 0 && end != start) return null;
+        ArrayList<Integer> path = new ArrayList<>();
+        int cursor = end;
+        path.add(cursor);
+        while (cursor != start) {
+            cursor = parent[cursor];
+            if (cursor < 0 || path.size() > total) return null;
+            path.add(cursor);
+        }
+        Collections.reverse(path);
+        return path;
+    }
+
+    private static final class NeckNode {
+        final int index;
+        final double cost;
+        NeckNode(int index, double cost) { this.index = index; this.cost = cost; }
     }
 
     private static double clamp01(double value) {
