@@ -828,6 +828,14 @@ public final class BubblePopBoundarySplitter {
                 Point startI = contourPoints[d[i * 4]];
                 Point endI = contourPoints[d[i * 4 + 1]];
                 double triangleAreaI = triangleArea(startI, endI, pi);
+                // The midpoint of the convex-hull chord gives the outward
+                // direction of this indentation. A valid neck is normally
+                // bounded by two valleys whose outward normals face away
+                // from one another (their inward directions face each other).
+                double normalIx = (startI.x + endI.x) * 0.5 - pi.x;
+                double normalIy = (startI.y + endI.y) * 0.5 - pi.y;
+                double normalILength = Math.hypot(normalIx, normalIy);
+                if (normalILength < 1.0) continue;
                 for (int j = i + 1; j < defectCount; j++) {
                     int farJ = d[j * 4 + 2];
                     double depthJ = d[j * 4 + 3] / 256.0;
@@ -838,6 +846,17 @@ public final class BubblePopBoundarySplitter {
                     Point endJ = contourPoints[d[j * 4 + 1]];
                     double triangleAreaJ = triangleArea(startJ, endJ, pj);
                     double pairedTriangleArea = Math.min(triangleAreaI, triangleAreaJ);
+                    double normalJx = (startJ.x + endJ.x) * 0.5 - pj.x;
+                    double normalJy = (startJ.y + endJ.y) * 0.5 - pj.y;
+                    double normalJLength = Math.hypot(normalJx, normalJy);
+                    if (normalJLength < 1.0) continue;
+                    double facing = -((normalIx * normalJx + normalIy * normalJy)
+                            / (normalILength * normalJLength));
+                    // Reject arbitrary valleys on the same side of a balloon.
+                    // Their hull-edge normals do not face each other and joining
+                    // them tends to produce the recurring diagonal false cut.
+                    if (facing < 0.35) continue;
+
                     double span = Math.hypot(pi.x - pj.x, pi.y - pj.y);
                     if (span < 8.0 || span > maxSpan) continue;
 
@@ -850,13 +869,19 @@ public final class BubblePopBoundarySplitter {
                     if (neckPath == null || neckPath.size() < 2) continue;
 
                     barrier.setTo(new Scalar(0));
+                    float narrowestRadius = Float.POSITIVE_INFINITY;
+                    for (int pixel : neckPath) {
+                        narrowestRadius = Math.min(narrowestRadius, distanceValues[pixel]);
+                    }
+                    int cutThickness = Math.max(3,
+                            Math.min(9, 2 * (int) Math.ceil(narrowestRadius) + 1));
                     int previous = neckPath.get(0);
                     for (int pathIndex = 1; pathIndex < neckPath.size(); pathIndex++) {
                         int current = neckPath.get(pathIndex);
                         Imgproc.line(barrier,
                                 new Point(previous % width, previous / width),
                                 new Point(current % width, current / width),
-                                new Scalar(255), 3, Imgproc.LINE_8, 0);
+                                new Scalar(255), cutThickness, Imgproc.LINE_8, 0);
                         previous = current;
                     }
                     Core.bitwise_not(barrier, cut);
@@ -890,9 +915,13 @@ public final class BubblePopBoundarySplitter {
                     // Reject shallow slivers whose convexity-defect triangles carry
                     // almost no area, even if the chord happens to disconnect the mask.
                     if (triangleScore < 0.015) continue;
-                    double score = balance * 2.0 + retainedFraction
+                    // Pair-facing is a required property, not a minor bonus.
+                    // Among valid opposed valleys, prefer the shorter cut and
+                    // retain the balance/depth/area evidence.
+                    double score = balance * 1.8 + retainedFraction
                             + Math.min(12.0, depthScore) * 0.025
-                            + triangleScore * 0.18 - span / maxSpan * 0.15;
+                            + triangleScore * 0.18 + facing * 0.55
+                            - span / maxSpan * 0.22;
                     if (score <= bestScore) continue;
                     int[] localLabels = new int[width * height];
                     labels.get(0, 0, localLabels);
@@ -924,10 +953,11 @@ public final class BubblePopBoundarySplitter {
                     bestAreaB = secondSize;
                     bestTriangleArea = pairedTriangleArea;
                     trace.triangleArea = pairedTriangleArea;
-                    bestProposalScore = clamp01(0.30 * balance
-                            + 0.25 * retainedFraction
-                            + 0.25 * clamp01(depthScore / 12.0)
-                            + 0.20 * triangleScore);
+                    bestProposalScore = clamp01(0.26 * balance
+                            + 0.20 * retainedFraction
+                            + 0.20 * clamp01(depthScore / 12.0)
+                            + 0.14 * triangleScore
+                            + 0.20 * facing);
                     bestLabels = remappedLabels;
                     bestIdMap = new int[] {0, 1, 2};
                     stats.concavityBestDepth = Math.max(stats.concavityBestDepth,
