@@ -1866,22 +1866,13 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
                         existing_class = other[0] / rel
                         if existing_class.read_bytes() == source.read_bytes():
                             continue
-                        # APK219 already ships Paddle OCR/OpenCV in its original DEX
-                        # layout. Refresh those exact class paths in-place instead of
-                        # creating duplicate definitions in classes5.dex. This keeps
-                        # each class in exactly one DEX and updates the helper runtime.
-                        if rel.startswith((
-                            "com/paddle/ocr/",
-                            "org/opencv/",
-                            "com/tap_to_translate/snap_translate/hymt2/",
-                        )):
-                            # These are app-owned runtime classes. APK219 may place
-                            # them in any multidex shard; update that existing location
-                            # in-place to avoid duplicate class definitions.
-                            shutil.copy2(source, existing_class)
-                            replaced += 1
-                            continue
-                        raise RuntimeError(f"Cannot safely replace {rel}: existing definition is outside classes5.dex")
+                        # Every remaining path is within one of the explicit
+                        # helper-owned package prefixes passed to copy_package().
+                        # Refresh the existing definition in its current multidex
+                        # shard; never add a second copy to classes5.dex.
+                        shutil.copy2(source, existing_class)
+                        replaced += 1
+                        continue
                     continue
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
