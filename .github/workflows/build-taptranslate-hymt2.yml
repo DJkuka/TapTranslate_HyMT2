@@ -58,8 +58,10 @@ jobs:
           git clone https://github.com/ffmpegkit-maintained/llama-android.git upstream/llama-android
           git -C upstream/llama-android checkout --detach 9f5469fd9fa7ea7bc7b01801923af95dc3b41d52
           git -C upstream/llama-android submodule update --init --recursive
-          test -d upstream/llama-android/llama.cpp/.git
+          git -C upstream/llama-android/llama.cpp rev-parse --is-inside-work-tree | grep -qx true
           LLAMA_CPP_STQ1_COMMIT="1e411d8f5a1e23525fa3265dfb4bd76265465397"
+          echo "Fetching exact STQ1_0 llama.cpp revision from submodule origin:"
+          git -C upstream/llama-android/llama.cpp remote -v
           git -C upstream/llama-android/llama.cpp fetch --no-tags origin "$LLAMA_CPP_STQ1_COMMIT"
           git -C upstream/llama-android/llama.cpp checkout --detach "$LLAMA_CPP_STQ1_COMMIT"
           test "$(git -C upstream/llama-android/llama.cpp rev-parse HEAD)" = "$LLAMA_CPP_STQ1_COMMIT"
