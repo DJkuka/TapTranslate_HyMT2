@@ -97,7 +97,9 @@ def verify_final_host_payload(base_apk: Path, final_apk: Path) -> None:
         if "PKG_LOW" not in metadata or "PKG_HIGH" not in metadata:
             raise RuntimeError("Original Google Offline Translate PKG_LOW/PKG_HIGH metadata was not preserved")
 
-        required_vulkan = {
+        # Preserve whichever Hy-MT2/Llama implementation APK219 shipped.
+        # Do not require experimental Vulkan/STQ libraries and never replace them.
+        immutable_hymt_libraries = (
             "lib/arm64-v8a/libllama_jni.so",
             "lib/arm64-v8a/libllama.so",
             "lib/arm64-v8a/libggml.so",
@@ -105,10 +107,13 @@ def verify_final_host_payload(base_apk: Path, final_apk: Path) -> None:
             "lib/arm64-v8a/libggml-cpu.so",
             "lib/arm64-v8a/libggml-vulkan.so",
             "lib/arm64-v8a/libhymt2_jni.so",
-        }
-        missing_vulkan = sorted(required_vulkan - built_names)
-        if missing_vulkan:
-            raise RuntimeError("Final APK is missing Vulkan runtime libraries: " + ", ".join(missing_vulkan))
+        )
+        for runtime_name in immutable_hymt_libraries:
+            if runtime_name in original_names:
+                if runtime_name not in built_names:
+                    raise RuntimeError("APK219 Hy-MT2 library disappeared during merge: " + runtime_name)
+                if original.read(runtime_name) != built.read(runtime_name):
+                    raise RuntimeError("APK219 Hy-MT2 library was modified: " + runtime_name)
 
         for prefix in ("assets/", "lib/"):
             source_entries = {n for n in original_names if n.startswith(prefix)}
