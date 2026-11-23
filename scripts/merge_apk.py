@@ -1107,11 +1107,23 @@ def patch_translation_region_editor(base: Path) -> None:
         xml = xml[:end + 2] + button + xml[end + 2:]
         layout.write_text(xml, encoding="utf-8")
 
+    if 'android:id="@id/container_widget_iv_free_text_opacity"' not in xml:
+        marker = 'android:id="@id/container_widget_iv_text_placement"'
+        pos = xml.find(marker)
+        end = xml.find("/>", pos)
+        if pos < 0 or end < 0:
+            raise RuntimeError("Could not isolate text-placement toolbar button")
+        button = """
+            <ImageView android:id="@id/container_widget_iv_free_text_opacity" android:contentDescription="Непрозрачность фона свободного текста" android:background="@drawable/bg_circle_black" android:padding="6.0dip" android:layout_width="32.0dip" android:layout_height="32.0dip" android:layout_marginRight="10.0dip" android:src="@drawable/ic_free_text_opacity" android:visibility="gone" />
+"""
+        xml = xml[:end + 2] + button + xml[end + 2:]
+        layout.write_text(xml, encoding="utf-8")
+
     ids = base / "res/values/ids.xml"
     ids_text = ids.read_text(encoding="utf-8")
     for name in ("container_widget_iv_edit_regions", "container_widget_iv_delete_regions",
                  "container_widget_iv_edit_text_regions", "container_widget_iv_add_region",
-                 "container_widget_iv_text_placement"):
+                 "container_widget_iv_text_placement", "container_widget_iv_free_text_opacity"):
         if name not in ids_text:
             ids_text = ids_text.replace("</resources>",
                 f'    <item type="id" name="{name}" />\n</resources>', 1)
@@ -1125,6 +1137,7 @@ def patch_translation_region_editor(base: Path) -> None:
         ("container_widget_iv_edit_text_regions", "0x7f0a04f7"),
         ("container_widget_iv_add_region", "0x7f0a04f8"),
         ("container_widget_iv_text_placement", "0x7f0a04f9"),
+        ("container_widget_iv_free_text_opacity", "0x7f0a04fa"),
     )
     for name, value in allocations:
         if name not in pub_text:
@@ -1139,6 +1152,7 @@ def patch_translation_region_editor(base: Path) -> None:
         ("ic_delete_regions", "M6 19 C6 20.1 6.9 21 8 21 H16 C17.1 21 18 20.1 18 19 V7 H6 Z M19 4 H15.5 L14.5 3 H9.5 L8.5 4 H5 V6 H19 Z"),
         ("ic_edit_text_region", "M3 4 H15 V6 H5 V18 H19 V11 H21 V20 H3 Z M20.1 2.2 L21.8 3.9 L13 12.7 L10 13.5 L10.8 10.5 Z"),
         ("ic_add_region", "M19 13 H13 V19 H11 V13 H5 V11 H11 V5 H13 V11 H19 Z"),
+        ("ic_free_text_opacity", "M12 2 C12 2 4 10 4 15 A8 8 0 0 0 20 15 C20 10 12 2 12 2 Z M12 6 V22"),
     ):
         icon = base / f"res/drawable/{name}.xml"
         icon.write_text(f'''<?xml version="1.0" encoding="utf-8"?>
@@ -1190,7 +1204,11 @@ def patch_translation_region_editor(base: Path) -> None:
 </vector>
 ''', encoding="utf-8")
 
-    print("Added region selection, move/resize handles, text editing and multi-delete controls")
+    if 'container_widget_iv_free_text_opacity' not in layout.read_text(encoding="utf-8"):
+        raise RuntimeError("Free-text opacity control was not added to the translation toolbar")
+    if "TranslationRegionEditor;->bind" not in service.read_text(encoding="utf-8"):
+        raise RuntimeError("Region editor was not bound after toolbar extension")
+    print("Added region selection, text editing, free-text opacity, move/resize and multi-delete controls")
 
 
 def patch_floating_icon_z_order(base: Path) -> None:

@@ -22,6 +22,8 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.SeekBar;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import java.lang.reflect.Field;
@@ -48,6 +50,7 @@ public final class TranslationRegionEditor {
     private static final int ADD_REGION_BUTTON_ID = 0x7f0a04f8;
     private static final int CONTENT_ID = 0x7f0a00d3;
     private static final int TEXT_PLACEMENT_BUTTON_ID = 0x7f0a04f9;
+    private static final int FREE_TEXT_OPACITY_BUTTON_ID = 0x7f0a04fa;
     private static final String BRIDGE = "com.tap_to_translate.snap_translate.hymt2.ocr.RtDetrLiveBridge";
     private static final Map<View, State> STATES =
             Collections.synchronizedMap(new WeakHashMap<View, State>());
@@ -64,12 +67,13 @@ public final class TranslationRegionEditor {
             View editText = root.findViewById(EDIT_TEXT_BUTTON_ID);
             View addRegion = root.findViewById(ADD_REGION_BUTTON_ID);
             View textPlacement = root.findViewById(TEXT_PLACEMENT_BUTTON_ID);
+            View opacity = root.findViewById(FREE_TEXT_OPACITY_BUTTON_ID);
             if (!(content instanceof ViewGroup) || edit == null || delete == null) {
                 Log.w(TAG, "Cannot bind region editor: toolbar or content view is missing");
                 return;
             }
 
-            State state = new State(root, (ViewGroup) content, edit, delete, editText);
+            State state = new State(root, (ViewGroup) content, edit, delete, editText, opacity);
             SelectionOverlay overlay = new SelectionOverlay(root.getContext(), state);
             state.overlay = overlay;
             overlay.setVisibility(View.GONE);
@@ -100,6 +104,11 @@ public final class TranslationRegionEditor {
             }
             state.addRegionButton = addRegion;
             state.textPlacementButton = textPlacement;
+            state.opacityButton = opacity;
+            if (opacity != null) {
+                opacity.setOnClickListener(v -> editFreeTextOpacity(state));
+                opacity.setVisibility(View.GONE);
+            }
             if (textPlacement != null) {
                 textPlacement.setOnClickListener(v -> toggleTextPlacementMode(state));
                 textPlacement.setVisibility(View.GONE);
@@ -158,6 +167,7 @@ public final class TranslationRegionEditor {
         if (state.editTextButton != null) state.editTextButton.setVisibility(View.GONE);
         if (state.addRegionButton != null) state.addRegionButton.setVisibility(View.GONE);
         if (state.textPlacementButton != null) state.textPlacementButton.setVisibility(View.GONE);
+        if (state.opacityButton != null) state.opacityButton.setVisibility(View.GONE);
         state.editButton.setAlpha(0.55f);
         state.overlay.invalidate();
         Log.i(TAG, "Edit mode exited");
@@ -264,6 +274,7 @@ public final class TranslationRegionEditor {
                 removed++;
                 state.originalTexts.remove(item);
                 state.minimumResizeSizes.remove(item);
+                clearFreeTextBackgroundAlpha(item);
             } else {
                 remaining.add(item);
             }
@@ -325,6 +336,33 @@ public final class TranslationRegionEditor {
             state.textPlacementButton.setVisibility(bubbleRegion ? View.VISIBLE : View.GONE);
             state.textPlacementButton.setEnabled(bubbleRegion);
             state.textPlacementButton.setAlpha(state.textTransformMode ? 1.0f : 0.55f);
+        }
+        boolean freeTextRegion = oneRegion
+                && isFreeTextOverlay(state.selected.keySet().iterator().next());
+        if (state.opacityButton != null) {
+            state.opacityButton.setVisibility(freeTextRegion ? View.VISIBLE : View.GONE);
+            state.opacityButton.setEnabled(freeTextRegion);
+            state.opacityButton.setAlpha(freeTextRegion ? 1.0f : 0.35f);
+            state.opacityButton.setContentDescription("Непрозрачность фона свободного текста");
+        }
+    }
+
+    private static boolean isFreeTextOverlay(Object item) {
+        try {
+            return Boolean.TRUE.equals(Class.forName(BRIDGE)
+                    .getMethod("isFreeTextOverlay", Object.class).invoke(null, item));
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not classify selected free-text overlay", error);
+            return false;
+        }
+    }
+
+    private static void clearFreeTextBackgroundAlpha(Object item) {
+        try {
+            Class.forName(BRIDGE).getMethod("clearFreeTextBackgroundAlpha", Object.class)
+                    .invoke(null, item);
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not clear free-text alpha override", error);
         }
     }
 
@@ -468,6 +506,176 @@ public final class TranslationRegionEditor {
             Log.e(TAG, "Could not open translated text editor", error);
             toast(state.root, "Не удалось открыть редактор текста");
         }
+    }
+
+
+    private static void editFreeTextOpacity(State state) {
+        if (!state.editing || state.selected.size() != 1) {
+            toast(state.root, "Выберите один прямоугольник свободного текста");
+            return;
+        }
+        final Object item = state.selected.keySet().iterator().next();
+        if (!isFreeTextOverlay(item)) {
+            toast(state.root, "Непрозрачность доступна только для свободного текста вне баблов");
+            return;
+        }
+
+        final Context context = state.root.getContext();
+        final int originalHostAlpha = readHostBackgroundAlpha();
+        final int originalOverride = readFreeTextAlphaOverride(item);
+        final int initialPercent = readFreeTextAlphaPercent(context, item, originalHostAlpha);
+
+        LinearLayout container = new LinearLayout(context);
+        container.setOrientation(LinearLayout.VERTICAL);
+        int horizontal = Math.round(dp(context, 20));
+        container.setPadding(horizontal, Math.round(dp(context, 12)),
+                horizontal, Math.round(dp(context, 4)));
+
+        TextView explanation = new TextView(context);
+        explanation.setText("Регулируется заливка прямоугольника. Сам текст остаётся полностью видимым.");
+        explanation.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        container.addView(explanation, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView valueLabel = new TextView(context);
+        valueLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        valueLabel.setPadding(0, Math.round(dp(context, 10)), 0, Math.round(dp(context, 4)));
+        container.addView(valueLabel, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        SeekBar seekBar = new SeekBar(context);
+        seekBar.setMax(100);
+        seekBar.setProgress(initialPercent);
+        container.addView(seekBar, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        AlertDialog dialog = new AlertDialog.Builder(context)
+                .setTitle("Непрозрачность свободного текста")
+                .setView(container)
+                .setPositiveButton("Готово", null)
+                .setNegativeButton("Отмена", null)
+                .create();
+
+        if (dialog.getWindow() != null && android.os.Build.VERSION.SDK_INT >= 26) {
+            dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
+        }
+
+        final boolean[] accepted = new boolean[] { false };
+        Runnable restorePrevious = () -> {
+            if (originalOverride >= 0) {
+                setFreeTextAlphaPercent(item, originalOverride);
+            } else {
+                clearFreeTextBackgroundAlpha(item);
+            }
+            invalidateRendererViews(state);
+        };
+
+        valueLabel.setText(formatFreeTextAlpha(initialPercent));
+        seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
+                int percent = clamp(progress, 0, 100);
+                valueLabel.setText(formatFreeTextAlpha(percent));
+                setFreeTextAlphaPercent(item, percent);
+                invalidateRendererViews(state);
+            }
+            @Override public void onStartTrackingTouch(SeekBar bar) { }
+            @Override public void onStopTrackingTouch(SeekBar bar) { }
+        });
+
+        dialog.setOnShowListener(ignored -> {
+            Button save = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            Button cancel = dialog.getButton(AlertDialog.BUTTON_NEGATIVE);
+            save.setOnClickListener(v -> {
+                accepted[0] = true;
+                toast(state.root, "Непрозрачность фона сохранена для выбранного блока");
+                dialog.dismiss();
+            });
+            cancel.setOnClickListener(v -> {
+                restorePrevious.run();
+                dialog.dismiss();
+            });
+        });
+        dialog.setOnCancelListener(ignored -> {
+            if (!accepted[0]) restorePrevious.run();
+        });
+        dialog.show();
+    }
+
+    private static String formatFreeTextAlpha(int percent) {
+        int value = clamp(percent, 0, 100);
+        return "Непрозрачность заливки: " + value + "%  ·  Прозрачность: " + (100 - value) + "%";
+    }
+
+    private static int readHostBackgroundAlpha() {
+        try {
+            Class<?> owner = Class.forName("ca.d2");
+            Method method = owner.getDeclaredMethod("a", Boolean.TYPE);
+            method.setAccessible(true);
+            Object value = method.invoke(null, false);
+            return value instanceof Number ? clamp(((Number) value).intValue(), 0, 255) : 255;
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not read default host fill alpha; using opaque default", error);
+            return 255;
+        }
+    }
+
+    private static int readFreeTextAlphaOverride(Object item) {
+        try {
+            Object value = Class.forName(BRIDGE)
+                    .getMethod("getFreeTextBackgroundAlphaOverridePercent", Object.class)
+                    .invoke(null, item);
+            return value instanceof Number ? ((Number) value).intValue() : -1;
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not read free-text alpha override", error);
+            return -1;
+        }
+    }
+
+    private static int readFreeTextAlphaPercent(Context context, Object item, int originalAlpha) {
+        try {
+            Object value = Class.forName(BRIDGE).getMethod(
+                    "getFreeTextBackgroundAlphaPercent", Context.class, Object.class, Integer.TYPE)
+                    .invoke(null, context, item, originalAlpha);
+            return value instanceof Number ? clamp(((Number) value).intValue(), 0, 100) : 100;
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not read free-text alpha", error);
+            return clamp(Math.round(originalAlpha * 100f / 255f), 0, 100);
+        }
+    }
+
+    private static void setFreeTextAlphaPercent(Object item, int percent) {
+        try {
+            Class.forName(BRIDGE).getMethod(
+                    "setFreeTextBackgroundAlphaPercent", Object.class, Integer.TYPE)
+                    .invoke(null, item, clamp(percent, 0, 100));
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not set free-text alpha", error);
+        }
+    }
+
+    private static void invalidateRendererViews(State state) {
+        try {
+            Field rendererField = state.root.getClass().getField("m");
+            Object renderer = rendererField.get(state.root);
+            if (renderer instanceof View) ((View) renderer).invalidate();
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not invalidate primary text renderer", error);
+        }
+        try {
+            Field callbackField = state.root.getClass().getField("e");
+            Object callback = callbackField.get(state.root);
+            Field serviceField = callback.getClass().getField("c");
+            Object service = serviceField.get(callback);
+            Field secondaryField = service.getClass().getField("m");
+            Object secondary = secondaryField.get(service);
+            if (secondary instanceof View) ((View) secondary).invalidate();
+        } catch (NoSuchFieldException ignored) {
+            // The alternate renderer is optional.
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not invalidate secondary text renderer", error);
+        }
+        state.root.invalidate();
+        state.content.invalidate();
     }
 
     private static void refreshRenderers(State state) {
@@ -621,6 +829,7 @@ public final class TranslationRegionEditor {
         final View editTextButton;
         View addRegionButton;
         View textPlacementButton;
+        final View opacityButton;
         final IdentityHashMap<Object, Boolean> selected = new IdentityHashMap<>();
         final IdentityHashMap<Object, String> originalTexts = new IdentityHashMap<>();
         final IdentityHashMap<Object, int[]> minimumResizeSizes = new IdentityHashMap<>();
@@ -630,12 +839,14 @@ public final class TranslationRegionEditor {
         boolean textTransformMode;
         Object transformTarget;
 
-        State(View root, ViewGroup content, View editButton, View deleteButton, View editTextButton) {
+        State(View root, ViewGroup content, View editButton, View deleteButton,
+                View editTextButton, View opacityButton) {
             this.root = root;
             this.content = content;
             this.editButton = editButton;
             this.deleteButton = deleteButton;
             this.editTextButton = editTextButton;
+            this.opacityButton = opacityButton;
         }
     }
 

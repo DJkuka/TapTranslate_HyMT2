@@ -44,6 +44,8 @@ public final class RtDetrLiveBridge {
             Collections.synchronizedMap(new WeakHashMap<Object, DetectedRegion>());
     private static final Map<Object, float[]> BUBBLE_TEXT_TRANSFORMS =
             Collections.synchronizedMap(new WeakHashMap<Object, float[]>());
+    private static final Map<Object, Integer> FREE_TEXT_ALPHA_OVERRIDES =
+            Collections.synchronizedMap(new WeakHashMap<Object, Integer>());
     private static final String BUBBLE_AUTO_WRAP = "ocr_bubblepop_auto_wrap";
     private static final String OCR_PREFS = "taptranslate_ocr_settings";
     private static final String FREE_ALPHA_ENABLED = "ocr_free_text_alpha_enabled";
@@ -597,6 +599,7 @@ public final class RtDetrLiveBridge {
                     OVERLAY_FREE_EXCLUSION_MASKS.remove(group);
                 }
                 if (isBubbleText) {
+                    FREE_TEXT_ALPHA_OVERRIDES.remove(group);
                     DetectedRegion localMask = createOverlayBubbleMask(bounds, regions);
                     if (localMask != null) OVERLAY_BUBBLE_MASKS.put(group, localMask);
                     else OVERLAY_BUBBLE_MASKS.remove(group);
@@ -627,21 +630,54 @@ public final class RtDetrLiveBridge {
      * Unknown and bubble overlays preserve the exact host alpha.
      */
     public static int resolveBackgroundAlpha(Context context, Object overlay, int originalAlpha) {
-        if (context == null || overlay == null) return originalAlpha;
+        if (overlay == null) return originalAlpha;
+        Boolean isBubble = OVERLAY_IS_BUBBLE.get(overlay);
+        if (isBubble == null || isBubble.booleanValue()) return originalAlpha;
         try {
-            android.content.SharedPreferences prefs =
-                    context.getSharedPreferences(OCR_PREFS, Context.MODE_PRIVATE);
-            if (!prefs.getBoolean(FREE_ALPHA_ENABLED, false)) return originalAlpha;
-            Boolean isBubble = OVERLAY_IS_BUBBLE.get(overlay);
-            if (isBubble == null || isBubble.booleanValue()) return originalAlpha;
-            int percent = prefs.getInt(FREE_ALPHA_PERCENT, -1);
-            if (percent < 0) return originalAlpha;
+            Integer override = FREE_TEXT_ALPHA_OVERRIDES.get(overlay);
+            int percent;
+            if (override != null) {
+                percent = override.intValue();
+            } else {
+                if (context == null) return originalAlpha;
+                android.content.SharedPreferences prefs =
+                        context.getSharedPreferences(OCR_PREFS, Context.MODE_PRIVATE);
+                if (!prefs.getBoolean(FREE_ALPHA_ENABLED, false)) return originalAlpha;
+                percent = prefs.getInt(FREE_ALPHA_PERCENT, -1);
+                if (percent < 0) return originalAlpha;
+            }
             percent = Math.max(0, Math.min(100, percent));
             return Math.max(0, Math.min(255, Math.round(percent * 255f / 100f)));
         } catch (Throwable error) {
             Log.w(TAG, "Separate free-text alpha lookup failed; original alpha retained", error);
             return originalAlpha;
         }
+    }
+
+    /** True only for overlay groups explicitly classified as text outside speech bubbles. */
+    public static boolean isFreeTextOverlay(Object overlay) {
+        return overlay != null && Boolean.FALSE.equals(OVERLAY_IS_BUBBLE.get(overlay));
+    }
+
+    /** Sets a per-overlay fill opacity override without changing other free-text rectangles. */
+    public static void setFreeTextBackgroundAlphaPercent(Object overlay, int percent) {
+        if (!isFreeTextOverlay(overlay)) return;
+        FREE_TEXT_ALPHA_OVERRIDES.put(overlay, Integer.valueOf(Math.max(0, Math.min(100, percent))));
+    }
+
+    public static int getFreeTextBackgroundAlphaOverridePercent(Object overlay) {
+        Integer value = overlay == null ? null : FREE_TEXT_ALPHA_OVERRIDES.get(overlay);
+        return value == null ? -1 : value.intValue();
+    }
+
+    public static int getFreeTextBackgroundAlphaPercent(
+            Context context, Object overlay, int originalAlpha) {
+        int alpha = resolveBackgroundAlpha(context, overlay, originalAlpha);
+        return Math.max(0, Math.min(100, Math.round(alpha * 100f / 255f)));
+    }
+
+    public static void clearFreeTextBackgroundAlpha(Object overlay) {
+        if (overlay != null) FREE_TEXT_ALPHA_OVERRIDES.remove(overlay);
     }
 
     private static boolean isSeparateFreeTextAlphaEnabled(Context context) {

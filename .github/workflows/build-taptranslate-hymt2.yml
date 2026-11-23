@@ -296,7 +296,12 @@ jobs:
           editor="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor.smali)"
           grep -q 'setBubbleTextTransform' "$editor"
           grep -q '7f0a04f9' "$editor"
-          echo "Verified BubblePop mask-clipped fill, optional no-wrap layout, independent text transforms, PP-OCRv6 models and OCR handoff."
+          grep -q '7f0a04fa' "$editor"
+          grep -q 'isFreeTextOverlay' "$editor"
+          grep -q 'setFreeTextBackgroundAlphaPercent' "$editor"
+          grep -q 'setFreeTextBackgroundAlphaPercent' "$bridge"
+          grep -q 'getFreeTextBackgroundAlphaPercent' "$bridge"
+          echo "Verified BubblePop masks, word-safe layout, free-text-only opacity slider, PP-OCRv6 models and OCR handoff."
       
       - name: Verify hybrid OCR contracts are present in the final APK DEX files
         if: github.ref == 'refs/heads/ocr-hybrid-prototype' || github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing' || github.ref == 'refs/heads/ocr-region-geometry' || (github.ref == 'refs/heads/ocr-region-gesture-presets' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt') || (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt')
