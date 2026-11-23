@@ -798,6 +798,10 @@ public final class RtDetrLiveBridge {
         }
     }
 
+    public static boolean hasBubbleMask(Object overlay) {
+        return overlay != null && OVERLAY_BUBBLE_MASKS.containsKey(overlay);
+    }
+
     public static void setBubbleTextTransform(Object overlay, float dx, float dy, float scale) {
         if (overlay == null) return;
         BUBBLE_TEXT_TRANSFORMS.put(overlay, new float[] {

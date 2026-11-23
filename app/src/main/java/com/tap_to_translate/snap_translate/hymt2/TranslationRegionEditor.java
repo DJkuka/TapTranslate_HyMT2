@@ -314,15 +314,26 @@ public final class TranslationRegionEditor {
                 count > 0 ? "Удалить выбранные области: " + count : "Удалить выбранные области");
 
         boolean oneRegion = state.editing && count == 1;
+        boolean bubbleRegion = oneRegion
+                && hasBubbleMask(state.selected.keySet().iterator().next());
         if (state.editTextButton != null) {
             state.editTextButton.setVisibility(oneRegion ? View.VISIBLE : View.GONE);
             state.editTextButton.setEnabled(oneRegion);
             state.editTextButton.setContentDescription("Редактировать текст перевода");
         }
         if (state.textPlacementButton != null) {
-            state.textPlacementButton.setVisibility(oneRegion ? View.VISIBLE : View.GONE);
-            state.textPlacementButton.setEnabled(oneRegion);
+            state.textPlacementButton.setVisibility(bubbleRegion ? View.VISIBLE : View.GONE);
+            state.textPlacementButton.setEnabled(bubbleRegion);
             state.textPlacementButton.setAlpha(state.textTransformMode ? 1.0f : 0.55f);
+        }
+    }
+
+    private static boolean hasBubbleMask(Object item) {
+        try {
+            return Boolean.TRUE.equals(Class.forName(BRIDGE)
+                    .getMethod("hasBubbleMask", Object.class).invoke(null, item));
+        } catch (Throwable error) {
+            return false;
         }
     }
 
@@ -975,8 +986,16 @@ public final class TranslationRegionEditor {
                 nextY += dy;
             } else {
                 float denominator = Math.max(1f, dragStart.width() + dragStart.height());
+                float outward;
+                switch (dragMode) {
+                    case NW: outward = -dx - dy; break;
+                    case NE: outward = dx - dy; break;
+                    case SE: outward = dx + dy; break;
+                    case SW: outward = -dx + dy; break;
+                    default: outward = 0f;
+                }
                 nextScale = Math.max(0.55f, Math.min(1.65f,
-                        nextScale * (1f + (dx + dy) / denominator)));
+                        nextScale * (1f + outward / denominator)));
             }
             setTextTransform(state.transformTarget, nextX, nextY, nextScale);
             refreshRenderers(state);
