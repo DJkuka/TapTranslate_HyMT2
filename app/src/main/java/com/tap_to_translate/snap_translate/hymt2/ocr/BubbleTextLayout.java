@@ -186,6 +186,7 @@ public final class BubbleTextLayout {
                     cursor = nextEnd;
                 }
 
+                if (!autoWrap && cursor < paragraphEnd) return null;
                 String lineText = line.toString();
                 float textWidth = paint.measureText(lineText);
                 if (textWidth > available + 0.5f) return null;
