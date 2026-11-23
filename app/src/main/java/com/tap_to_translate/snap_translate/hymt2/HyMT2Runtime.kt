@@ -269,7 +269,8 @@ object HyMT2Runtime {
                         val options = HyMT2Settings.load(appContext)
                         val modelKind = selectedModelKind(appContext)
                         val isStqModel = modelKind == MODEL_KIND_STQ1
-                        val appliedRepetitionPenalty = if (isStqModel) 1.0f else options.repetitionPenalty
+                        // Tencent recommends repetition_penalty=1.05 for Hy-MT2 1.8B, including STQ1_0.
+                        val appliedRepetitionPenalty = options.repetitionPenalty
                         val activeVulkan = !isStqModel && options.useVulkan
                         val activeGpuLayers = if (activeVulkan) options.gpuLayers else 0
                         val sourceLanguage = languageName(sourceCode)
@@ -437,9 +438,9 @@ object HyMT2Runtime {
         sourceText: String,
         targetLanguage: String,
     ): String {
-        // Tencent's official Hy-MT2 default translation instruction.
+        // Match Tencent's llama.cpp completion example and the prompt verified in PocketPal.
         // Do not add a system message; the GGUF chat template supplies the role markers.
-        return """Translate the following text into $targetLanguage. Note that you should only output the translated result without any additional explanation:
+        return """Translate the following segment into $targetLanguage, without additional explanation.
 
 $sourceText"""
     }
