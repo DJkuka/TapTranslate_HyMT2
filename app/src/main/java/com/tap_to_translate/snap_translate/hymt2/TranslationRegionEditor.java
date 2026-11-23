@@ -104,7 +104,6 @@ public final class TranslationRegionEditor {
             }
             state.addRegionButton = addRegion;
             state.textPlacementButton = textPlacement;
-            state.opacityButton = opacity;
             if (opacity != null) {
                 opacity.setOnClickListener(v -> editFreeTextOpacity(state));
                 opacity.setVisibility(View.GONE);
