@@ -117,7 +117,8 @@ llama_sampler *make_sampler(
         const int32_t penalty_last_n = std::max(1, context_size);
         llama_sampler_chain_add(
             sampler, llama_sampler_init_penalties(
-                penalty_last_n, repetition_penalty, 0.0f, 0.0f));
+                llama_vocab_n_tokens(vocab), penalty_last_n,
+                repetition_penalty, 0.0f, 0.0f));
     }
 
     if (temperature <= 0.0f) {
