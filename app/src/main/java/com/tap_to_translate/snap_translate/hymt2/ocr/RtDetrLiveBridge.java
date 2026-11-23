@@ -590,7 +590,7 @@ public final class RtDetrLiveBridge {
                 boolean isFreeText = !isBubbleText && freeTextScore > 0d;
                 OVERLAY_IS_BUBBLE.put(group, Boolean.valueOf(isBubbleText));
                 OVERLAY_IS_FREE_TEXT.put(group, Boolean.valueOf(isFreeText));
-                if (!isFreeText) FREE_TEXT_ALPHA_OVERRIDES.remove(group);
+                if (isBubbleText) FREE_TEXT_ALPHA_OVERRIDES.remove(group);
                 if (!isBubbleText) {
                     DetectedRegion pageMask = null;
                     for (DetectedRegion candidate : regions) {
@@ -638,7 +638,12 @@ public final class RtDetrLiveBridge {
      */
     public static int resolveBackgroundAlpha(Context context, Object overlay, int originalAlpha) {
         if (overlay == null) return originalAlpha;
-        if (!Boolean.TRUE.equals(OVERLAY_IS_FREE_TEXT.get(overlay))) return originalAlpha;
+        // Preserve APK219's original contract: a non-bubble overlay may use
+        // the separate free-text alpha even when RT-DETR has no direct FREE_TEXT
+        // score for its bounds. Requiring a positive score here made all such
+        // backgrounds revert to the host's fully opaque alpha.
+        Boolean isBubble = OVERLAY_IS_BUBBLE.get(overlay);
+        if (isBubble == null || isBubble.booleanValue()) return originalAlpha;
         try {
             Integer override = FREE_TEXT_ALPHA_OVERRIDES.get(overlay);
             int percent;
@@ -660,9 +665,9 @@ public final class RtDetrLiveBridge {
         }
     }
 
-    /** True only for overlay groups explicitly classified as text outside speech bubbles. */
+    /** The editor uses the same non-bubble classification as APK219's alpha path. */
     public static boolean isFreeTextOverlay(Object overlay) {
-        return overlay != null && Boolean.TRUE.equals(OVERLAY_IS_FREE_TEXT.get(overlay));
+        return overlay != null && Boolean.FALSE.equals(OVERLAY_IS_BUBBLE.get(overlay));
     }
 
     /** Sets a per-overlay fill opacity override without changing other free-text rectangles. */
