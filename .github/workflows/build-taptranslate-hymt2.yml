@@ -1,4 +1,5 @@
 name: Build Tap Translate 1.125 FontFit AutoFill + Hy-MT2 Vulkan
+# Rebuild with the verified STQ1_0 runtime AAR checksum.
 
 on:
   workflow_dispatch:
