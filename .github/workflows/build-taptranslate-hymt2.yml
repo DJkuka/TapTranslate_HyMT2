@@ -46,16 +46,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --retry 4 \
-            "https://raw.githubusercontent.com/DJkuka/HyMT2_Vulkan_Standalone_Test/main/app/libs/llama-android-vulkan.aar" \
+          curl --fail --location --retry 4 --retry-all-errors \
+            "https://github.com/DJkuka/Vulkan_NativeRuntime/releases/download/stq1.0-runtime/llama-android-vulkan.aar" \
             -o app/libs/llama-android-vulkan.aar
-          echo "b2a15a3e297b4107575df52711a86e6a53e1a14fff497db5acb1837abe1f49bb  app/libs/llama-android-vulkan.aar" | sha256sum -c -
+          echo "f9e7a7f7de43bf36673881e3d3d5062efee23a822b53bb210c2885b86478da28  app/libs/llama-android-vulkan.aar" | sha256sum -c -
           mkdir -p build/vulkan-aar
           unzip -q app/libs/llama-android-vulkan.aar -d build/vulkan-aar
           test -f build/vulkan-aar/jni/arm64-v8a/libggml-vulkan.so
           test -f build/vulkan-aar/jni/arm64-v8a/libllama.so
-          git clone --depth 1 --branch b9878 https://github.com/ggml-org/llama.cpp.git upstream/llama.cpp
-          test "$(git -C upstream/llama.cpp describe --tags --exact-match)" = "b9878"
+          git clone https://github.com/ggml-org/llama.cpp.git upstream/llama.cpp
+          git -C upstream/llama.cpp checkout --detach 1e411d8f5a1e23525fa3265dfb4bd76265465397
+          test "$(git -C upstream/llama.cpp rev-parse HEAD)" = "1e411d8f5a1e23525fa3265dfb4bd76265465397"
+          grep -q 'GGML_TYPE_STQ1_0' upstream/llama.cpp/ggml/include/ggml.h
           echo "LLAMA_ROOT=$GITHUB_WORKSPACE/upstream/llama.cpp" >> "$GITHUB_ENV"
           echo "VULKAN_AAR_NATIVE_DIR=$GITHUB_WORKSPACE/build/vulkan-aar/jni/arm64-v8a" >> "$GITHUB_ENV"
 
