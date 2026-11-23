@@ -38,6 +38,9 @@ public final class RtDetrLiveBridge {
             Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
     private static final Map<Object, DetectedRegion> OVERLAY_BUBBLE_MASKS =
             Collections.synchronizedMap(new WeakHashMap<Object, DetectedRegion>());
+    private static final Map<Object, float[]> BUBBLE_TEXT_TRANSFORMS =
+            Collections.synchronizedMap(new WeakHashMap<Object, float[]>());
+    private static final String BUBBLE_AUTO_WRAP = "ocr_bubblepop_auto_wrap";
     private static final String OCR_PREFS = "taptranslate_ocr_settings";
     private static final String FREE_ALPHA_ENABLED = "ocr_free_text_alpha_enabled";
     private static final String FREE_ALPHA_PERCENT = "ocr_free_text_alpha_percent";
@@ -766,13 +769,56 @@ public final class RtDetrLiveBridge {
             if (region == null || region.maskDataView() == null) return false;
             Rect overlayBounds = readOverlayBounds(overlay);
             if (overlayBounds == null) return false;
+            float[] transform = BUBBLE_TEXT_TRANSFORMS.get(overlay);
+            if (transform == null) transform = new float[] {0f, 0f, 1f};
+            Context context = resolveContextFromOverlay(overlay);
+            boolean autoWrap = context == null || context.getSharedPreferences(
+                    OCR_PREFS, Context.MODE_PRIVATE).getBoolean(BUBBLE_AUTO_WRAP, true);
             return BubbleTextLayout.draw(canvas, region.maskDataView(),
                     region.getMaskWidth(), region.getMaskHeight(), region.getBounds(),
-                    overlayBounds, text, paint, minTextSize, maxTextSize, padding);
+                    overlayBounds, text, paint, minTextSize, maxTextSize, padding,
+                    autoWrap, transform[0], transform[1], transform[2]);
         } catch (Throwable error) {
             Log.w(TAG, "BubblePop text layout failed; rectangular host layout retained", error);
             return false;
         }
+    }
+
+    public static boolean drawBubbleBackground(android.graphics.Canvas canvas, Object overlay,
+            float radius, android.graphics.Paint paint) {
+        try {
+            DetectedRegion region = OVERLAY_BUBBLE_MASKS.get(overlay);
+            Rect bounds = readOverlayBounds(overlay);
+            return region != null && bounds != null && BubbleTextLayout.drawClippedBackground(
+                    canvas, region, bounds.left, bounds.top, bounds.right, bounds.bottom,
+                    radius, radius, paint);
+        } catch (Throwable error) {
+            Log.w(TAG, "BubblePop background clipping failed; rectangular fallback retained", error);
+            return false;
+        }
+    }
+
+    public static void setBubbleTextTransform(Object overlay, float dx, float dy, float scale) {
+        if (overlay == null) return;
+        BUBBLE_TEXT_TRANSFORMS.put(overlay, new float[] {
+                dx, dy, Math.max(0.55f, Math.min(1.65f, scale))});
+    }
+
+    public static float[] getBubbleTextTransform(Object overlay) {
+        float[] value = BUBBLE_TEXT_TRANSFORMS.get(overlay);
+        return value == null ? new float[] {0f, 0f, 1f} : value.clone();
+    }
+
+    private static Context resolveContextFromOverlay(Object overlay) {
+        try {
+            synchronized (ACTIVE_REGIONS) {
+                for (Object owner : ACTIVE_REGIONS.keySet()) {
+                    Context context = resolveContext(owner);
+                    if (context != null) return context;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return null;
     }
 
     private static int findBubbleContainer(Rect text, List<DetectedRegion> regions) {

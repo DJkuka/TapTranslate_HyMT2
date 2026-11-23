@@ -24,6 +24,7 @@ import kotlin.math.roundToInt
 class OcrSettingsActivity : Activity() {
     private lateinit var alphaSwitch: Switch
     private lateinit var pageMaskSwitch: Switch
+    private lateinit var bubbleWrapSwitch: Switch
     private lateinit var alphaSeek: SeekBar
     private lateinit var alphaValue: TextView
     private lateinit var maxSideSpinner: Spinner
@@ -197,6 +198,15 @@ class OcrSettingsActivity : Activity() {
         }
         root.addView(pageMaskSwitch, matchWrap(dp(14)))
 
+        addText(root,
+            "Перенос строк в переводе внутри баблов. Если отключить, приложение сначала уменьшит шрифт, чтобы разместить фразу в одну строку. Если она не помещается даже при минимальном размере, останется безопасный многострочный вариант.",
+            13f, false, dp(6))
+        bubbleWrapSwitch = Switch(this).apply {
+            text = "Автоматический перенос строк"
+            isChecked = prefs.getBoolean(KEY_BUBBLE_AUTO_WRAP, true)
+        }
+        root.addView(bubbleWrapSwitch, matchWrap(dp(14)))
+
         addText(root, "СКРИНШОТЫ ПЕРЕВОДА", 16f, true, dp(8))
         addText(root,
             "Снимок сохраняет исходную страницу вместе с наложенным переводом, без верхней панели управления. Нумерация продолжается по порядку добавления: 001, 002, 003 и далее.",
@@ -252,6 +262,7 @@ class OcrSettingsActivity : Activity() {
                 prefs.edit()
                     .putBoolean(KEY_ALPHA_ENABLED, alphaSwitch.isChecked)
                     .putBoolean(KEY_BUBBLEPOP_PAGE_MASK, pageMaskSwitch.isChecked)
+                    .putBoolean(KEY_BUBBLE_AUTO_WRAP, bubbleWrapSwitch.isChecked)
                     .putInt(KEY_ALPHA_PERCENT, alphaSeek.progress.coerceIn(0, 100))
                     .putInt(KEY_MAX_SIDE, selectedLimit)
                     .putFloat(KEY_DET_THRESH, currentFloat(KEY_DET_THRESH, 0.20f))
@@ -420,6 +431,7 @@ class OcrSettingsActivity : Activity() {
         private const val PREFS_NAME = "taptranslate_ocr_settings"
         private const val KEY_ALPHA_ENABLED = "ocr_free_text_alpha_enabled"
         private const val KEY_BUBBLEPOP_PAGE_MASK = "ocr_bubblepop_page_mask_enabled"
+        private const val KEY_BUBBLE_AUTO_WRAP = "ocr_bubblepop_auto_wrap"
         private const val KEY_ALPHA_PERCENT = "ocr_free_text_alpha_percent"
         private const val KEY_MAX_SIDE = "ocr_det_max_side_limit"
         private const val KEY_DET_THRESH = "ocr_det_thresh"

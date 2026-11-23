@@ -494,6 +494,38 @@ def patch_free_text_alpha_renderers(base: Path) -> None:
             shape_hook = shape_hook.replace("MAX_REGISTER", max_register)
             method = method.replace(marker, marker + "\n" + shape_hook, 1)
 
+        if "drawBubbleBackground" not in method:
+            draw_call = "    invoke-virtual/range {v1 .. v8}, Landroid/graphics/Canvas;->drawRoundRect(FFFFFFLandroid/graphics/Paint;)V"
+            if method.count(draw_call) != 2:
+                raise RuntimeError("Expected two rounded-rectangle draw sites in " + rel)
+            positions = []
+            cursor = 0
+            while True:
+                position = method.find(draw_call, cursor)
+                if position < 0:
+                    break
+                positions.append(position)
+                cursor = position + len(draw_call)
+            if len(positions) != 2:
+                raise RuntimeError("Could not isolate both rounded-rectangle draw calls in " + rel)
+            for index, position in reversed(list(enumerate(positions))):
+                fallback = f":hymt_bubble_bg_fallback_{owner}_{index}"
+                done = f":hymt_bubble_bg_done_{owner}_{index}"
+                hook = (
+                    "    move-object/from16 v20, v1\\n"
+                    "    move-object/from16 v21, v11\\n"
+                    "    move/from16 v22, v6\\n"
+                    "    move-object/from16 v23, v8\\n"
+                    "    invoke-static/range {v20 .. v23}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->drawBubbleBackground(Landroid/graphics/Canvas;Ljava/lang/Object;FLandroid/graphics/Paint;)Z\\n"
+                    "    move-result v20\\n"
+                    f"    if-eqz v20, {fallback}\\n"
+                    f"    goto {done}\\n"
+                    f"    {fallback}\\n"
+                    + draw_call + "\\n"
+                    f"    {done}"
+                )
+                method = method[:position] + hook + method[position + len(draw_call):]
+
         text = text[:start] + method + text[end:]
         path.write_text(text, encoding="utf-8")
     print("Added free-text alpha and BubblePop-shaped text layout to both host renderers")
@@ -1058,10 +1090,23 @@ def patch_translation_region_editor(base: Path) -> None:
         xml = xml[:end + 2] + button + xml[end + 2:]
         layout.write_text(xml, encoding="utf-8")
 
+    if 'android:id="@id/container_widget_iv_text_placement"' not in xml:
+        marker = 'android:id="@id/container_widget_iv_add_region"'
+        pos = xml.find(marker)
+        end = xml.find("/>", pos)
+        if pos < 0 or end < 0:
+            raise RuntimeError("Could not isolate add-region toolbar button")
+        button = """
+            <ImageView android:id="@id/container_widget_iv_text_placement" android:contentDescription="Переместить текст перевода" android:background="@drawable/bg_circle_black" android:padding="6.0dip" android:layout_width="32.0dip" android:layout_height="32.0dip" android:layout_marginRight="10.0dip" android:src="@drawable/ic_move_text_region" android:visibility="gone" />
+"""
+        xml = xml[:end + 2] + button + xml[end + 2:]
+        layout.write_text(xml, encoding="utf-8")
+
     ids = base / "res/values/ids.xml"
     ids_text = ids.read_text(encoding="utf-8")
     for name in ("container_widget_iv_edit_regions", "container_widget_iv_delete_regions",
-                 "container_widget_iv_edit_text_regions", "container_widget_iv_add_region"):
+                 "container_widget_iv_edit_text_regions", "container_widget_iv_add_region",
+                 "container_widget_iv_text_placement"):
         if name not in ids_text:
             ids_text = ids_text.replace("</resources>",
                 f'    <item type="id" name="{name}" />\n</resources>', 1)
@@ -1074,6 +1119,7 @@ def patch_translation_region_editor(base: Path) -> None:
         ("container_widget_iv_delete_regions", "0x7f0a04f6"),
         ("container_widget_iv_edit_text_regions", "0x7f0a04f7"),
         ("container_widget_iv_add_region", "0x7f0a04f8"),
+        ("container_widget_iv_text_placement", "0x7f0a04f9"),
     )
     for name, value in allocations:
         if name not in pub_text:
@@ -1132,6 +1178,13 @@ def patch_translation_region_editor(base: Path) -> None:
 
     if "TranslationRegionEditor;->bind" not in service.read_text(encoding="utf-8"):
         raise RuntimeError("Region editor was not bound to the translation toolbar")
+    icon = base / "res/drawable/ic_move_text_region.xml"
+    icon.write_text('''<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M3,12 L7,8 L7,11 L17,11 L17,8 L21,12 L17,16 L17,13 L7,13 L7,16 Z M10,3 L14,3 L14,7 L10,7 Z M10,17 L14,17 L14,21 L10,21 Z" />
+</vector>
+''', encoding="utf-8")
+
     print("Added region selection, move/resize handles, text editing and multi-delete controls")
 
 
