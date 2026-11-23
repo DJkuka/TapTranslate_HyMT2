@@ -89,7 +89,7 @@ jobs:
           test "$(stat -c%s "$model")" -eq 11120765
 
       - name: Fetch pinned PP-OCRv6 small ONNX models and verify hashes
-        if: github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing' || github.ref == 'refs/heads/ocr-region-geometry' || github.ref == 'refs/heads/ocr-region-gesture-presets'
+        if: github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing' || github.ref == 'refs/heads/ocr-region-geometry' || github.ref == 'refs/heads/ocr-region-gesture-presets' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt'
         shell: bash
         run: |
           set -euo pipefail
