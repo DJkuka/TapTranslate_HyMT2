@@ -125,65 +125,91 @@ public final class BubbleTextLayout {
             Rect area, String text, TextPaint paint, int padding, boolean autoWrap) {
         android.graphics.Paint.FontMetrics fm = paint.getFontMetrics();
         int lineHeight = Math.max(1, (int) Math.ceil(fm.descent - fm.ascent + fm.leading));
+        int scanStep = Math.max(1, lineHeight / 4);
         int y = area.top;
         int offset = 0;
         ArrayList<Line> result = new ArrayList<>();
+
         while (offset < text.length()) {
-            if (text.charAt(offset) == '\n') {
+            if (text.charAt(offset) == '\\n') {
                 offset++;
                 y += lineHeight;
                 continue;
             }
             while (offset < text.length() && Character.isWhitespace(text.charAt(offset))
-                    && text.charAt(offset) != '\n') offset++;
+                    && text.charAt(offset) != '\\n') offset++;
             if (offset >= text.length()) break;
             if (y + lineHeight > area.bottom) return null;
 
-            int[] run = null;
-            int minimumRun = Math.max(4, (int) Math.ceil(paint.getTextSize() * 0.45f));
-            int scanStep = Math.max(1, lineHeight / 4);
-            while (y + lineHeight <= area.bottom) {
-                run = widestCommonRun(mask, width, height, maskBounds, area,
-                        y, lineHeight, padding);
-                if (run != null && run[1] - run[0] >= minimumRun) break;
-                // Ignore narrow tips/indentations at the edge of irregular balloons;
-                // start the next text line where a complete glyph band fits.
-                y += scanStep;
-            }
-            if (run == null || run[1] - run[0] < minimumRun) return null;
-            float available = run[1] - run[0];
-            int paragraphEnd = text.indexOf('\n', offset);
+            int paragraphEnd = text.indexOf('\\n', offset);
             if (paragraphEnd < 0) paragraphEnd = text.length();
-            int count = paint.breakText(text, offset, paragraphEnd, true, available, null);
-            if (count <= 0) return null;
-            // In no-wrap mode, only accept a font size for which the whole paragraph
-            // fits on one line. The outer size search will continue with a smaller font.
-            if (!autoWrap && count < paragraphEnd - offset) return null;
-            int end = Math.min(paragraphEnd, offset + count);
-            if (end < paragraphEnd) {
-                int whitespace = -1;
-                for (int i = end - 1; i > offset; i--) {
-                    if (Character.isWhitespace(text.charAt(i))) {
-                        whitespace = i;
+
+            // Build lines from complete words only. Never let breakText() split the
+            // first word (or any later word) at an arbitrary character boundary.
+            boolean placed = false;
+            while (!placed && y + lineHeight <= area.bottom) {
+                int[] run = widestCommonRun(mask, width, height, maskBounds, area,
+                        y, lineHeight, padding);
+                if (run == null) {
+                    y += scanStep;
+                    continue;
+                }
+                float available = run[1] - run[0];
+                int firstWordEnd = wordEnd(text, offset, paragraphEnd);
+                if (firstWordEnd <= offset) {
+                    offset = paragraphEnd;
+                    break;
+                }
+                String firstWord = text.substring(offset, firstWordEnd);
+                // A word that is too wide for this row is retried lower in the
+                // balloon, where an irregular mask may provide a wider interval.
+                if (paint.measureText(firstWord) > available + 0.5f) {
+                    y += scanStep;
+                    continue;
+                }
+
+                StringBuilder line = new StringBuilder(firstWord);
+                int cursor = firstWordEnd;
+                while (cursor < paragraphEnd) {
+                    int nextStart = cursor;
+                    while (nextStart < paragraphEnd
+                            && Character.isWhitespace(text.charAt(nextStart))) nextStart++;
+                    if (nextStart >= paragraphEnd) {
+                        cursor = paragraphEnd;
                         break;
                     }
+                    int nextEnd = wordEnd(text, nextStart, paragraphEnd);
+                    if (nextEnd <= nextStart) break;
+                    String candidate = line.toString() + " " + text.substring(nextStart, nextEnd);
+                    if (paint.measureText(candidate) > available + 0.5f) break;
+                    line.append(' ').append(text, nextStart, nextEnd);
+                    cursor = nextEnd;
                 }
-                if (whitespace > offset) end = whitespace;
+
+                String lineText = line.toString();
+                float textWidth = paint.measureText(lineText);
+                if (textWidth > available + 0.5f) return null;
+                float x = run[0] + (available - textWidth) / 2f;
+                result.add(new Line(lineText, x, y - fm.ascent));
+
+                offset = cursor;
+                while (offset < paragraphEnd && Character.isWhitespace(text.charAt(offset))) offset++;
+                if (offset >= paragraphEnd) {
+                    offset = paragraphEnd;
+                    if (offset < text.length() && text.charAt(offset) == '\\n') offset++;
+                }
+                y += lineHeight;
+                placed = true;
             }
-            while (end > offset && Character.isWhitespace(text.charAt(end - 1))) end--;
-            if (end <= offset) return null;
-            String lineText = text.substring(offset, end);
-            float textWidth = paint.measureText(lineText);
-            if (textWidth > available + 0.5f) return null;
-            float x = run[0] + (available - textWidth) / 2f;
-            result.add(new Line(lineText, x, y - fm.ascent));
-            offset = end;
-            while (offset < text.length() && text.charAt(offset) != '\n'
-                    && Character.isWhitespace(text.charAt(offset))) offset++;
-            if (offset < text.length() && text.charAt(offset) == '\n') offset++;
-            y += lineHeight;
+            if (!placed && y + lineHeight > area.bottom) return null;
         }
         return result;
+    }
+
+    private static int wordEnd(String text, int start, int limit) {
+        int end = start;
+        while (end < limit && !Character.isWhitespace(text.charAt(end))) end++;
+        return end;
     }
 
     /** Longest x interval whose pixels are all inside the mask for every row of the glyph band. */
