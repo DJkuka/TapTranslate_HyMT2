@@ -269,16 +269,13 @@ object HyMT2Runtime {
                         val options = HyMT2Settings.load(appContext)
                         val modelKind = selectedModelKind(appContext)
                         val isStqModel = modelKind == MODEL_KIND_STQ1
-                        // Tencent recommends repetition_penalty=1.05 for Hy-MT2 1.8B, including STQ1_0.
-                        val appliedRepetitionPenalty = options.repetitionPenalty
+                        val appliedRepetitionPenalty = if (isStqModel) 1.0f else options.repetitionPenalty
                         val activeVulkan = !isStqModel && options.useVulkan
                         val activeGpuLayers = if (activeVulkan) options.gpuLayers else 0
                         val sourceLanguage = languageName(sourceCode)
                         val sourceLanguageKey = sourceLanguage ?: "auto"
                         val targetLanguage = languageName(targetCode) ?: "Russian"
-                        // Tencent specifies an empty system prompt for Hy-MT2 1.8B.
-                        // Keep the chat template to a single user message, as in the official example.
-                        val systemPrompt = ""
+                        val systemPrompt = buildTranslationSystemPrompt(sourceLanguage, targetLanguage)
                         Log.i(TAG, "Hy-MT2 request: modelKind=$modelKind sourceCode=$sourceCode source=${sourceLanguage ?: "auto"} targetCode=$targetCode target=$targetLanguage sourceChars=${sourceText.length} sourcePreview=${if (sourceText.length <= 64) sourceText.replace("\\n", "\\\\n") else "<omitted>"} background=${options.backgroundContext.isNotBlank()} glossary=${options.glossary.isNotBlank()} style=${options.stylePreset}; context=${options.contextSize} maxTokens=${options.maxTokens} temperature=${options.temperature} topP=${options.topP} topK=${options.topK} threads=${options.threads} Vulkan=$activeVulkan gpuLayers=$activeGpuLayers; generation=HyMT2PenaltyNative")
                         val contextPairs = if (options.useRecentContext && options.recentContextPairs > 0) {
                             recentContextFor(host, sourceLanguageKey, targetLanguage, options.recentContextPairs)
@@ -434,13 +431,26 @@ object HyMT2Runtime {
         }
     }
 
+    private fun buildTranslationSystemPrompt(sourceLanguage: String?, targetLanguage: String): String {
+        // Match the short, known-good system instruction from the standalone Vulkan test.
+        // Hy-MT2 is a translation model; avoid verbose role/persona text here.
+        return if (
+            sourceLanguage.equals("English", ignoreCase = true) &&
+            targetLanguage.equals("Russian", ignoreCase = true)
+        ) {
+            "You are a professional English-to-Russian comic translator. Use natural idiomatic Russian. Preserve speaker tone, humor, sarcasm, names and meaning. Do not add explanations."
+        } else {
+            "You are a professional translator. Translate accurately and naturally. Preserve meaning and tone. Do not add explanations."
+        }
+    }
+
     private fun buildTranslationPrompt(
         sourceText: String,
         targetLanguage: String,
     ): String {
-        // Match Tencent's llama.cpp completion example and the prompt verified in PocketPal.
-        // Do not add a system message; the GGUF chat template supplies the role markers.
-        return """Translate the following segment into $targetLanguage, without additional explanation.
+        // Exact prompt text from the verified APK 217 source.
+        // Keep this wording unchanged for the diagnostic comparison.
+        return """Translate the following text into $targetLanguage. Output only the translated result without explanations:
 
 $sourceText"""
     }
