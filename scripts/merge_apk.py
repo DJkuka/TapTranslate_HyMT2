@@ -1846,6 +1846,30 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
                 continue
             for source in root.rglob("*.smali"):
                 rel = source.relative_to(helper).as_posix()
+                # APK219 already contains a working Hy-MT2 runtime. Only port
+                # the explicitly reviewed BubblePop/OCR UI classes; never replace
+                # HyMT2Runtime, its settings, JNI bridge, launcher or llama API.
+                allowed_classes = (
+                    "com/tap_to_translate/snap_translate/hymt2/OcrSettingsActivity",
+                    "com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor",
+                    "com/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager",
+                    "com/tap_to_translate/snap_translate/hymt2/FloatingIconZOrderFix",
+                    "com/tap_to_translate/snap_translate/hymt2/DisplayProfilesActivity",
+                    "com/tap_to_translate/snap_translate/hymt2/DisplayProfilesStore",
+                    "com/tap_to_translate/snap_translate/hymt2/HomeOcrQuickSelector",
+                    "com/tap_to_translate/snap_translate/hymt2/ManualSelectionTouchMode",
+                    "com/tap_to_translate/snap_translate/hymt2/ocr/BubbleOverlayMasker",
+                    "com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopPageMaskDetector",
+                    "com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopSegmenter",
+                    "com/tap_to_translate/snap_translate/hymt2/ocr/BubbleTextLayout",
+                    "com/tap_to_translate/snap_translate/hymt2/ocr/DetectedRegion",
+                    "com/tap_to_translate/snap_translate/hymt2/ocr/OcrRegionKind",
+                    "com/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge",
+                )
+                class_name = rel[:-6] if rel.endswith(".smali") else rel
+                if not any(class_name == item or class_name.startswith(item + "$")
+                           for item in allowed_classes):
+                    continue
                 destination = target_root / rel
                 if rel in existing:
                     if destination.is_file():
@@ -1902,28 +1926,32 @@ def copy_helper_payload(helper: Path, base: Path) -> None:
     so_files = list(helper_lib.glob("*.so"))
     if not so_files:
         raise RuntimeError("The llama-android AAR did not package any native .so files")
-    replaceable = {
-        "libllama_jni.so", "libllama.so", "libggml.so",
-        "libggml-base.so", "libggml-cpu.so", "libggml-vulkan.so",
-        "libhymt2_jni.so", "libc++_shared.so", "libopencv_java4.so",
+    # Copy OCR-only native dependencies. The APK219 Hy-MT2/Llama libraries
+    # are immutable and must remain byte-for-byte identical to the release.
+    allowed_native = {
+        "libonnxruntime.so", "libonnxruntime4j_jni.so",
+        "libopencv_java4.so", "libc++_shared.so",
     }
     for source in so_files:
+        if source.name not in allowed_native:
+            continue
         destination = out_lib / source.name
-        if destination.exists() and destination.read_bytes() != source.read_bytes():
-            if source.name not in replaceable:
-                raise RuntimeError(f"Unexpected native library collision: {source.name}")
-            print(f"Replacing Hy-MT2 runtime library: {source.name}")
+        if destination.exists():
+            if destination.read_bytes() != source.read_bytes():
+                if source.name == "libc++_shared.so":
+                    # Keep the host C++ runtime; never replace a library already
+                    # shipped in APK219.
+                    continue
+                raise RuntimeError(f"OCR native library collision with APK219: {source.name}")
+            continue
         shutil.copy2(source, destination)
     required_runtime = {
-        "libllama_jni.so", "libllama.so", "libggml.so",
-        "libggml-base.so", "libggml-cpu.so", "libggml-vulkan.so",
-        "libhymt2_jni.so", "libonnxruntime.so", "libonnxruntime4j_jni.so",
-        "libopencv_java4.so",
+        "libonnxruntime.so", "libonnxruntime4j_jni.so", "libopencv_java4.so",
     }
     missing_runtime = sorted(name for name in required_runtime if not (out_lib / name).is_file())
     if missing_runtime:
         raise RuntimeError("Vulkan runtime libraries missing from helper APK: " + ", ".join(missing_runtime))
-    print("Copied/replaced native libraries:", ", ".join(sorted(p.name for p in so_files)))
+    print("Copied OCR native libraries only; APK219 Llama/Hy-MT2 libraries were not touched.")
 
     # Preserve helper assets (RT-DETR weights and legal notices) in the final host APK.
     helper_assets = helper / "assets"
