@@ -2063,8 +2063,8 @@ def copy_helper_payload(helper: Path, base: Path) -> None:
     )
     count = copy_package(helper_dirs, base, prefixes)
     if count == 0:
-        raise RuntimeError("No Hy-MT2 runtime classes were found in the helper APK")
-    print(f"Copied {count} smali classes to classes5.dex")
+        raise RuntimeError("No approved BubblePop/OCR UI classes were found in the helper APK")
+    print(f"Ported {count} approved BubblePop/OCR classes; Hy-MT2 inference classes were excluded.")
     target_root = base / "smali_classes5"
 
     # Copy the prebuilt ARM64 native libraries from the AAR dependency.
@@ -2098,7 +2098,7 @@ def copy_helper_payload(helper: Path, base: Path) -> None:
     }
     missing_runtime = sorted(name for name in required_runtime if not (out_lib / name).is_file())
     if missing_runtime:
-        raise RuntimeError("Vulkan runtime libraries missing from helper APK: " + ", ".join(missing_runtime))
+        raise RuntimeError("OCR runtime libraries missing from helper APK: " + ", ".join(missing_runtime))
     print("Copied OCR native libraries only; APK219 Llama/Hy-MT2 libraries were not touched.")
 
     # Preserve helper assets (RT-DETR weights and legal notices) in the final host APK.
