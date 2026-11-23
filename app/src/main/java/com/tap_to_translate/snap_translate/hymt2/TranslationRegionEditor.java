@@ -47,6 +47,8 @@ public final class TranslationRegionEditor {
     private static final int EDIT_TEXT_BUTTON_ID = 0x7f0a04f7;
     private static final int ADD_REGION_BUTTON_ID = 0x7f0a04f8;
     private static final int CONTENT_ID = 0x7f0a00d3;
+    private static final int TEXT_PLACEMENT_BUTTON_ID = 0x7f0a04f9;
+    private static final String BRIDGE = "com.tap_to_translate.snap_translate.hymt2.ocr.RtDetrLiveBridge";
     private static final Map<View, State> STATES =
             Collections.synchronizedMap(new WeakHashMap<View, State>());
 
@@ -61,6 +63,7 @@ public final class TranslationRegionEditor {
             View delete = root.findViewById(DELETE_BUTTON_ID);
             View editText = root.findViewById(EDIT_TEXT_BUTTON_ID);
             View addRegion = root.findViewById(ADD_REGION_BUTTON_ID);
+            View textPlacement = root.findViewById(TEXT_PLACEMENT_BUTTON_ID);
             if (!(content instanceof ViewGroup) || edit == null || delete == null) {
                 Log.w(TAG, "Cannot bind region editor: toolbar or content view is missing");
                 return;
@@ -96,6 +99,11 @@ public final class TranslationRegionEditor {
                 addRegion.setVisibility(View.GONE);
             }
             state.addRegionButton = addRegion;
+            state.textPlacementButton = textPlacement;
+            if (textPlacement != null) {
+                textPlacement.setOnClickListener(v -> toggleTextPlacementMode(state));
+                textPlacement.setVisibility(View.GONE);
+            }
             state.deleteButton.setVisibility(View.GONE);
             state.editButton.setAlpha(0.55f);
             STATES.put(root, state);
@@ -127,6 +135,7 @@ public final class TranslationRegionEditor {
         state.selected.clear();
         state.transformTarget = null;
         state.transformMode = false;
+        state.textTransformMode = false;
         state.editing = true;
         state.overlay.setVisibility(View.VISIBLE);
         if (state.addRegionButton != null) state.addRegionButton.setVisibility(View.VISIBLE);
@@ -141,12 +150,14 @@ public final class TranslationRegionEditor {
     private static void exitEditing(State state) {
         state.editing = false;
         state.transformMode = false;
+        state.textTransformMode = false;
         state.transformTarget = null;
         state.selected.clear();
         state.overlay.setVisibility(View.GONE);
         state.deleteButton.setVisibility(View.GONE);
         if (state.editTextButton != null) state.editTextButton.setVisibility(View.GONE);
         if (state.addRegionButton != null) state.addRegionButton.setVisibility(View.GONE);
+        if (state.textPlacementButton != null) state.textPlacementButton.setVisibility(View.GONE);
         state.editButton.setAlpha(0.55f);
         state.overlay.invalidate();
         Log.i(TAG, "Edit mode exited");
@@ -160,6 +171,7 @@ public final class TranslationRegionEditor {
         state.selected.put(item, Boolean.TRUE);
         state.transformTarget = item;
         state.transformMode = true;
+        state.textTransformMode = false;
         // Remember a safe minimum for the lifetime of this overlay. For narrow
         // source regions the normal minimum (36x28 dp) would be larger than the
         // original, making it impossible to shrink an expanded region back.
@@ -301,11 +313,70 @@ public final class TranslationRegionEditor {
         state.deleteButton.setContentDescription(
                 count > 0 ? "Удалить выбранные области: " + count : "Удалить выбранные области");
 
+        boolean oneRegion = state.editing && count == 1;
+        boolean bubbleRegion = oneRegion
+                && hasBubbleMask(state.selected.keySet().iterator().next());
         if (state.editTextButton != null) {
-            boolean oneRegion = state.editing && count == 1;
             state.editTextButton.setVisibility(oneRegion ? View.VISIBLE : View.GONE);
             state.editTextButton.setEnabled(oneRegion);
             state.editTextButton.setContentDescription("Редактировать текст перевода");
+        }
+        if (state.textPlacementButton != null) {
+            state.textPlacementButton.setVisibility(bubbleRegion ? View.VISIBLE : View.GONE);
+            state.textPlacementButton.setEnabled(bubbleRegion);
+            state.textPlacementButton.setAlpha(state.textTransformMode ? 1.0f : 0.55f);
+        }
+    }
+
+    private static boolean hasBubbleMask(Object item) {
+        try {
+            return Boolean.TRUE.equals(Class.forName(BRIDGE)
+                    .getMethod("hasBubbleMask", Object.class).invoke(null, item));
+        } catch (Throwable error) {
+            return false;
+        }
+    }
+
+    private static void toggleTextPlacementMode(State state) {
+        if (!state.editing || state.selected.size() != 1) {
+            toast(state.root, "Выберите одну область");
+            return;
+        }
+        if (state.textTransformMode) {
+            state.textTransformMode = false;
+            state.transformTarget = null;
+            state.overlay.clearDrag();
+            updateSelectionButtons(state);
+            state.overlay.invalidate();
+            toast(state.root, "Коррекция текста завершена");
+            return;
+        }
+        state.transformTarget = state.selected.keySet().iterator().next();
+        state.transformMode = false;
+        state.textTransformMode = true;
+        state.overlay.clearDrag();
+        updateSelectionButtons(state);
+        state.overlay.invalidate();
+        toast(state.root, "Перетаскивание — сдвиг текста; углы — размер шрифта");
+    }
+
+    private static float[] getTextTransform(Object item) {
+        try {
+            return (float[]) Class.forName(BRIDGE).getMethod("getBubbleTextTransform", Object.class)
+                    .invoke(null, item);
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not read BubblePop text transform", error);
+            return new float[] {0f, 0f, 1f};
+        }
+    }
+
+    private static void setTextTransform(Object item, float dx, float dy, float scale) {
+        try {
+            Class.forName(BRIDGE).getMethod("setBubbleTextTransform",
+                    Object.class, Float.TYPE, Float.TYPE, Float.TYPE)
+                    .invoke(null, item, dx, dy, scale);
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not update BubblePop text transform", error);
         }
     }
 
@@ -549,12 +620,14 @@ public final class TranslationRegionEditor {
         final View deleteButton;
         final View editTextButton;
         View addRegionButton;
+        View textPlacementButton;
         final IdentityHashMap<Object, Boolean> selected = new IdentityHashMap<>();
         final IdentityHashMap<Object, String> originalTexts = new IdentityHashMap<>();
         final IdentityHashMap<Object, int[]> minimumResizeSizes = new IdentityHashMap<>();
         SelectionOverlay overlay;
         boolean editing;
         boolean transformMode;
+        boolean textTransformMode;
         Object transformTarget;
 
         State(View root, ViewGroup content, View editButton, View deleteButton, View editTextButton) {
@@ -589,6 +662,7 @@ public final class TranslationRegionEditor {
         private DragMode dragMode = DragMode.NONE;
         private Rect dragStart;
         private int[] rawStart;
+        private float[] textTransformStart;
 
         // Whole-region movement is deliberately a two-finger gesture. This avoids
         // competing with the four single-finger corner resize targets on small panels.
@@ -640,7 +714,7 @@ public final class TranslationRegionEditor {
                 RectF bounds = new RectF(rect);
                 canvas.drawRoundRect(bounds, radius, radius, fill);
                 canvas.drawRoundRect(bounds, radius, radius, outline);
-                if (state.transformMode && item == state.transformTarget) {
+                if ((state.transformMode || state.textTransformMode) && item == state.transformTarget) {
                     drawHandles(canvas, rect);
                 }
             }
@@ -686,6 +760,18 @@ public final class TranslationRegionEditor {
                     twoFingerMove = false;
                     twoFingerConsumed = false;
                     twoFingerMoved = false;
+
+                    if (state.textTransformMode) {
+                        Rect activeBounds = readBounds(state.transformTarget);
+                        if (activeBounds != null) {
+                            dragStart = new Rect(activeBounds);
+                            dragMode = findDragMode(x, y, activeBounds);
+                            textTransformStart = getTextTransform(state.transformTarget);
+                            dragging = true;
+                            return true;
+                        }
+                        return true;
+                    }
 
                     if (state.transformMode) {
                         Rect activeBounds = readBounds(state.transformTarget);
@@ -736,7 +822,9 @@ public final class TranslationRegionEditor {
                     if (distanceSquared(x, y, downX, downY) > touchSlop * touchSlop) {
                         moved = true;
                     }
-                    if (state.transformMode && dragging && dragStart != null && rawStart != null && moved) {
+                    if (state.textTransformMode && dragging && dragStart != null && moved) {
+                        applyTextTransform(x, y);
+                    } else if (state.transformMode && dragging && dragStart != null && rawStart != null && moved) {
                         applyCornerResize(x, y);
                     }
                     return true;
@@ -758,7 +846,10 @@ public final class TranslationRegionEditor {
                         performClick();
                         return true;
                     }
-                    if (state.transformMode && exitDoubleTap && !moved) {
+                    if (state.textTransformMode && dragging) {
+                        if (moved) applyTextTransform(x, y);
+                        clearDrag();
+                    } else if (state.transformMode && exitDoubleTap && !moved) {
                         exitTransformMode(state);
                     } else if (state.transformMode && dragging) {
                         if (moved) {
@@ -883,6 +974,33 @@ public final class TranslationRegionEditor {
             return true;
         }
 
+        private void applyTextTransform(float x, float y) {
+            if (state.transformTarget == null || dragStart == null || textTransformStart == null) return;
+            float dx = x - downX;
+            float dy = y - downY;
+            float nextX = textTransformStart[0];
+            float nextY = textTransformStart[1];
+            float nextScale = textTransformStart[2];
+            if (dragMode == DragMode.NONE) {
+                nextX += dx;
+                nextY += dy;
+            } else {
+                float denominator = Math.max(1f, dragStart.width() + dragStart.height());
+                float outward;
+                switch (dragMode) {
+                    case NW: outward = -dx - dy; break;
+                    case NE: outward = dx - dy; break;
+                    case SE: outward = dx + dy; break;
+                    case SW: outward = -dx + dy; break;
+                    default: outward = 0f;
+                }
+                nextScale = Math.max(0.55f, Math.min(1.65f,
+                        nextScale * (1f + outward / denominator)));
+            }
+            setTextTransform(state.transformTarget, nextX, nextY, nextScale);
+            refreshRenderers(state);
+        }
+
         private void applyCornerResize(float x, float y) {
             if (state.transformTarget == null || dragStart == null || rawStart == null) return;
             int dx = Math.round(x - downX);
@@ -998,6 +1116,7 @@ public final class TranslationRegionEditor {
             dragMode = DragMode.NONE;
             dragStart = null;
             rawStart = null;
+            textTransformStart = null;
             exitDoubleTap = false;
         }
 
