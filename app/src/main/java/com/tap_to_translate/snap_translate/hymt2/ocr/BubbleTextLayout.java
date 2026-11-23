@@ -89,6 +89,29 @@ public final class BubbleTextLayout {
                     return true;
                 }
             }
+            if (!autoWrap) {
+                // Keep the text inside the mask if a one-line layout cannot fit
+                // even at the minimum font size. This is the safe last resort.
+                for (float size = upper; size >= lower - 0.01f; size -= 0.5f) {
+                    paint.setTextSize(size);
+                    List<Line> lines = layout(mask, maskWidth, maskHeight, maskBounds,
+                            area, source.toString(), paint, horizontalPadding, true);
+                    if (lines == null || lines.isEmpty()) continue;
+                    android.graphics.Paint.FontMetrics fm = paint.getFontMetrics();
+                    float usedTop = lines.get(0).baseline + fm.ascent;
+                    float usedBottom = lines.get(lines.size() - 1).baseline + fm.descent;
+                    float verticalShift = (area.top + area.bottom - usedTop - usedBottom) / 2f;
+                    android.graphics.Paint.Align oldAlign = paint.getTextAlign();
+                    paint.setTextAlign(android.graphics.Paint.Align.LEFT);
+                    for (Line line : lines) {
+                        canvas.drawText(line.text, line.x, line.baseline + verticalShift, paint);
+                    }
+                    paint.setTextAlign(oldAlign);
+                    Log.i(TAG, "shape_layout=wrap_fallback lines=" + lines.size()
+                            + " font=" + size);
+                    return true;
+                }
+            }
             Log.i(TAG, "shape_layout=not_fit text_length=" + source.length()
                     + " mask=" + maskWidth + "x" + maskHeight
                     + " overlay=" + overlayBounds.flattenToString());
