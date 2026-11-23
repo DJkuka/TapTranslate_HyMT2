@@ -131,17 +131,17 @@ public final class BubbleTextLayout {
         ArrayList<Line> result = new ArrayList<>();
 
         while (offset < text.length()) {
-            if (text.charAt(offset) == '\\n') {
+            if (text.charAt(offset) == '\n') {
                 offset++;
                 y += lineHeight;
                 continue;
             }
             while (offset < text.length() && Character.isWhitespace(text.charAt(offset))
-                    && text.charAt(offset) != '\\n') offset++;
+                    && text.charAt(offset) != '\n') offset++;
             if (offset >= text.length()) break;
             if (y + lineHeight > area.bottom) return null;
 
-            int paragraphEnd = text.indexOf('\\n', offset);
+            int paragraphEnd = text.indexOf('\n', offset);
             if (paragraphEnd < 0) paragraphEnd = text.length();
 
             // Build lines from complete words only. Never let breakText() split the
@@ -197,7 +197,7 @@ public final class BubbleTextLayout {
                 while (offset < paragraphEnd && Character.isWhitespace(text.charAt(offset))) offset++;
                 if (offset >= paragraphEnd) {
                     offset = paragraphEnd;
-                    if (offset < text.length() && text.charAt(offset) == '\\n') offset++;
+                    if (offset < text.length() && text.charAt(offset) == '\n') offset++;
                 }
                 y += lineHeight;
                 placed = true;
