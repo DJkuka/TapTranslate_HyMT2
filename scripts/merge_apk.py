@@ -399,14 +399,24 @@ def patch_ocr_engine_picker(base: Path) -> None:
 
     if PADDLE_OCR_NAME not in text or MLKIT_OCR_NAME not in text:
         raise RuntimeError("PP-OCRv6 / ML Kit entries were not added")
-    if "hymt2_ocr_selection_ready" not in text:
-        raise RuntimeError("Legacy Device Text Recognition was not migrated to PP-OCRv6")
+    # APK219 may already contain an updated selection getter with a direct
+    # Paddle branch, so the generated label is not a reliable migration test.
+    # Verify the actual getter instead: any remaining legacy default must have
+    # a Paddle mapping in the same method.
+    method = ".method public static c()Ljava/lang/String;"
+    getter_start = text.find(method)
+    getter_end = text.find(".end method", getter_start)
+    if getter_start < 0 or getter_end < 0:
+        raise RuntimeError("Could not verify OCR selection getter")
+    getter = text[getter_start:getter_end]
+    if "Device Text Recognition" in getter and PADDLE_OCR_NAME not in getter:
+        raise RuntimeError("Legacy Device Text Recognition still has no PP-OCRv6 mapping")
     path.write_text(text, encoding="utf-8")
     print("Added PP-OCRv6 and true ML Kit options; old Device default maps to PP-OCRv6")
 
 
 def patch_free_text_alpha_renderers(base: Path) -> None:
-    """Resolve a separate fill alpha for each overlay in both original renderers."""
+    """Patch free-text alpha and invoke BubblePop layout before rectangular fallback."""
     for rel, owner in (
         ("smali_classes3/rh/f.smali", "f"),
         ("smali_classes3/rh/g.smali", "g"),
@@ -420,13 +430,29 @@ def patch_free_text_alpha_renderers(base: Path) -> None:
         if start < 0 or end < 0:
             raise RuntimeError("Could not isolate onDraw in " + rel)
         method = text[start:end]
+
         if "resolveBackgroundAlpha" not in method:
-            if "    .locals 20\n" not in method:
-                raise RuntimeError("Unexpected renderer local-register count in " + rel)
-            method = method.replace("    .locals 20\n", "    .locals 23\n", 1)
+            locals_match = re.search(r"(?m)^    \.locals (\d+)$", method)
+            if not locals_match:
+                raise RuntimeError("Could not read renderer local-register count in " + rel)
+            local_count = int(locals_match.group(1))
+            if local_count < 23:
+                method = method[:locals_match.start(1)] + "23" + method[locals_match.end(1):]
             anchor = f"""    iget-object v1, v0, Lrh/{owner};->e:Landroid/graphics/Paint;
 
     iget v2, v0, Lrh/{owner};->d:I
+
+    invoke-virtual {{v0}}, Landroid/view/View;->getContext()Landroid/content/Context;
+
+    move-result-object v20
+
+    move-object/from16 v21, v11
+
+    move/from16 v22, v2
+
+    invoke-static/range {{v20 .. v22}}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->resolveBackgroundAlpha(Landroid/content/Context;Ljava/lang/Object;I)I
+
+    move-result v2
 
     invoke-virtual {{v1, v2}}, Landroid/graphics/Paint;->setAlpha(I)V"""
             replacement = f"""    iget-object v1, v0, Lrh/{owner};->e:Landroid/graphics/Paint;
@@ -446,12 +472,64 @@ def patch_free_text_alpha_renderers(base: Path) -> None:
     move-result v2
 
     invoke-virtual {{v1, v2}}, Landroid/graphics/Paint;->setAlpha(I)V"""
-            if method.count(anchor) != 1:
+            if method.count(anchor) == 1:
+                method = method.replace(anchor, replacement, 1)
+            elif "resolveBackgroundAlpha" not in method:
                 raise RuntimeError("Could not uniquely find fill alpha operation in " + rel)
-            method = method.replace(anchor, replacement, 1)
-            text = text[:start] + method + text[end:]
-            path.write_text(text, encoding="utf-8")
-    print("Added separate free-text fill alpha to both host renderers")
+
+        if "drawBubbleText" not in method:
+            locals_match = re.search(r"(?m)^    \.locals (\d+)$", method)
+            if not locals_match:
+                raise RuntimeError("Could not read renderer local-register count for BubblePop in " + rel)
+            local_count = int(locals_match.group(1))
+            if local_count < 30:
+                method = method[:locals_match.start(1)] + "30" + method[locals_match.end(1):]
+            min_register, max_register = ("v3", "v4") if owner == "f" else ("v2", "v3")
+            marker = f"    iget {max_register}, v0, Lrh/{owner};->m:F"
+            if method.count(marker) != 1:
+                raise RuntimeError("Could not locate unique max-font register in " + rel)
+            shape_hook = "    move-object/from16 v23, v1\n    move-object/from16 v24, v11\n    move-object/from16 v25, v13\n    iget-object v7, v0, Lrh/OWNER;->g:Landroid/text/TextPaint;\n    move-object/from16 v26, v7\n    move/from16 v27, MIN_REGISTER\n    move/from16 v28, MAX_REGISTER\n    const/16 v29, 0x4\n    invoke-static/range {v23 .. v29}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->drawBubbleText(Landroid/graphics/Canvas;Ljava/lang/Object;Ljava/lang/CharSequence;Landroid/text/TextPaint;FFI)Z\n    move-result v23\n    if-nez v23, :goto_0\n"
+            shape_hook = shape_hook.replace("OWNER", owner)
+            shape_hook = shape_hook.replace("MIN_REGISTER", min_register)
+            shape_hook = shape_hook.replace("MAX_REGISTER", max_register)
+            method = method.replace(marker, marker + "\n" + shape_hook, 1)
+
+        if "drawBubbleBackground" not in method:
+            draw_call = "    invoke-virtual/range {v1 .. v8}, Landroid/graphics/Canvas;->drawRoundRect(FFFFFFLandroid/graphics/Paint;)V"
+            if method.count(draw_call) != 2:
+                raise RuntimeError("Expected two rounded-rectangle draw sites in " + rel)
+            positions = []
+            cursor = 0
+            while True:
+                position = method.find(draw_call, cursor)
+                if position < 0:
+                    break
+                positions.append(position)
+                cursor = position + len(draw_call)
+            if len(positions) != 2:
+                raise RuntimeError("Could not isolate both rounded-rectangle draw calls in " + rel)
+            for index, position in reversed(list(enumerate(positions))):
+                fallback = f":hymt_bubble_bg_fallback_{owner}_{index}"
+                done = f":hymt_bubble_bg_done_{owner}_{index}"
+                hook = (
+                    "    move-object/from16 v20, v1\n"
+                    "    move-object/from16 v21, v11\n"
+                    "    move/from16 v22, v6\n"
+                    "    move-object/from16 v23, v8\n"
+                    "    invoke-static/range {v20 .. v23}, Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;->drawBubbleBackground(Landroid/graphics/Canvas;Ljava/lang/Object;FLandroid/graphics/Paint;)Z\n"
+                    "    move-result v20\n"
+                    f"    if-eqz v20, {fallback}\n"
+                    f"    goto {done}\n"
+                    f"    {fallback}\n"
+                    + draw_call + "\n"
+                    f"    {done}"
+                )
+                method = method[:position] + hook + method[position + len(draw_call):]
+
+        text = text[:start] + method + text[end:]
+        path.write_text(text, encoding="utf-8")
+    print("Added free-text alpha and BubblePop-shaped text layout to both host renderers")
+
 
 
 def patch_ocr_settings_click(base: Path) -> None:
@@ -1012,10 +1090,23 @@ def patch_translation_region_editor(base: Path) -> None:
         xml = xml[:end + 2] + button + xml[end + 2:]
         layout.write_text(xml, encoding="utf-8")
 
+    if 'android:id="@id/container_widget_iv_text_placement"' not in xml:
+        marker = 'android:id="@id/container_widget_iv_add_region"'
+        pos = xml.find(marker)
+        end = xml.find("/>", pos)
+        if pos < 0 or end < 0:
+            raise RuntimeError("Could not isolate add-region toolbar button")
+        button = """
+            <ImageView android:id="@id/container_widget_iv_text_placement" android:contentDescription="Переместить текст перевода" android:background="@drawable/bg_circle_black" android:padding="6.0dip" android:layout_width="32.0dip" android:layout_height="32.0dip" android:layout_marginRight="10.0dip" android:src="@drawable/ic_move_text_region" android:visibility="gone" />
+"""
+        xml = xml[:end + 2] + button + xml[end + 2:]
+        layout.write_text(xml, encoding="utf-8")
+
     ids = base / "res/values/ids.xml"
     ids_text = ids.read_text(encoding="utf-8")
     for name in ("container_widget_iv_edit_regions", "container_widget_iv_delete_regions",
-                 "container_widget_iv_edit_text_regions", "container_widget_iv_add_region"):
+                 "container_widget_iv_edit_text_regions", "container_widget_iv_add_region",
+                 "container_widget_iv_text_placement"):
         if name not in ids_text:
             ids_text = ids_text.replace("</resources>",
                 f'    <item type="id" name="{name}" />\n</resources>', 1)
@@ -1028,6 +1119,7 @@ def patch_translation_region_editor(base: Path) -> None:
         ("container_widget_iv_delete_regions", "0x7f0a04f6"),
         ("container_widget_iv_edit_text_regions", "0x7f0a04f7"),
         ("container_widget_iv_add_region", "0x7f0a04f8"),
+        ("container_widget_iv_text_placement", "0x7f0a04f9"),
     )
     for name, value in allocations:
         if name not in pub_text:
@@ -1086,6 +1178,13 @@ def patch_translation_region_editor(base: Path) -> None:
 
     if "TranslationRegionEditor;->bind" not in service.read_text(encoding="utf-8"):
         raise RuntimeError("Region editor was not bound to the translation toolbar")
+    icon = base / "res/drawable/ic_move_text_region.xml"
+    icon.write_text('''<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M3,12 L7,8 L7,11 L17,11 L17,8 L21,12 L17,16 L17,13 L7,13 L7,16 Z M10,3 L14,3 L14,7 L10,7 Z M10,17 L14,17 L14,21 L10,21 Z" />
+</vector>
+''', encoding="utf-8")
+
     print("Added region selection, move/resize handles, text editing and multi-delete controls")
 
 
@@ -1406,18 +1505,40 @@ def patch_remove_nurik_attribution(base: Path) -> None:
     else:
         print("NURIK attribution row already absent")
 
-    # mh/p still installs a click listener on the removed policy row. Keep the
-    # original behavior when present, but skip it safely when the row is absent.
+    # mh/p may already contain a null guard in the release APK. APK219 uses
+    # Apktool's generated :cond_N label rather than our historical custom label.
     fragment = base / "smali_classes3/mh/p.smali"
     smali = fragment.read_text(encoding="utf-8")
-    target = """    const p2, 0x7f0a01c6
+    lookup_guard = re.search(
+        r"(?m)^    const p2, 0x7f0a01c6\n\n"
+        r"    invoke-virtual \{p1, p2\}, Landroid/view/View;->findViewById\(I\)Landroid/view/View;\n\n"
+        r"    move-result-object p2\n\n"
+        r"    if-eqz p2, (?P<label>:[A-Za-z0-9_.$-]+)$",
+        smali,
+    )
+    if lookup_guard:
+        label = lookup_guard.group("label")
+        label_text = f"    {label}\n"
+        method_start = smali.rfind(".method ", 0, lookup_guard.start())
+        method_end = smali.find(".end method", lookup_guard.end())
+        click_call = "    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V"
+        click_pos = smali.find(click_call, lookup_guard.end(), method_end)
+        label_pos = smali.find(label_text, click_pos + len(click_call), method_end) if click_pos >= 0 else -1
+        method_text = smali[method_start:method_end] if method_start >= 0 and method_end >= 0 else ""
+        if method_text.count(label_text) != 1 or click_pos < 0 or label_pos < 0:
+            raise RuntimeError("APK219 NURIK null guard is incomplete or malformed")
+        print(f"APK219 already guards the optional NURIK click target with {label}")
+    else:
+        # Keep the original behavior when present, but skip it safely when the
+        # policy row is absent. Add a stable label only to unguarded host code.
+        target = """    const p2, 0x7f0a01c6
 
     invoke-virtual {p1, p2}, Landroid/view/View;->findViewById(I)Landroid/view/View;
 
     move-result-object p2
 
     new-instance v0, Lmh/m;"""
-    guarded = """    const p2, 0x7f0a01c6
+        guarded = """    const p2, 0x7f0a01c6
 
     invoke-virtual {p1, p2}, Landroid/view/View;->findViewById(I)Landroid/view/View;
 
@@ -1426,23 +1547,23 @@ def patch_remove_nurik_attribution(base: Path) -> None:
     if-eqz p2, :hymt_nurik_click_done
 
     new-instance v0, Lmh/m;"""
-    if ":hymt_nurik_click_done" not in smali:
-        if smali.count(target) != 1:
-            raise RuntimeError("Could not isolate the NURIK policy-row click handler")
-        smali = smali.replace(target, guarded, 1)
-        click_call = """    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+        if ":hymt_nurik_click_done" not in smali:
+            if smali.count(target) != 1:
+                raise RuntimeError("Could not isolate the NURIK policy-row click handler")
+            smali = smali.replace(target, guarded, 1)
+            click_call = """    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
 
     invoke-virtual {p1, v1}, Landroid/view/View;->findViewById(I)Landroid/view/View;"""
-        click_guarded = """    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+            click_guarded = """    invoke-virtual {p2, v0}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
 
     :hymt_nurik_click_done
 
     invoke-virtual {p1, v1}, Landroid/view/View;->findViewById(I)Landroid/view/View;"""
-        if smali.count(click_call) != 1:
-            raise RuntimeError("Could not place the NURIK click-handler null guard")
-        smali = smali.replace(click_call, click_guarded, 1)
-        fragment.write_text(smali, encoding="utf-8")
-    print("Guarded optional NURIK settings click target")
+            if smali.count(click_call) != 1:
+                raise RuntimeError("Could not place the NURIK click-handler null guard")
+            smali = smali.replace(click_call, click_guarded, 1)
+            fragment.write_text(smali, encoding="utf-8")
+        print("Guarded optional NURIK settings click target")
 
 def patch_home_ocr_quick_selector(base: Path) -> None:
     """Add a Home shortcut that shares the native HAWK_OCR preference."""
@@ -1559,7 +1680,15 @@ def patch_fixed_font_size_renderers(base: Path) -> None:
     :hymt_fixed_font_done_f
     move-object/from16 v9, v19
     :goto_2"""
-    if "hymt_fixed_font_done_f" not in f_text:
+    # APK219's baksmali output has already regenerated branch labels (for
+    # example :cond_9 instead of our temporary :hymt_fixed_font_done_f).
+    # Detect the real behavior, not a transient label: the renderer must read
+    # HAWK_FIXED_FONT_SIZE and apply the verified 0.85 multiplier.
+    f_has_setting = 'const-string v6, "HAWK_FIXED_FONT_SIZE"' in f_text
+    f_has_floor = "0x3f59999a" in f_text
+    if f_has_setting and not f_has_floor:
+        raise RuntimeError("rh/f contains HAWK_FIXED_FONT_SIZE but no verified 85% floor")
+    if not f_has_setting:
         if f_text.count(f_anchor) != 1:
             raise RuntimeError("Cannot identify rh/f fixed-font binary-search prelude")
         f_text = f_text.replace(f_anchor, f_code, 1)
@@ -1609,12 +1738,21 @@ def patch_fixed_font_size_renderers(base: Path) -> None:
     :hymt_fixed_font_done_g
     move-object/from16 v9, v19
     const/4 v4, 0x1"""
-    if "hymt_fixed_font_done_g" not in g_text:
+    # As above, recognize the already-patched APK219 renderer after label
+    # canonicalization by baksmali.
+    g_has_setting = 'const-string v6, "HAWK_FIXED_FONT_SIZE"' in g_text
+    g_has_floor = "0x3f59999a" in g_text
+    if g_has_setting and not g_has_floor:
+        raise RuntimeError("rh/g contains HAWK_FIXED_FONT_SIZE but no verified 85% floor")
+    if not g_has_setting:
         if g_text.count(g_anchor) != 1:
             raise RuntimeError("Cannot identify rh/g fixed-font binary-search prelude")
         g_text = g_text.replace(g_anchor, g_code, 1)
         g_path.write_text(g_text, encoding="utf-8")
-    print("Added fixed-size floor with adaptive overflow fallback to both renderers")
+    if f_has_setting and g_has_setting:
+        print("APK219 already contains the verified 85% fixed-font floor in both renderers")
+    else:
+        print("Added fixed-size floor with adaptive overflow fallback where missing")
 
 
 def patch_max_font_size(base: Path) -> None:
@@ -1847,8 +1985,8 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
             for source in root.rglob("*.smali"):
                 rel = source.relative_to(helper).as_posix()
                 # APK219 already contains a working Hy-MT2 runtime. Only port
-                # the explicitly reviewed BubblePop/OCR UI classes; never replace
-                # HyMT2Runtime, its settings, JNI bridge, launcher or llama API.
+                # explicitly reviewed BubblePop/OCR UI classes; never replace
+                # HyMT2Runtime, settings, JNI bridge, launcher or llama API.
                 allowed_classes = (
                     "com/tap_to_translate/snap_translate/hymt2/OcrSettingsActivity",
                     "com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor",
@@ -1887,9 +2025,16 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
                     # Do not silently introduce duplicate app/runtime classes across DEX files.
                     other = [d for d in base.glob("smali*") if d.is_dir() and d != target_root and (d / rel).is_file()]
                     if other:
-                        if (other[0] / rel).read_bytes() == source.read_bytes():
+                        existing_class = other[0] / rel
+                        if existing_class.read_bytes() == source.read_bytes():
                             continue
-                        raise RuntimeError(f"Cannot safely replace {rel}: existing definition is outside classes5.dex")
+                        # Every remaining path is within one of the explicit
+                        # helper-owned package prefixes passed to copy_package().
+                        # Refresh the existing definition in its current multidex
+                        # shard; never add a second copy to classes5.dex.
+                        shutil.copy2(source, existing_class)
+                        replaced += 1
+                        continue
                     continue
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
@@ -1926,8 +2071,8 @@ def copy_helper_payload(helper: Path, base: Path) -> None:
     so_files = list(helper_lib.glob("*.so"))
     if not so_files:
         raise RuntimeError("The llama-android AAR did not package any native .so files")
-    # Copy OCR-only native dependencies. The APK219 Hy-MT2/Llama libraries
-    # are immutable and must remain byte-for-byte identical to the release.
+    # Copy OCR-only native dependencies. APK219 Hy-MT2/Llama libraries
+    # are immutable and remain byte-for-byte identical to the release.
     allowed_native = {
         "libonnxruntime.so", "libonnxruntime4j_jni.so",
         "libopencv_java4.so", "libc++_shared.so",
@@ -1939,8 +2084,6 @@ def copy_helper_payload(helper: Path, base: Path) -> None:
         if destination.exists():
             if destination.read_bytes() != source.read_bytes():
                 if source.name == "libc++_shared.so":
-                    # Keep the host C++ runtime; never replace a library already
-                    # shipped in APK219.
                     continue
                 raise RuntimeError(f"OCR native library collision with APK219: {source.name}")
             continue
