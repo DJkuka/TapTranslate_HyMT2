@@ -283,6 +283,37 @@ public final class BubbleTextLayout {
         }
     }
 
+    /**
+     * Draws a free-text rounded background after subtracting the BubblePop
+     * speech-balloon mask. The DST_OUT pass removes only pixels inside bubble
+     * contours, leaving the rest of the free-text rectangle unchanged.
+     */
+    public static boolean drawExclusionClippedBackground(Canvas canvas, DetectedRegion region,
+            float left, float top, float right, float bottom,
+            float radiusX, float radiusY, Paint fillPaint) {
+        if (canvas == null || region == null || fillPaint == null
+                || right <= left || bottom <= top) return false;
+        Bitmap maskBitmap = getMaskBitmap(region);
+        if (maskBitmap == null || maskBitmap.isRecycled()) return false;
+
+        Rect maskBounds = region.getBounds();
+        RectF fill = new RectF(left, top, right, bottom);
+        RectF overlap = new RectF(fill);
+        if (!overlap.intersect(new RectF(maskBounds))) return false;
+
+        Paint erasePaint = new Paint(Paint.FILTER_BITMAP_FLAG);
+        erasePaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.DST_OUT));
+        int save = canvas.saveLayer(fill, null);
+        try {
+            canvas.drawRoundRect(fill, radiusX, radiusY, fillPaint);
+            canvas.drawBitmap(maskBitmap, maskBounds.left, maskBounds.top, erasePaint);
+            return true;
+        } finally {
+            canvas.restoreToCount(save);
+            erasePaint.setXfermode(null);
+        }
+    }
+
     private static Bitmap getMaskBitmap(DetectedRegion region) {
         synchronized (MASK_BITMAPS) {
             Bitmap cached = MASK_BITMAPS.get(region);
