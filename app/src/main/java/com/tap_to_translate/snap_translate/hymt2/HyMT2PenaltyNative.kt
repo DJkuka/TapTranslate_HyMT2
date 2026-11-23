@@ -4,6 +4,7 @@ import dev.ffmpegkit.llama.LlamaConfig
 import dev.ffmpegkit.llama.LlamaException
 import dev.ffmpegkit.llama.LlamaModel
 import dev.ffmpegkit.llama.LlamaResult
+import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
 
 /**
@@ -40,6 +41,17 @@ object HyMT2PenaltyNative {
         seed: Int,
     ): String
 
+    private external fun nativeResetCancellation(handle: Long)
+    private external fun nativeCancel(handle: Long)
+
+    fun resetCancellation(model: LlamaModel) {
+        nativeResetCancellation(handle(model))
+    }
+
+    fun cancel(model: LlamaModel) {
+        nativeCancel(handle(model))
+    }
+
     fun countPromptTokens(model: LlamaModel, prompt: String, systemPrompt: String = ""): Int {
         val count = nativeCountPromptTokens(handle(model), prompt, systemPrompt)
         check(count > 0) { "Не удалось определить число токенов входного запроса" }
@@ -62,6 +74,9 @@ object HyMT2PenaltyNative {
                 repetitionPenalty, config.seed,
             )
         )
+        if (json.optBoolean("cancelled", false)) {
+            throw CancellationException("Hy-MT2 native generation cancelled")
+        }
         if (json.has("error")) {
             throw LlamaException.InferenceFailed(
                 json.optString("error", "Hy-MT2 native inference failed")

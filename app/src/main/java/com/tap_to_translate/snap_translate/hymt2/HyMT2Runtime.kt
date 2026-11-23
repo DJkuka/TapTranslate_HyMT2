@@ -14,7 +14,10 @@ import android.widget.Toast
 import dev.ffmpegkit.llama.Llama
 import dev.ffmpegkit.llama.LlamaConfig
 import dev.ffmpegkit.llama.LlamaModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -52,6 +55,14 @@ object HyMT2Runtime {
         val createdAt: Long,
     )
     private val recentHistory = WeakHashMap<Any, ArrayDeque<HistoryEntry>>()
+
+    private class ActiveTranslationRequest {
+        val cancelled = AtomicBoolean(false)
+        @Volatile var job: Job? = null
+    }
+
+    private val activeTranslationLock = Any()
+    @Volatile private var activeTranslation: ActiveTranslationRequest? = null
 
     @Volatile private var loadedModel: LlamaModel? = null
     @Volatile private var loadedSource: String? = null
@@ -149,6 +160,31 @@ object HyMT2Runtime {
     @JvmStatic
     fun isLoaded(): Boolean = loadedModel != null
 
+    /** Called by the floating-icon double-tap handler; a tap without an active
+     * Hy-MT2 request is intentionally a no-op. */
+    @JvmStatic
+    fun cancelActiveTranslation() {
+        val request = activeTranslation ?: return
+        val job = request.job
+        if (job == null || job.isCompleted || request.cancelled.get()) return
+        requestCancellation(request)
+    }
+
+    private fun requestCancellation(request: ActiveTranslationRequest) {
+        if (!request.cancelled.compareAndSet(false, true)) return
+        // The native sampler checks this flag between generation/decode steps.
+        // Coroutine cancellation alone cannot interrupt a synchronous JNI call.
+        loadedModel?.let { model ->
+            try {
+                HyMT2PenaltyNative.cancel(model)
+            } catch (t: Throwable) {
+                Log.w(TAG, "Could not signal native Hy-MT2 cancellation", t)
+            }
+        }
+        request.job?.cancel(CancellationException("Hy-MT2 translation cancelled by user"))
+        Log.i(TAG, "Active Hy-MT2 translation cancellation requested")
+    }
+
     @JvmStatic
     fun preload(context: Context, callback: (String) -> Unit) {
         val app = context.applicationContext
@@ -217,10 +253,19 @@ object HyMT2Runtime {
         }
 
         try {
-            scope.launch {
+            val request = ActiveTranslationRequest()
+            val job = scope.launch(start = CoroutineStart.LAZY) {
                 try {
                     val result = inferenceMutex.withLock {
                         val model = ensureLoaded(appContext)
+                        if (request.cancelled.get()) {
+                            throw CancellationException("Hy-MT2 translation cancelled by user")
+                        }
+                        HyMT2PenaltyNative.resetCancellation(model)
+                        if (request.cancelled.get()) {
+                            HyMT2PenaltyNative.cancel(model)
+                            throw CancellationException("Hy-MT2 translation cancelled by user")
+                        }
                         val options = HyMT2Settings.load(appContext)
                         val modelKind = selectedModelKind(appContext)
                         val isStqModel = modelKind == MODEL_KIND_STQ1
@@ -248,6 +293,9 @@ object HyMT2Runtime {
                         var generatedTimeMs = 0L
 
                         sourceBlocks.forEachIndexed { index, sourceBlock ->
+                            if (request.cancelled.get()) {
+                                throw CancellationException("Hy-MT2 translation cancelled by user")
+                            }
                             if (sourceBlock.isBlank()) {
                                 translatedBlocks += ""
                             } else {
@@ -272,6 +320,9 @@ object HyMT2Runtime {
                                         "temperature=${options.temperature} " +
                                         "topP=${options.topP} topK=${options.topK} repetitionPenalty=$appliedRepetitionPenalty modelKind=$modelKind"
                                 )
+                                if (request.cancelled.get()) {
+                                    throw CancellationException("Hy-MT2 translation cancelled by user")
+                                }
                                 val generationStartedAt = SystemClock.elapsedRealtime()
                                 val completion = try {
                                     HyMT2PenaltyNative.complete(
@@ -340,15 +391,38 @@ object HyMT2Runtime {
                         translated
                     }
 
-                    mainHandler.post { deliverResult(host, result, sourceText) }
-                } catch (t: Throwable) {
-                    Log.e(TAG, "Hy-MT2 translation failed; falling back to ML Kit", t)
+                    if (request.cancelled.get()) {
+                        throw CancellationException("Hy-MT2 translation cancelled by user")
+                    }
                     mainHandler.post {
-                        showFallbackNotice(appContext, "Ошибка Hy-MT2. Для этого фрагмента используется Google Offline Translate.")
-                        fallbackToGoogleOffline(host, sourceText)
+                        if (!request.cancelled.get()) deliverResult(host, result, sourceText)
+                    }
+                } catch (cancelled: CancellationException) {
+                    Log.i(TAG, "Hy-MT2 translation cancelled; partial result discarded")
+                } catch (t: Throwable) {
+                    if (!request.cancelled.get()) {
+                        Log.e(TAG, "Hy-MT2 translation failed; falling back to ML Kit", t)
+                        mainHandler.post {
+                            if (!request.cancelled.get()) {
+                                showFallbackNotice(appContext, "Ошибка Hy-MT2. Для этого фрагмента используется Google Offline Translate.")
+                                fallbackToGoogleOffline(host, sourceText)
+                            }
+                        }
+                    }
+                } finally {
+                    synchronized(activeTranslationLock) {
+                        if (activeTranslation === request) activeTranslation = null
                     }
                 }
             }
+            request.job = job
+            val previous = synchronized(activeTranslationLock) {
+                val old = activeTranslation
+                activeTranslation = request
+                old
+            }
+            previous?.let { requestCancellation(it) }
+            job.start()
         } catch (t: Throwable) {
             // A broken/missing coroutine dependency must never crash the host translation service.
             Log.e(TAG, "Unable to schedule Hy-MT2 translation; falling back to ML Kit", t)

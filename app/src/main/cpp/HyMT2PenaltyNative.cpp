@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -21,6 +22,8 @@ struct LlamaCtx {
 };
 
 namespace {
+std::atomic<bool> g_cancel_requested{false};
+
 std::string from_jstring(JNIEnv *env, jstring value) {
     if (!value) return {};
     const char *chars = env->GetStringUTFChars(value, nullptr);
@@ -153,6 +156,22 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCount
     return static_cast<jint>(tokens.size());
 }
 
+JNIEXPORT void JNICALL
+Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeResetCancellation(
+        JNIEnv *, jobject, jlong handle) {
+    if (get_context(handle)) {
+        g_cancel_requested.store(false, std::memory_order_release);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCancel(
+        JNIEnv *, jobject, jlong handle) {
+    if (get_context(handle)) {
+        g_cancel_requested.store(true, std::memory_order_release);
+    }
+}
+
 JNIEXPORT jstring JNICALL
 Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeComplete(
         JNIEnv *env, jobject, jlong handle, jstring prompt, jstring system,
@@ -161,6 +180,9 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
     LlamaCtx *context = get_context(handle);
     if (!context) return env->NewStringUTF("{\"text\":\"\",\"error\":\"model handle is invalid\"}");
     if (max_tokens <= 0) return env->NewStringUTF("{\"text\":\"\",\"error\":\"max_tokens must be positive\"}");
+    if (g_cancel_requested.load(std::memory_order_acquire)) {
+        return env->NewStringUTF("{\"text\":\"\",\"cancelled\":true}");
+    }
 
     const llama_vocab *vocab = llama_model_get_vocab(context->model);
     const llama_token bos_token = llama_vocab_bos(vocab);
@@ -203,19 +225,33 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
     }
     LOGI("PROMPT_DECODE_DONE elapsed_ms=%lld",
          static_cast<long long>((prompt_end_us - prompt_decode_start_us) / 1000));
+    if (g_cancel_requested.load(std::memory_order_acquire)) {
+        llama_sampler_free(sampler);
+        LOGW("GENERATION_CANCELLED during prompt evaluation");
+        return env->NewStringUTF("{\"text\":\"\",\"cancelled\":true}");
+    }
 
     std::string output;
     int generated = 0;
+    bool cancelled = false;
     int skipped_bos = 0;
     int consecutive_bos = 0;
     bool stopped_on_eog = false;
     bool stopped_on_bos = false;
     for (; generated < max_tokens; ++generated) {
+        if (g_cancel_requested.load(std::memory_order_acquire)) {
+            cancelled = true;
+            break;
+        }
         const bool trace_token = generated < 4 || ((generated + 1) % 8 == 0);
         const int64_t sample_start_us = llama_time_us();
         if (trace_token) LOGI("SAMPLE_START index=%d", generated + 1);
         const llama_token token = llama_sampler_sample(sampler, context->ctx, -1);
         const int64_t sample_end_us = llama_time_us();
+        if (g_cancel_requested.load(std::memory_order_acquire)) {
+            cancelled = true;
+            break;
+        }
         if (trace_token) {
             LOGI("SAMPLE_DONE index=%d token=%d elapsed_ms=%lld",
                  generated + 1, token,
@@ -248,6 +284,10 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
         llama_sampler_accept(sampler, token);
         const std::string piece = token == bos_token ? std::string() : token_piece(vocab, token);
         output += piece;
+        if (g_cancel_requested.load(std::memory_order_acquire)) {
+            cancelled = true;
+            break;
+        }
 
         llama_batch next = llama_batch_get_one(
             const_cast<llama_token *>(&token), 1);
@@ -268,7 +308,14 @@ Java_com_tap_1to_1translate_snap_1translate_hymt2_HyMT2PenaltyNative_nativeCompl
         }
     }
     const int64_t end_us = llama_time_us();
+    if (g_cancel_requested.load(std::memory_order_acquire)) cancelled = true;
     llama_sampler_free(sampler);
+    if (cancelled) {
+        LOGW("GENERATION_CANCELLED generated=%d max_tokens=%d elapsed_ms=%lld",
+             generated, max_tokens,
+             static_cast<long long>((end_us - prompt_end_us) / 1000));
+        return env->NewStringUTF("{\"text\":\"\",\"cancelled\":true}");
+    }
     LOGI("GENERATION_DONE generated=%d max_tokens=%d eog=%d bos_skipped=%d bos_streak_abort=%d output_bytes=%zu prompt_ms=%lld generation_ms=%lld",
          generated, max_tokens, stopped_on_eog ? 1 : 0, skipped_bos, stopped_on_bos ? 1 : 0, output.size(),
          static_cast<long long>((prompt_end_us - start_us) / 1000),

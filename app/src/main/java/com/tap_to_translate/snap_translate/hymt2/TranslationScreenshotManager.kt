@@ -12,6 +12,7 @@ import android.provider.DocumentsContract
 import android.util.Log
 import android.view.View
 import android.widget.Toast
+import com.tap_to_translate.snap_translate.hymt2.ocr.RtDetrLiveBridge
 import java.io.IOException
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -153,12 +154,26 @@ object TranslationScreenshotManager {
                 bitmapPaint
             )
 
-            val position = IntArray(2)
-            textLayer.getLocationOnScreen(position)
-            canvas.save()
-            canvas.translate(position[0].toFloat(), position[1].toFloat())
-            textLayer.draw(canvas)
-            canvas.restore()
+            // Render the transparent translation layer separately. BubblePop masks
+            // are applied to this layer only, never to the original comic frame.
+            val overlay = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            try {
+                val overlayCanvas = Canvas(overlay)
+                val position = IntArray(2)
+                textLayer.getLocationOnScreen(position)
+                overlayCanvas.save()
+                overlayCanvas.translate(position[0].toFloat(), position[1].toFloat())
+                textLayer.draw(overlayCanvas)
+                overlayCanvas.restore()
+
+                // An off-screen View draw can take a different Canvas path from the
+                // live window. Re-apply the exact masks to the transparent overlay.
+                val clipped = RtDetrLiveBridge.clipBubbleOverlay(overlay, 0, 0)
+                Log.i(TAG, "Screenshot translation layer rendered; BubblePop masks applied=$clipped")
+                canvas.drawBitmap(overlay, 0f, 0f, bitmapPaint)
+            } finally {
+                if (!overlay.isRecycled) overlay.recycle()
+            }
 
             return output
         } finally {

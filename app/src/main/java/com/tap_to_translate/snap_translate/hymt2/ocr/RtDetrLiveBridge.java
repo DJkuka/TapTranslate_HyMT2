@@ -10,6 +10,8 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Constructor;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
@@ -800,6 +802,62 @@ public final class RtDetrLiveBridge {
 
     public static boolean hasBubbleMask(Object overlay) {
         return overlay != null && OVERLAY_BUBBLE_MASKS.containsKey(overlay);
+    }
+
+    /**
+     * Clips the independently rendered transparent translation layer to the
+     * same BubblePop masks used by the live renderer. originX/originY describe
+     * the screen coordinate represented by pixel (0,0) in overlayBitmap.
+     * The source comic bitmap is intentionally never modified by this method.
+     */
+    public static int clipBubbleOverlay(Bitmap overlayBitmap, int originX, int originY) {
+        if (overlayBitmap == null || overlayBitmap.isRecycled()) return 0;
+
+        final List<DetectedRegion> masks;
+        synchronized (OVERLAY_BUBBLE_MASKS) {
+            masks = new ArrayList<>(OVERLAY_BUBBLE_MASKS.values());
+        }
+        if (masks.isEmpty()) return 0;
+
+        Set<String> seen = new HashSet<>();
+        int applied = 0;
+        for (DetectedRegion region : masks) {
+            if (region == null) continue;
+            String id = region.getId();
+            if (id != null && !seen.add(id)) continue;
+
+            Rect bounds = region.getBounds();
+            byte[] mask = region.maskDataView();
+            int maskWidth = region.getMaskWidth();
+            int maskHeight = region.getMaskHeight();
+            if (bounds == null || mask == null || maskWidth <= 0 || maskHeight <= 0
+                    || mask.length != maskWidth * maskHeight
+                    || bounds.width() != maskWidth || bounds.height() != maskHeight) {
+                continue;
+            }
+
+            int left = Math.max(0, bounds.left - originX);
+            int top = Math.max(0, bounds.top - originY);
+            int right = Math.min(overlayBitmap.getWidth(), bounds.right - originX);
+            int bottom = Math.min(overlayBitmap.getHeight(), bounds.bottom - originY);
+            if (right <= left || bottom <= top) continue;
+
+            int width = right - left;
+            int height = bottom - top;
+            int[] pixels = new int[width * height];
+            overlayBitmap.getPixels(pixels, 0, width, left, top, width, height);
+            int changed = BubbleOverlayMasker.applyMask(
+                    pixels, width, height, left + originX, top + originY,
+                    bounds.left, bounds.top, mask, maskWidth, maskHeight);
+            if (changed > 0) {
+                overlayBitmap.setPixels(pixels, 0, width, left, top, width, height);
+                applied++;
+            }
+        }
+
+        Log.i(TAG, "screenshot BubblePop clipping applied to " + applied
+                + " bubble overlay(s); masksAvailable=" + masks.size());
+        return applied;
     }
 
     public static void setBubbleTextTransform(Object overlay, float dx, float dy, float scale) {
