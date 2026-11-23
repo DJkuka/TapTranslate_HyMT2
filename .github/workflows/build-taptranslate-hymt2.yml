@@ -1,9 +1,10 @@
 name: Build Tap Translate 1.125 FontFit AutoFill + Hy-MT2 Vulkan
+# Rebuild with the verified STQ1_0 runtime AAR checksum.
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main, vulkan-v12-integration, ocr-hybrid-prototype, ocr-paddle-prototype, ocr-region-editing, ocr-region-geometry, ocr-region-gesture-presets ]
+    branches: [ main, vulkan-v12-integration, ocr-hybrid-prototype, ocr-paddle-prototype, ocr-region-editing, ocr-region-geometry, ocr-region-gesture-presets, bubblepop-text-regions-apk219, apk219-bubblepop-preserve-hymt ]
 
 permissions:
   contents: write
@@ -32,31 +33,40 @@ jobs:
       - name: Install Android platform, build tools, NDK and CMake
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
 
-      - name: Download the exact Hy-MT2 base APK from the user's Release
+      - name: Download the exact final APK219 Release base APK
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p input app/libs
           curl --fail --location --retry 4 --retry-all-errors \
-            "https://github.com/DJkuka/TapTranslate_HyMT2/releases/download/1/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk" \
-            -o input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
-          echo "dfe0463c9d9c0bf39451586e4e7aa405f5721504c61f20cef9fd122618418d83  input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk" | sha256sum -c -
+            "https://github.com/DJkuka/TapTranslate_HyMT2/releases/download/v1.125-stq1.0/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk" \
+            -o input/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk
+          echo "ab5e3ca4fed3004668518161795c4c4c2b72ba5f3d3439f8081504b2bd0a2097  input/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk" | sha256sum -c -
 
       - name: Fetch verified Vulkan AAR and pinned llama.cpp headers
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --retry 4 \
-            "https://raw.githubusercontent.com/DJkuka/HyMT2_Vulkan_Standalone_Test/main/app/libs/llama-android-vulkan.aar" \
+          curl --fail --location --retry 4 --retry-all-errors \
+            "https://github.com/DJkuka/Vulkan_NativeRuntime/releases/download/stq1.0-runtime/llama-android-vulkan.aar" \
             -o app/libs/llama-android-vulkan.aar
-          echo "b2a15a3e297b4107575df52711a86e6a53e1a14fff497db5acb1837abe1f49bb  app/libs/llama-android-vulkan.aar" | sha256sum -c -
+          echo "3212d7fc964ce7c1a586fa800cba2e02566695572092945574a450afa193aa98  app/libs/llama-android-vulkan.aar" | sha256sum -c -
           mkdir -p build/vulkan-aar
           unzip -q app/libs/llama-android-vulkan.aar -d build/vulkan-aar
           test -f build/vulkan-aar/jni/arm64-v8a/libggml-vulkan.so
           test -f build/vulkan-aar/jni/arm64-v8a/libllama.so
-          git clone --depth 1 --branch b9878 https://github.com/ggml-org/llama.cpp.git upstream/llama.cpp
-          test "$(git -C upstream/llama.cpp describe --tags --exact-match)" = "b9878"
-          echo "LLAMA_ROOT=$GITHUB_WORKSPACE/upstream/llama.cpp" >> "$GITHUB_ENV"
+          git clone https://github.com/ffmpegkit-maintained/llama-android.git upstream/llama-android
+          git -C upstream/llama-android checkout --detach 9f5469fd9fa7ea7bc7b01801923af95dc3b41d52
+          git -C upstream/llama-android submodule update --init --recursive
+          git -C upstream/llama-android/llama.cpp rev-parse --is-inside-work-tree | grep -qx true
+          LLAMA_CPP_STQ1_COMMIT="1e411d8f5a1e23525fa3265dfb4bd76265465397"
+          echo "Fetching exact STQ1_0 llama.cpp revision from submodule origin:"
+          git -C upstream/llama-android/llama.cpp remote -v
+          git -C upstream/llama-android/llama.cpp fetch --no-tags origin "$LLAMA_CPP_STQ1_COMMIT"
+          git -C upstream/llama-android/llama.cpp checkout --detach "$LLAMA_CPP_STQ1_COMMIT"
+          test "$(git -C upstream/llama-android/llama.cpp rev-parse HEAD)" = "$LLAMA_CPP_STQ1_COMMIT"
+          grep -q 'GGML_TYPE_STQ1_0' upstream/llama-android/llama.cpp/ggml/include/ggml.h
+          echo "LLAMA_ROOT=$GITHUB_WORKSPACE/upstream/llama-android/llama.cpp" >> "$GITHUB_ENV"
           echo "VULKAN_AAR_NATIVE_DIR=$GITHUB_WORKSPACE/build/vulkan-aar/jni/arm64-v8a" >> "$GITHUB_ENV"
 
       - name: Set up Gradle
@@ -66,15 +76,41 @@ jobs:
 
       - name: Verify integration inputs
         run: |
-          test -s input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
+          test -s input/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk
           test -s app/libs/llama-android-vulkan.aar
           test -s tools/apktool.jar
           test -s scripts/merge_apk.py
           test -s scripts/verify_vulkan_base_apk.py
           python3 -m py_compile scripts/merge_apk.py scripts/verify_vulkan_base_apk.py
-          python3 scripts/verify_vulkan_base_apk.py input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
+          python3 scripts/verify_vulkan_base_apk.py input/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk
           echo "Base APK SHA-256:"
-          sha256sum input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk
+          sha256sum input/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk
+
+      - name: Export APK219 OCR renderer source for patch compatibility
+        if: (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt')
+        shell: bash
+        run: |
+          set -euo pipefail
+          decoded="build/apk219-renderer-inspect"
+          out="build/apk219-renderer-source"
+          java -jar tools/apktool.jar d -f -o "$decoded" input/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk
+          mkdir -p "$out"
+          for rel in smali_classes3/rh/f.smali smali_classes3/rh/g.smali smali_classes3/vh/l.smali smali_classes3/mh/p.smali res/layout/fragment_settings.xml; do
+            test -s "$decoded/$rel" || { echo "Missing APK219 source: $rel"; exit 1; }
+            mkdir -p "$out/$(dirname "$rel")"
+            cp "$decoded/$rel" "$out/$rel"
+          done
+          grep -RInE 'HAWK_FIXED_FONT_SIZE|binary|goto_2|TextPaint;->setTextSize|StaticLayout' "$out/smali_classes3/rh" > "$out/renderer-markers.txt" || true
+          echo "APK219 renderer sources exported."
+      
+      - name: Upload APK219 OCR renderer source
+        if: (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt')
+        uses: actions/upload-artifact@v4
+        with:
+          name: APK219-renderer-source
+          path: build/apk219-renderer-source/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Fetch pinned RT-DETR-v2 INT8 comic detector
         shell: bash
@@ -89,7 +125,7 @@ jobs:
           test "$(stat -c%s "$model")" -eq 11120765
 
       - name: Fetch pinned PP-OCRv6 small ONNX models and verify hashes
-        if: github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing' || github.ref == 'refs/heads/ocr-region-geometry' || github.ref == 'refs/heads/ocr-region-gesture-presets' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt'
+        if: github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing' || github.ref == 'refs/heads/ocr-region-geometry' || (github.ref == 'refs/heads/ocr-region-gesture-presets' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt') || (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt')
         shell: bash
         run: |
           set -euo pipefail
@@ -107,6 +143,18 @@ jobs:
           cp app/src/main/assets/models/ppocrv6/rec/inference.yml app/src/main/assets/models/rec/inference.yml
           test -s app/src/main/assets/models/rec/inference.yml
           echo "PP-OCRv6 models and matching 18,708-character dictionary are ready."
+
+      - name: Fetch pinned BubblePop page-mask model
+        if: (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt')
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/src/main/assets/models/bubblepop
+          base="https://raw.githubusercontent.com/xulihang/speech-balloon-segmentation/a6a5abae641891e80ef6eaf28d307c808ad5657d"
+          curl --fail --location --retry 4 --retry-all-errors "$base/models/model_fp16.onnx" -o app/src/main/assets/models/bubblepop/model_fp16.onnx
+          curl --fail --location --retry 4 --retry-all-errors "$base/LICENSE.bubble-pop" -o app/src/main/assets/models/bubblepop/LICENSE.bubble-pop
+          test "$(stat -c%s app/src/main/assets/models/bubblepop/model_fp16.onnx)" -gt 100000
+          echo "BubblePop page-mask model and license verified."
 
       - name: Run OCR geometry and outer-ring colour unit tests
         run: gradle --no-daemon -PllamaRoot="$LLAMA_ROOT" -PvulkanAarNativeDir="$VULKAN_AAR_NATIVE_DIR" :app:testDebugUnitTest
@@ -127,7 +175,7 @@ jobs:
       - name: Merge Hy-MT2 runtime into the original Tap Translate APK
         run: |
           python3 scripts/merge_apk.py \
-            --base-apk input/TapTranslate_1.125_FontFit_AutoFill_HyMT2_unsigned.apk \
+            --base-apk input/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk \
             --helper-apk app/build/outputs/apk/debug/app-debug.apk \
             --apktool tools/apktool.jar \
             --work build/merge \
@@ -204,18 +252,75 @@ jobs:
           echo "Final APK size:"
           ls -lh build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
 
-      - name: Verify hybrid OCR contracts were merged into classes5.dex
-        if: github.ref == 'refs/heads/ocr-hybrid-prototype' || github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing' || github.ref == 'refs/heads/ocr-region-geometry' || github.ref == 'refs/heads/ocr-region-gesture-presets'
+      - name: Verify BubblePop rendering and PP-OCRv6 live handoff
+        if: (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt')
+        shell: bash
+        run: |
+          set -euo pipefail
+          decoded="build/bubblepop-ppocr-final-check"
+          java -jar tools/apktool.jar d -f -o "$decoded" build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
+          find_one_smali() {
+            local rel="$1"
+            local -a matches
+            mapfile -t matches < <(find "$decoded" -type f -path "*/$rel" -print)
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "Expected exactly one DEX definition for $rel; found ${#matches[@]}" >&2
+              printf '%s\n' "${matches[@]}" >&2
+              exit 1
+            fi
+            printf '%s' "${matches[0]}"
+          }
+          for cls in BubblePopPageMaskDetector BubblePopSegmenter BubbleTextLayout PaddleOcrLiveBridge RtDetrLiveBridge; do
+            test -s "$(find_one_smali "com/tap_to_translate/snap_translate/hymt2/ocr/$cls.smali")"
+          done
+          bridge="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge.smali)"
+          renderer_f="$(find_one_smali rh/f.smali)"
+          renderer_g="$(find_one_smali rh/g.smali)"
+          test -s "$decoded/assets/models/bubblepop/model_fp16.onnx"
+          test -s "$decoded/assets/models/det/inference.onnx"
+          test -s "$decoded/assets/models/rec/inference.onnx"
+          test -s "$decoded/assets/models/rec/inference.yml"
+          echo "d73e0058b7a8086bbd57f3d10b8bcd4ff95363f67e06e2762b5e814fe9c9410e  $decoded/assets/models/det/inference.onnx" | sha256sum -c -
+          echo "5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634  $decoded/assets/models/rec/inference.onnx" | sha256sum -c -
+          grep -q 'PaddleOcrLiveBridge;->recognizeBlocking' "$bridge"
+          grep -q 'drawBubbleText' "$bridge"
+          grep -q 'createOverlayBubbleMask' "$bridge"
+          grep -q 'continuing OCR without region association' "$bridge"
+          grep -q 'ocr_bubblepop_page_mask_enabled' "$bridge"
+          grep -q 'drawBubbleText' "$renderer_f"
+          grep -q 'drawBubbleText' "$renderer_g"
+          grep -q 'drawBubbleBackground' "$bridge"
+          grep -q 'drawBubbleBackground' "$renderer_f"
+          grep -q 'drawBubbleBackground' "$renderer_g"
+          grep -R -q 'ocr_bubblepop_auto_wrap' "$decoded"/smali*
+          editor="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor.smali)"
+          grep -q 'setBubbleTextTransform' "$editor"
+          grep -q '7f0a04f9' "$editor"
+          echo "Verified BubblePop mask-clipped fill, optional no-wrap layout, independent text transforms, PP-OCRv6 models and OCR handoff."
+      
+      - name: Verify hybrid OCR contracts are present in the final APK DEX files
+        if: github.ref == 'refs/heads/ocr-hybrid-prototype' || github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing' || github.ref == 'refs/heads/ocr-region-geometry' || (github.ref == 'refs/heads/ocr-region-gesture-presets' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt') || (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt')
         shell: bash
         run: |
           set -euo pipefail
           java -jar tools/apktool.jar d -f -o build/ocr-final-check build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
-          root=build/ocr-final-check/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr
+          decoded="build/ocr-final-check"
+          find_one_smali() {
+            local rel="$1"
+            local -a matches
+            mapfile -t matches < <(find "$decoded" -type f -path "*/$rel" -print)
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "Expected exactly one DEX definition for $rel; found ${#matches[@]}" >&2
+              printf '%s\n' "${matches[@]}" >&2
+              exit 1
+            fi
+            printf '%s' "${matches[0]}"
+          }
           for cls in OcrRegionKind OcrFrame DetectedRegion RecognizedText OcrTextRegion OcrRegionDetector RegionTextRecognizer OcrPipelineResult HybridOcrPipeline BackgroundSample OuterRingColorEstimator BitmapOuterRingSampler RtDetrInference RtDetrInferenceOutput RtDetrOutputDecoder RtDetrModelProvider OnnxRuntimeRtDetrInference RtDetrComicRegionDetector RtDetrLiveBridge; do
-            test -s "$root/$cls.smali" || { echo "Missing merged OCR class: $cls"; exit 1; }
+            test -s "$(find_one_smali "com/tap_to_translate/snap_translate/hymt2/ocr/$cls.smali")" || { echo "Missing merged OCR class: $cls"; exit 1; }
           done
-          test -s build/ocr-final-check/smali_classes5/ai/onnxruntime/OrtEnvironment.smali
-          test -s build/ocr-final-check/smali_classes5/ai/onnxruntime/OrtSession.smali
+          test -s "$(find_one_smali ai/onnxruntime/OrtEnvironment.smali)"
+          test -s "$(find_one_smali ai/onnxruntime/OrtSession.smali)"
           live="build/ocr-final-check/smali_classes3/vh/j.smali"
           python - <<'PY'
           from pathlib import Path
@@ -271,24 +376,39 @@ jobs:
           echo "RT-DETR detector, ONNX Runtime classes and OCR pipeline are present in the unsigned APK."
 
       - name: Verify Paddle OCR runtime, model assets and diagnostic hook
-        if: github.ref == 'refs/heads/ocr-paddle-prototype'
+        if: github.ref == 'refs/heads/ocr-paddle-prototype' || (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt')
         shell: bash
         run: |
           set -euo pipefail
           decoded="build/ocr-final-check"
-          test -s "$decoded/smali_classes5/com/paddle/ocr/PaddleOCR.smali"
-          test -s "$decoded/smali_classes5/com/paddle/ocr/engine/OCREngine.smali"
-          test -s "$decoded/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrLiveBridge.smali"
-          test -s "$decoded/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrTextLine.smali"
-          test -s "$decoded/smali_classes5/org/opencv/android/Utils.smali"
-          test -s "$decoded/smali_classes2/nf/b.smali"
+          find_one_smali() {
+            local rel="$1"
+            local -a matches
+            mapfile -t matches < <(find "$decoded" -type f -path "*/$rel" -print)
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "Expected exactly one DEX definition for $rel; found ${#matches[@]}" >&2
+              printf '%s\n' "${matches[@]}" >&2
+              exit 1
+            fi
+            printf '%s' "${matches[0]}"
+          }
+          test -s "$(find_one_smali com/paddle/ocr/PaddleOCR.smali)"
+          test -s "$(find_one_smali com/paddle/ocr/engine/OCREngine.smali)"
+          test -s "$(find_one_smali com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrLiveBridge.smali)"
+          test -s "$(find_one_smali com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrTextLine.smali)"
+          test -s "$(find_one_smali org/opencv/android/Utils.smali)"
+          test -s "$(find_one_smali nf/b.smali)"
+          bridge="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge.smali)"
+          child="$(find_one_smali nf/b.smali)"
+          paddle_bridge="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrLiveBridge.smali)"
           test -s "$decoded/assets/models/det/inference.onnx"
           test -s "$decoded/assets/models/rec/inference.onnx"
           test -s "$decoded/assets/models/rec/inference.yml"
           test -s "$decoded/lib/arm64-v8a/libopencv_java4.so"
-          python - <<'PY'
+          BRIDGE="$bridge" CHILD="$child" PADDLE_BRIDGE="$paddle_bridge" python - <<'PY'
           from pathlib import Path
-          bridge = Path("build/ocr-final-check/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge.smali").read_text()
+          import os
+          bridge = Path(os.environ["BRIDGE"]).read_text()
           required = (
               "PaddleOcrLiveBridge;->recognizeBlocking",
               "applyPaddleBubbleGroups",
@@ -299,11 +419,11 @@ jobs:
           missing = [marker for marker in required if marker not in bridge]
           if missing:
               raise SystemExit("Paddle-native OCR handoff contract is incomplete: " + ", ".join(missing))
-          child = Path("build/ocr-final-check/smali_classes2/nf/b.smali").read_text()
+          child = Path(os.environ["CHILD"]).read_text()
           constructor = "Ljava/lang/String;Landroid/graphics/Rect;Ljava/util/List;Ljava/lang/String;)V"
           if constructor not in child or "Lgf/j;-><init>" not in child:
               raise SystemExit("Host nf/b child OCR constructor for Paddle lines is missing")
-          paddle_bridge = Path("build/ocr-final-check/smali_classes5/com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrLiveBridge.smali").read_text()
+          paddle_bridge = Path(os.environ["PADDLE_BRIDGE"]).read_text()
           if "PaddleOcrTextLine" not in paddle_bridge:
               raise SystemExit("PP-OCRv6 per-line geometry is missing from the live adapter")
           print("Paddle OCR, OpenCV, native bubble/free-text geometry, host child constructor and ML Kit fallback verified.")
