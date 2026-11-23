@@ -38,6 +38,8 @@ public final class RtDetrLiveBridge {
             Collections.synchronizedMap(new WeakHashMap<Object, List<DetectedRegion>>());
     private static final Map<Object, Boolean> OVERLAY_IS_BUBBLE =
             Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
+    private static final Map<Object, Boolean> OVERLAY_IS_FREE_TEXT =
+            Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
     private static final Map<Object, DetectedRegion> OVERLAY_BUBBLE_MASKS =
             Collections.synchronizedMap(new WeakHashMap<Object, DetectedRegion>());
     private static final Map<Object, DetectedRegion> OVERLAY_FREE_EXCLUSION_MASKS =
@@ -568,6 +570,8 @@ public final class RtDetrLiveBridge {
                 if (bounds == null) {
                     unreadable++;
                     OVERLAY_IS_BUBBLE.put(group, Boolean.FALSE);
+                    OVERLAY_IS_FREE_TEXT.put(group, Boolean.FALSE);
+                    FREE_TEXT_ALPHA_OVERRIDES.remove(group);
                     underlays.add(group);
                     continue;
                 }
@@ -583,7 +587,10 @@ public final class RtDetrLiveBridge {
                         ? bubbleTextScore >= freeTextScore
                         : freeTextScore == 0d && findBubbleContainer(bounds, regions) >= 0;
 
+                boolean isFreeText = !isBubbleText && freeTextScore > 0d;
                 OVERLAY_IS_BUBBLE.put(group, Boolean.valueOf(isBubbleText));
+                OVERLAY_IS_FREE_TEXT.put(group, Boolean.valueOf(isFreeText));
+                if (!isFreeText) FREE_TEXT_ALPHA_OVERRIDES.remove(group);
                 if (!isBubbleText) {
                     DetectedRegion pageMask = null;
                     for (DetectedRegion candidate : regions) {
@@ -631,8 +638,7 @@ public final class RtDetrLiveBridge {
      */
     public static int resolveBackgroundAlpha(Context context, Object overlay, int originalAlpha) {
         if (overlay == null) return originalAlpha;
-        Boolean isBubble = OVERLAY_IS_BUBBLE.get(overlay);
-        if (isBubble == null || isBubble.booleanValue()) return originalAlpha;
+        if (!Boolean.TRUE.equals(OVERLAY_IS_FREE_TEXT.get(overlay))) return originalAlpha;
         try {
             Integer override = FREE_TEXT_ALPHA_OVERRIDES.get(overlay);
             int percent;
@@ -656,7 +662,7 @@ public final class RtDetrLiveBridge {
 
     /** True only for overlay groups explicitly classified as text outside speech bubbles. */
     public static boolean isFreeTextOverlay(Object overlay) {
-        return overlay != null && Boolean.FALSE.equals(OVERLAY_IS_BUBBLE.get(overlay));
+        return overlay != null && Boolean.TRUE.equals(OVERLAY_IS_FREE_TEXT.get(overlay));
     }
 
     /** Sets a per-overlay fill opacity override without changing other free-text rectangles. */
