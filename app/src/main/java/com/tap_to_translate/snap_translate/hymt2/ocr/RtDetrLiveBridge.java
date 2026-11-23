@@ -40,6 +40,8 @@ public final class RtDetrLiveBridge {
             Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
     private static final Map<Object, DetectedRegion> OVERLAY_BUBBLE_MASKS =
             Collections.synchronizedMap(new WeakHashMap<Object, DetectedRegion>());
+    private static final Map<Object, DetectedRegion> OVERLAY_FREE_EXCLUSION_MASKS =
+            Collections.synchronizedMap(new WeakHashMap<Object, DetectedRegion>());
     private static final Map<Object, float[]> BUBBLE_TEXT_TRANSFORMS =
             Collections.synchronizedMap(new WeakHashMap<Object, float[]>());
     private static final String BUBBLE_AUTO_WRAP = "ocr_bubblepop_auto_wrap";
@@ -580,6 +582,20 @@ public final class RtDetrLiveBridge {
                         : freeTextScore == 0d && findBubbleContainer(bounds, regions) >= 0;
 
                 OVERLAY_IS_BUBBLE.put(group, Boolean.valueOf(isBubbleText));
+                if (!isBubbleText) {
+                    DetectedRegion pageMask = null;
+                    for (DetectedRegion candidate : regions) {
+                        if (candidate != null && candidate.getKind() == OcrRegionKind.PAGE_BUBBLE_MASK
+                                && candidate.maskDataView() != null) {
+                            pageMask = candidate;
+                            break;
+                        }
+                    }
+                    if (pageMask != null) OVERLAY_FREE_EXCLUSION_MASKS.put(group, pageMask);
+                    else OVERLAY_FREE_EXCLUSION_MASKS.remove(group);
+                } else {
+                    OVERLAY_FREE_EXCLUSION_MASKS.remove(group);
+                }
                 if (isBubbleText) {
                     DetectedRegion localMask = createOverlayBubbleMask(bounds, regions);
                     if (localMask != null) OVERLAY_BUBBLE_MASKS.put(group, localMask);
@@ -789,9 +805,17 @@ public final class RtDetrLiveBridge {
     public static boolean drawBubbleBackground(android.graphics.Canvas canvas, Object overlay,
             float radius, android.graphics.Paint paint) {
         try {
-            DetectedRegion region = OVERLAY_BUBBLE_MASKS.get(overlay);
             Rect bounds = readOverlayBounds(overlay);
-            return region != null && bounds != null && BubbleTextLayout.drawClippedBackground(
+            if (bounds == null) return false;
+            Boolean isBubble = OVERLAY_IS_BUBBLE.get(overlay);
+            if (isBubble != null && !isBubble.booleanValue()) {
+                DetectedRegion exclusion = OVERLAY_FREE_EXCLUSION_MASKS.get(overlay);
+                return exclusion != null && BubbleTextLayout.drawExclusionClippedBackground(
+                        canvas, exclusion, bounds.left, bounds.top, bounds.right, bounds.bottom,
+                        radius, radius, paint);
+            }
+            DetectedRegion region = OVERLAY_BUBBLE_MASKS.get(overlay);
+            return region != null && BubbleTextLayout.drawClippedBackground(
                     canvas, region, bounds.left, bounds.top, bounds.right, bounds.bottom,
                     radius, radius, paint);
         } catch (Throwable error) {
