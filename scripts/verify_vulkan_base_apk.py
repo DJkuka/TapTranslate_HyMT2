@@ -7,7 +7,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-EXPECTED_SHA256 = "dfe0463c9d9c0bf39451586e4e7aa405f5721504c61f20cef9fd122618418d83"
+EXPECTED_SHA256 = "ab5e3ca4fed3004668518161795c4c4c2b72ba5f3d3439f8081504b2bd0a2097"
 REQUIRED = (
     "classes.dex", "classes2.dex", "classes3.dex", "classes4.dex",
     "res/raw/translate_models_metadata.json",
