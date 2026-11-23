@@ -10,6 +10,8 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Constructor;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
@@ -36,10 +38,16 @@ public final class RtDetrLiveBridge {
             Collections.synchronizedMap(new WeakHashMap<Object, List<DetectedRegion>>());
     private static final Map<Object, Boolean> OVERLAY_IS_BUBBLE =
             Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
+    private static final Map<Object, DetectedRegion> OVERLAY_BUBBLE_MASKS =
+            Collections.synchronizedMap(new WeakHashMap<Object, DetectedRegion>());
+    private static final Map<Object, float[]> BUBBLE_TEXT_TRANSFORMS =
+            Collections.synchronizedMap(new WeakHashMap<Object, float[]>());
+    private static final String BUBBLE_AUTO_WRAP = "ocr_bubblepop_auto_wrap";
     private static final String OCR_PREFS = "taptranslate_ocr_settings";
     private static final String FREE_ALPHA_ENABLED = "ocr_free_text_alpha_enabled";
     private static final String FREE_ALPHA_PERCENT = "ocr_free_text_alpha_percent";
     private static final String PADDLE_ENGINE_NAME = "PP-OCRv6 (Comics)";
+    private static final String BUBBLEPOP_PAGE_MASK_ENABLED = "ocr_bubblepop_page_mask_enabled";
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor(
             new ThreadFactory() {
                 @Override public Thread newThread(Runnable task) {
@@ -52,6 +60,8 @@ public final class RtDetrLiveBridge {
 
     private static volatile RtDetrComicRegionDetector detector;
     private static volatile Context detectorContext;
+    private static volatile BubblePopPageMaskDetector pageMaskDetector;
+    private static volatile Context pageMaskContext;
 
     private RtDetrLiveBridge() {}
 
@@ -67,7 +77,8 @@ public final class RtDetrLiveBridge {
 
         final boolean paddleEnabled = isPaddleSelected();
         final boolean classifyForFreeTextOpacity = isSeparateFreeTextAlphaEnabled(context);
-        if (!paddleEnabled && !classifyForFreeTextOpacity) {
+        final boolean pageMaskEnabled = isBubblePopPageMaskEnabled(context);
+        if (!paddleEnabled && !classifyForFreeTextOpacity && !pageMaskEnabled) {
             synchronized (LOCK) {
                 PendingFrame previous = PENDING.remove(owner);
                 if (previous != null && !previous.task.isDone()) previous.task.cancel(true);
@@ -97,35 +108,57 @@ public final class RtDetrLiveBridge {
 
             FutureTask<List<DetectedRegion>> task = new FutureTask<>(
                     () -> {
+                        ArrayList<DetectedRegion> combined = new ArrayList<>();
                         try {
-                            RtDetrComicRegionDetector active = getDetector(context);
-                            OcrFrame frame = new OcrFrame(
-                                    snapshot,
-                                    new Rect(0, 0, snapshot.getWidth(), snapshot.getHeight()),
-                                    0, 0, 1f, 1f);
-                            List<DetectedRegion> result = active.detect(frame);
+                            try {
+                                RtDetrComicRegionDetector active = getDetector(context);
+                                OcrFrame frame = new OcrFrame(
+                                        snapshot,
+                                        new Rect(0, 0, snapshot.getWidth(), snapshot.getHeight()),
+                                        0, 0, 1f, 1f);
+                                List<DetectedRegion> detected = active.detect(frame);
+                                if (detected != null) combined.addAll(detected);
+                                Log.i(TAG, "RT-DETR completed: regions="
+                                        + (detected == null ? 0 : detected.size()));
+                            } catch (Throwable detectorError) {
+                                Log.e(TAG, "RT-DETR failed; continuing with independent BubblePop pass",
+                                        detectorError);
+                            }
+
+                            if (isBubblePopPageMaskEnabled(context)) {
+                                try {
+                                    DetectedRegion pageMask = getPageMaskDetector(context).detect(snapshot);
+                                    if (pageMask != null) {
+                                        combined.add(pageMask);
+                                        Log.i(TAG, "BubblePop page mask attached: "
+                                                + pageMask.getMaskWidth() + "x" + pageMask.getMaskHeight());
+                                    } else {
+                                        Log.w(TAG, "BubblePop returned no usable page mask");
+                                    }
+                                } catch (Throwable maskError) {
+                                    Log.e(TAG, "BubblePop failed independently; RT-DETR regions retained",
+                                            maskError);
+                                }
+                            }
+
                             int containers = 0;
                             int bubbleText = 0;
                             int free = 0;
-                            if (result != null) {
-                                for (DetectedRegion region : result) {
-                                    if (region.getKind() == OcrRegionKind.BUBBLE_CONTAINER) containers++;
-                                    else if (region.getKind() == OcrRegionKind.SPEECH_BUBBLE) bubbleText++;
-                                    else if (region.getKind() == OcrRegionKind.FREE_TEXT) free++;
-                                }
+                            for (DetectedRegion region : combined) {
+                                if (region.getKind() == OcrRegionKind.BUBBLE_CONTAINER) containers++;
+                                else if (region.getKind() == OcrRegionKind.SPEECH_BUBBLE) bubbleText++;
+                                else if (region.getKind() == OcrRegionKind.FREE_TEXT) free++;
                             }
-                            Log.i(TAG, "detected: total=" + (result == null ? 0 : result.size())
+                            Log.i(TAG, "region pass complete: total=" + combined.size()
                                     + " bubble_containers=" + containers
                                     + " text_bubble=" + bubbleText + " text_free=" + free
                                     + " frame=" + snapshot.getWidth() + "x" + snapshot.getHeight());
-                            return result == null ? Collections.<DetectedRegion>emptyList() : result;
-                        } catch (Throwable error) {
-                            Log.e(TAG, "RT-DETR inference failed; original OCR will be used", error);
-                            return Collections.emptyList();
+                            return combined;
                         } finally {
                             if (!snapshot.isRecycled()) snapshot.recycle();
                         }
                     });
+
             PENDING.put(owner, new PendingFrame(source, task));
             EXECUTOR.execute(task);
         }
@@ -136,111 +169,71 @@ public final class RtDetrLiveBridge {
      * normal result but before the host groups it into translation overlays.
      */
     public static void filter(
-            Object owner, Context ignoredContext, Object mlKitResult, Bitmap source) {
+            Object owner, Context hostContext, Object mlKitResult, Bitmap source) {
         if (owner == null || mlKitResult == null || source == null) {
             Log.w(TAG, "hybrid OCR skipped: null owner/result/source");
             return;
         }
 
         final Context resolvedContext = resolveContext(owner);
+        final Context context = resolvedContext != null ? resolvedContext : hostContext;
         final boolean paddleEnabled = isPaddleSelected();
-        if (!paddleEnabled && !isSeparateFreeTextAlphaEnabled(resolvedContext)) {
-            synchronized (LOCK) {
-                ACTIVE_REGIONS.remove(owner);
-            }
+        final boolean freeAlphaEnabled = isSeparateFreeTextAlphaEnabled(context);
+        final boolean pageMaskEnabled = isBubblePopPageMaskEnabled(context);
+        if (!paddleEnabled && !freeAlphaEnabled && !pageMaskEnabled) {
+            synchronized (LOCK) { ACTIVE_REGIONS.remove(owner); }
             return;
         }
 
+        // OCR must not depend on RT-DETR/BubblePop succeeding. A missing frame,
+        // bitmap mismatch, detector exception or timeout disables only region
+        // association; PP-OCR still gets the actual screenshot and can recognize
+        // text as unmatched/free blocks. Never treat those blocks as bubble masks.
+        List<DetectedRegion> regions = Collections.emptyList();
         final PendingFrame pending;
-        synchronized (LOCK) {
-            pending = PENDING.get(owner);
-        }
+        synchronized (LOCK) { pending = PENDING.get(owner); }
         if (pending == null) {
-            Log.w(TAG, "hybrid OCR skipped: no pending RT-DETR frame for OCR owner");
-            return;
-        }
-        if (pending.source != source) {
-            Log.w(TAG, "hybrid OCR skipped: bitmap identity mismatch; frame="
-                    + source.getWidth() + "x" + source.getHeight()
-                    + " pending=" + pending.source.getWidth() + "x" + pending.source.getHeight());
-            return;
-        }
-
-        final List<DetectedRegion> regions;
-        try {
-            regions = pending.task.get(20, TimeUnit.SECONDS);
-        } catch (Throwable error) {
-            Log.w(TAG, "RT-DETR result unavailable; original OCR retained", error);
+            Log.w(TAG, "No pending RT-DETR frame; continuing OCR without region association");
+        } else if (pending.source != source) {
+            Log.w(TAG, "RT-DETR bitmap identity mismatch; continuing OCR without region association");
             removeIfCurrent(owner, pending);
-            return;
+        } else {
+            try {
+                List<DetectedRegion> detected = pending.task.get(20, TimeUnit.SECONDS);
+                if (detected != null) regions = detected;
+            } catch (Throwable error) {
+                Log.w(TAG, "RT-DETR/BubblePop unavailable; continuing OCR without region association", error);
+            } finally {
+                removeIfCurrent(owner, pending);
+            }
         }
-        removeIfCurrent(owner, pending);
+
         synchronized (LOCK) {
-            ACTIVE_REGIONS.put(owner, regions == null
-                    ? Collections.<DetectedRegion>emptyList()
-                    : new ArrayList<>(regions));
+            ACTIVE_REGIONS.put(owner, new ArrayList<>(regions));
         }
+        Log.i(TAG, "region association ready: regions=" + regions.size()
+                + " paddle=" + paddleEnabled + " bubblepop=" + pageMaskEnabled);
 
-        if (regions == null || regions.isEmpty()) {
-            Log.w(TAG, "RT-DETR returned no text regions; original OCR retained");
-            return;
-        }
-
-        if (!paddleEnabled) {
-            Log.i(TAG, "ML Kit selected; RT-DETR is used only for free-text/bubble classification; Paddle is bypassed");
-            return;
-        }
+        if (!paddleEnabled) return;
 
         try {
-            Field blocksField = mlKitResult.getClass().getField("a");
-            Object value = blocksField.get(mlKitResult);
-            if (!(value instanceof List<?>)) {
-                Log.w(TAG, "Unexpected ML Kit result container; original OCR retained");
-                return;
-            }
-
-            @SuppressWarnings("unchecked")
-            List<Object> blocks = (List<Object>) value;
-            int originalCount = blocks.size();
-            if (originalCount == 0) return;
-
-            // RT-DETR boxes are not accurate enough to be a destructive OCR gate.
-            // Keep every ML Kit block so a slightly clipped/missed detector box cannot
-            // silently remove words or a whole line. Use the detector only for bubble
-            // association/grouping; log coverage for later tuning.
-            int detectorMatched = 0;
-            int detectorUnmatched = 0;
-            int unreadable = 0;
-            for (Object block : blocks) {
-                Rect textBounds = readBlockBounds(block);
-                if (textBounds == null) {
-                    unreadable++;
-                } else if (overlapsDetectedText(textBounds, regions)) {
-                    detectorMatched++;
-                } else {
-                    detectorUnmatched++;
-                }
-            }
-            Log.i(TAG, "hybrid OCR classify: detector_regions=" + regions.size()
-                    + " mlkit_blocks=" + originalCount + " retained=" + originalCount
-                    + " detector_matched=" + detectorMatched
-                    + " detector_unmatched=" + detectorUnmatched
-                    + " filtering=disabled unreadable_bounds=" + unreadable);
-
-            // This method is reached from the host's dedicated OCR callback executor.
-            // Wait only there (never on the UI thread); keep ML Kit intact on timeout/failure.
             List<PaddleOcrTextGroup> paddleGroups = PaddleOcrLiveBridge.recognizeBlocking(
-                    ignoredContext, source, regions, 15000L);
+                    context, source, regions, 20000L);
             if (paddleGroups != null && !paddleGroups.isEmpty()) {
+                @SuppressWarnings("unchecked")
+                List<Object> blocks = (List<Object>) mlKitResult.getClass().getField("a").get(mlKitResult);
+                int originalCount = blocks.size();
                 int created = applyPaddleBubbleGroups(blocks, paddleGroups, regions);
                 Log.i(TAG, "Paddle host handoff completed: groups=" + paddleGroups.size()
-                        + " native_bubble_blocks=" + created
+                        + " native_blocks=" + created
+                        + " original_mlkit_blocks=" + originalCount
+                        + " region_association=" + (!regions.isEmpty())
                         + " mlkit_fallback=" + (created == 0));
             } else {
-                Log.i(TAG, "Paddle host handoff unavailable; ML Kit result retained");
+                Log.w(TAG, "PP-OCRv6 returned no groups; ML Kit result retained");
             }
         } catch (Throwable error) {
-            Log.w(TAG, "Hybrid OCR filtering failed; original OCR retained", error);
+            Log.e(TAG, "PP-OCRv6 handoff failed; ML Kit output retained", error);
         }
     }
 
@@ -421,6 +414,34 @@ public final class RtDetrLiveBridge {
         }
     }
 
+    private static boolean isBubblePopPageMaskEnabled(Context context) {
+        if (context == null) return false;
+        try {
+            return context.getSharedPreferences(OCR_PREFS, Context.MODE_PRIVATE)
+                    .getBoolean(BUBBLEPOP_PAGE_MASK_ENABLED, false);
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not read BubblePop page-mask preference; feature disabled", error);
+            return false;
+        }
+    }
+
+    private static BubblePopPageMaskDetector getPageMaskDetector(Context context) throws Exception {
+        BubblePopPageMaskDetector current = pageMaskDetector;
+        if (current != null && pageMaskContext == context) return current;
+        synchronized (RtDetrLiveBridge.class) {
+            current = pageMaskDetector;
+            if (current != null && pageMaskContext == context) return current;
+            if (current != null) {
+                try { current.close(); } catch (Throwable ignored) {}
+            }
+            current = new BubblePopPageMaskDetector(context);
+            pageMaskContext = context;
+            pageMaskDetector = current;
+            Log.i(TAG, "BubblePop page-mask model/runtime initialized");
+            return current;
+        }
+    }
+
     private static RtDetrComicRegionDetector getDetector(Context context) throws Exception {
         RtDetrComicRegionDetector current = detector;
         if (current != null && detectorContext == context) return current;
@@ -559,8 +580,15 @@ public final class RtDetrLiveBridge {
                         : freeTextScore == 0d && findBubbleContainer(bounds, regions) >= 0;
 
                 OVERLAY_IS_BUBBLE.put(group, Boolean.valueOf(isBubbleText));
-                if (isBubbleText) bubbleOverlays.add(group);
-                else underlays.add(group);
+                if (isBubbleText) {
+                    DetectedRegion localMask = createOverlayBubbleMask(bounds, regions);
+                    if (localMask != null) OVERLAY_BUBBLE_MASKS.put(group, localMask);
+                    else OVERLAY_BUBBLE_MASKS.remove(group);
+                    bubbleOverlays.add(group);
+                } else {
+                    OVERLAY_BUBBLE_MASKS.remove(group);
+                    underlays.add(group);
+                }
             }
 
             if (bubbleOverlays.isEmpty()) return;
@@ -675,6 +703,184 @@ public final class RtDetrLiveBridge {
         int index = BubbleRegionMatcher.findBestContainer(
                 text.left, text.top, text.right, text.bottom, bubbles);
         return index >= 0 && index < ids.size() ? ids.get(index) : null;
+    }
+
+    private static DetectedRegion createOverlayBubbleMask(
+            Rect overlayBounds, List<DetectedRegion> regions) {
+        DetectedRegion pageMask = null;
+        for (DetectedRegion region : regions) {
+            if (region.getKind() == OcrRegionKind.PAGE_BUBBLE_MASK
+                    && region.maskDataView() != null) {
+                pageMask = region;
+                break;
+            }
+        }
+        if (pageMask == null) return null;
+        int containerIndex = findBubbleContainer(overlayBounds, regions);
+        if (containerIndex < 0) return null;
+        DetectedRegion container = null;
+        int current = 0;
+        for (DetectedRegion region : regions) {
+            if (region.getKind() != OcrRegionKind.BUBBLE_CONTAINER) continue;
+            if (current++ == containerIndex) { container = region; break; }
+        }
+        if (container == null) return null;
+
+        Rect pageBounds = pageMask.getBounds();
+        Rect crop = container.getBounds();
+        if (!crop.intersect(pageBounds)) return null;
+        int width = crop.width();
+        int height = crop.height();
+        if (width <= 0 || height <= 0 || (long) width * height > 16000000L) return null;
+        byte[] source = pageMask.maskDataView();
+        int sourceWidth = pageMask.getMaskWidth();
+        int sourceHeight = pageMask.getMaskHeight();
+        if (source == null || sourceWidth != pageBounds.width()
+                || sourceHeight != pageBounds.height()
+                || source.length != sourceWidth * sourceHeight) return null;
+
+        byte[] local = new byte[width * height];
+        int foreground = 0;
+        for (int y = 0; y < height; y++) {
+            int sourceOffset = (crop.top - pageBounds.top + y) * sourceWidth
+                    + (crop.left - pageBounds.left);
+            int targetOffset = y * width;
+            for (int x = 0; x < width; x++) {
+                byte pixel = source[sourceOffset + x];
+                local[targetOffset + x] = pixel;
+                if ((pixel & 0xff) != 0) foreground++;
+            }
+        }
+        if (foreground < 40) {
+            Log.d(TAG, "BubblePop mask too sparse for overlay; rectangular fallback");
+            return null;
+        }
+        return new DetectedRegion(
+                pageMask.getId() + ":container:" + container.getId(),
+                OcrRegionKind.PAGE_BUBBLE_MASK, crop, pageMask.getConfidence(),
+                null, null, local, width, height);
+    }
+
+    /** Called by both native overlay renderers before rectangular StaticLayout fallback. */
+    public static boolean drawBubbleText(
+            android.graphics.Canvas canvas, Object overlay, CharSequence text,
+            android.text.TextPaint paint, float minTextSize, float maxTextSize, int padding) {
+        if (canvas == null || overlay == null || text == null || paint == null) return false;
+        try {
+            DetectedRegion region = OVERLAY_BUBBLE_MASKS.get(overlay);
+            if (region == null || region.maskDataView() == null) return false;
+            Rect overlayBounds = readOverlayBounds(overlay);
+            if (overlayBounds == null) return false;
+            float[] transform = BUBBLE_TEXT_TRANSFORMS.get(overlay);
+            if (transform == null) transform = new float[] {0f, 0f, 1f};
+            Context context = resolveContextFromOverlay(overlay);
+            boolean autoWrap = context == null || context.getSharedPreferences(
+                    OCR_PREFS, Context.MODE_PRIVATE).getBoolean(BUBBLE_AUTO_WRAP, true);
+            return BubbleTextLayout.draw(canvas, region.maskDataView(),
+                    region.getMaskWidth(), region.getMaskHeight(), region.getBounds(),
+                    overlayBounds, text, paint, minTextSize, maxTextSize, padding,
+                    autoWrap, transform[0], transform[1], transform[2]);
+        } catch (Throwable error) {
+            Log.w(TAG, "BubblePop text layout failed; rectangular host layout retained", error);
+            return false;
+        }
+    }
+
+    public static boolean drawBubbleBackground(android.graphics.Canvas canvas, Object overlay,
+            float radius, android.graphics.Paint paint) {
+        try {
+            DetectedRegion region = OVERLAY_BUBBLE_MASKS.get(overlay);
+            Rect bounds = readOverlayBounds(overlay);
+            return region != null && bounds != null && BubbleTextLayout.drawClippedBackground(
+                    canvas, region, bounds.left, bounds.top, bounds.right, bounds.bottom,
+                    radius, radius, paint);
+        } catch (Throwable error) {
+            Log.w(TAG, "BubblePop background clipping failed; rectangular fallback retained", error);
+            return false;
+        }
+    }
+
+    public static boolean hasBubbleMask(Object overlay) {
+        return overlay != null && OVERLAY_BUBBLE_MASKS.containsKey(overlay);
+    }
+
+    /**
+     * Clips the independently rendered transparent translation layer to the
+     * same BubblePop masks used by the live renderer. originX/originY describe
+     * the screen coordinate represented by pixel (0,0) in overlayBitmap.
+     * The source comic bitmap is intentionally never modified by this method.
+     */
+    public static int clipBubbleOverlay(Bitmap overlayBitmap, int originX, int originY) {
+        if (overlayBitmap == null || overlayBitmap.isRecycled()) return 0;
+
+        final List<DetectedRegion> masks;
+        synchronized (OVERLAY_BUBBLE_MASKS) {
+            masks = new ArrayList<>(OVERLAY_BUBBLE_MASKS.values());
+        }
+        if (masks.isEmpty()) return 0;
+
+        Set<String> seen = new HashSet<>();
+        int applied = 0;
+        for (DetectedRegion region : masks) {
+            if (region == null) continue;
+            String id = region.getId();
+            if (id != null && !seen.add(id)) continue;
+
+            Rect bounds = region.getBounds();
+            byte[] mask = region.maskDataView();
+            int maskWidth = region.getMaskWidth();
+            int maskHeight = region.getMaskHeight();
+            if (bounds == null || mask == null || maskWidth <= 0 || maskHeight <= 0
+                    || mask.length != maskWidth * maskHeight
+                    || bounds.width() != maskWidth || bounds.height() != maskHeight) {
+                continue;
+            }
+
+            int left = Math.max(0, bounds.left - originX);
+            int top = Math.max(0, bounds.top - originY);
+            int right = Math.min(overlayBitmap.getWidth(), bounds.right - originX);
+            int bottom = Math.min(overlayBitmap.getHeight(), bounds.bottom - originY);
+            if (right <= left || bottom <= top) continue;
+
+            int width = right - left;
+            int height = bottom - top;
+            int[] pixels = new int[width * height];
+            overlayBitmap.getPixels(pixels, 0, width, left, top, width, height);
+            int changed = BubbleOverlayMasker.applyMask(
+                    pixels, width, height, left + originX, top + originY,
+                    bounds.left, bounds.top, mask, maskWidth, maskHeight);
+            if (changed > 0) {
+                overlayBitmap.setPixels(pixels, 0, width, left, top, width, height);
+                applied++;
+            }
+        }
+
+        Log.i(TAG, "screenshot BubblePop clipping applied to " + applied
+                + " bubble overlay(s); masksAvailable=" + masks.size());
+        return applied;
+    }
+
+    public static void setBubbleTextTransform(Object overlay, float dx, float dy, float scale) {
+        if (overlay == null) return;
+        BUBBLE_TEXT_TRANSFORMS.put(overlay, new float[] {
+                dx, dy, Math.max(0.55f, Math.min(1.65f, scale))});
+    }
+
+    public static float[] getBubbleTextTransform(Object overlay) {
+        float[] value = BUBBLE_TEXT_TRANSFORMS.get(overlay);
+        return value == null ? new float[] {0f, 0f, 1f} : value.clone();
+    }
+
+    private static Context resolveContextFromOverlay(Object overlay) {
+        try {
+            synchronized (ACTIVE_REGIONS) {
+                for (Object owner : ACTIVE_REGIONS.keySet()) {
+                    Context context = resolveContext(owner);
+                    if (context != null) return context;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return null;
     }
 
     private static int findBubbleContainer(Rect text, List<DetectedRegion> regions) {
