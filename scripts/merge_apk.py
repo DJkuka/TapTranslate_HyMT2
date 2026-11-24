@@ -2114,10 +2114,12 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
                 continue
             for source in root.rglob("*.smali"):
                 rel = source.relative_to(helper).as_posix()
-                # APK219 already contains a working Hy-MT2 runtime. Only port
-                # explicitly reviewed BubblePop/OCR UI classes; never replace
-                # HyMT2Runtime, settings, JNI bridge, launcher or llama API.
+                # The APK219 runtime source is the exact v1.125-stq1.0 release source.
+                # Refresh HyMT2Runtime only with OCR-generation guards; retain its
+                # existing model loading, STQ1_0 prompt/parity, native abort and JNI paths.
+                # Settings, JNI bridge, launcher and llama API remain untouched.
                 allowed_classes = (
+                    "com/tap_to_translate/snap_translate/hymt2/HyMT2Runtime",
                     "com/tap_to_translate/snap_translate/hymt2/OcrSettingsActivity",
                     "com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor",
                     "com/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager",
