@@ -475,29 +475,6 @@ def patch_request_cancellation(base: Path) -> None:
             raise RuntimeError("Unexpected ScreenTranslateService.c(List) register layout")
         method = method.replace(anchor, anchor + "\n" + guard + "\n", 1)
 
-    if "RtDetrLiveBridge;->bindHostRequest" not in method:
-        anchor = """    invoke-virtual {p0}, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->t()Lyh/f;
-
-    move-result-object p1"""
-        bind = f"""    move-object v1, p1
-
-    invoke-virtual {{p0}}, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->t()Lyh/f;
-
-    move-result-object p1
-
-    invoke-static {{p1, v1}}, {bridge}->bindHostRequest(Ljava/lang/Object;Ljava/lang/Object;)Z
-
-    move-result v0
-
-    if-nez v0, :hymt2_request_bound
-
-    return-void
-
-    :hymt2_request_bound"""
-        if method.count(anchor) != 1:
-            raise RuntimeError("Could not bind OCR generation to APK219 Hy-MT2 host")
-        method = method.replace(anchor, bind, 1)
-
     text = text[:start] + method + text[end:]
     service.write_text(text, encoding="utf-8")
 
@@ -545,8 +522,6 @@ def patch_request_cancellation(base: Path) -> None:
     service_final = service.read_text(encoding="utf-8")
     if "RtDetrLiveBridge;->isOcrResultCurrent" not in service_final:
         raise RuntimeError("Stale OCR result guard was not installed")
-    if "RtDetrLiveBridge;->bindHostRequest" not in service_final:
-        raise RuntimeError("OCR generation was not bound to the Hy-MT2 host")
     final_click = click_path.read_text(encoding="utf-8")
     if "RtDetrLiveBridge;->cancelActiveRequest()V" not in final_click:
         raise RuntimeError("Double-tap cancel does not invalidate the active OCR request")
