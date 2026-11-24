@@ -40,7 +40,7 @@ public final class RtDetrLiveBridge {
     private static final Map<Bitmap, Long> FRAME_GENERATIONS =
             Collections.synchronizedMap(new WeakHashMap<Bitmap, Long>());
     private static final Map<Object, Long> RESULT_GENERATIONS =
-            Collections.synchronizedMap(new IdentityHashMap<Object, Long>());
+            Collections.synchronizedMap(new WeakHashMap<Object, Long>());
     private static final Map<Object, Long> HOST_REQUEST_GENERATIONS =
             Collections.synchronizedMap(new IdentityHashMap<Object, Long>());
     private static final Map<Object, PendingFrame> PENDING =
@@ -92,8 +92,6 @@ public final class RtDetrLiveBridge {
             }
             PENDING.clear();
             ACTIVE_REGIONS.clear();
-            RESULT_GENERATIONS.clear();
-            HOST_REQUEST_GENERATIONS.clear();
         }
         Log.i(TAG, "Active screen translation cancelled; generation=" + generation);
     }
@@ -116,7 +114,10 @@ public final class RtDetrLiveBridge {
     public static boolean isOcrResultCurrent(Object result) {
         if (result == null) return true;
         Long generation = RESULT_GENERATIONS.get(result);
-        return generation == null || generation.longValue() == REQUEST_GENERATION.get();
+        if (generation == null) return true;
+        boolean current = generation.longValue() == REQUEST_GENERATION.get();
+        if (!current) RESULT_GENERATIONS.remove(result);
+        return current;
     }
 
     /** Associates the accepted OCR list with the host object that invokes HyMT2Runtime.translate. */
@@ -162,8 +163,6 @@ public final class RtDetrLiveBridge {
             if (previous != null && previous.source == source && !previous.task.isDone()) return;
             long generation = REQUEST_GENERATION.incrementAndGet();
             FRAME_GENERATIONS.put(source, Long.valueOf(generation));
-            RESULT_GENERATIONS.clear();
-            HOST_REQUEST_GENERATIONS.clear();
         }
 
         final Context context = resolveContext(owner);
