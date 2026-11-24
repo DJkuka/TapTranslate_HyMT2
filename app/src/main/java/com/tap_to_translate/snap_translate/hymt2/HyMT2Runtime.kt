@@ -293,6 +293,9 @@ object HyMT2Runtime {
                                         "temperature=${options.temperature} " +
                                         "topP=${options.topP} topK=${options.topK} repetitionPenalty=$appliedRepetitionPenalty modelKind=$modelKind"
                                 )
+                                if (!requestIsCurrent()) {
+                                    throw CancellationException("OCR request cancelled before native inference")
+                                }
                                 val generationStartedAt = SystemClock.elapsedRealtime()
                                 val completion = try {
                                     HyMT2PenaltyNative.complete(
@@ -354,6 +357,9 @@ object HyMT2Runtime {
                             generatedTokens * 1000.0 / generatedTimeMs
                         } else 0.0
                         Log.i(TAG, "OCR block mapping preserved: input=${sourceBlocks.size}, output=${translatedBlocks.size}")
+                        if (!requestIsCurrent()) {
+                            throw CancellationException("OCR request cancelled before result finalization")
+                        }
                         rememberRecentContext(host, sourceLanguageKey, targetLanguage, sourceText, translated)
                         HyMT2Settings.recordTranslation(
                             appContext,
