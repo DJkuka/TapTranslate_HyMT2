@@ -1,6 +1,12 @@
 package com.tap_to_translate.snap_translate.hymt2
 
 import android.app.Activity
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Typeface
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -28,6 +34,15 @@ class OcrSettingsActivity : Activity() {
     private lateinit var alphaSeek: SeekBar
     private lateinit var alphaValue: TextView
     private lateinit var maxSideSpinner: Spinner
+    private lateinit var detImgModeSpinner: Spinner
+    private lateinit var detLimitSideLenSpinner: Spinner
+    private lateinit var detLimitTypeSpinner: Spinner
+    private lateinit var detMaxCandidatesSpinner: Spinner
+    private lateinit var detScoreModeSpinner: Spinner
+    private lateinit var recBatchSizeSpinner: Spinner
+    private lateinit var detUseDilationSwitch: Switch
+    private lateinit var diagnosticsButton: Button
+    private lateinit var diagnosticsOutput: TextView
     private lateinit var status: TextView
     private lateinit var screenshotFormatSpinner: Spinner
     private lateinit var screenshotFolderLabel: TextView
@@ -188,6 +203,57 @@ class OcrSettingsActivity : Activity() {
             "Для эксперимента можно начать с 2000 px, затем сравнить с 1600 px на той же странице. Если пропадают мелкие или стилизованные надписи, верни 4000 px. Новое значение применяется после полного перезапуска приложения.",
             12f, false, dp(20))
 
+        addText(root, "ДОПОЛНИТЕЛЬНЫЕ ПАРАМЕТРЫ PP-OCRv6", 16f, true, dp(8))
+        addText(root,
+            "Эти параметры соответствуют полям PaddleOCRConfig. Меняй по одному: несколько агрессивных настроек одновременно затрудняют поиск причины пропусков.",
+            13f, false, dp(8))
+
+        detImgModeSpinner = addChoiceSpinner(
+            root, "Цветовой порядок входа детектора (detImgMode)",
+            listOf("BGR", "RGB"), prefs.getString(KEY_DET_IMG_MODE, "BGR") ?: "BGR"
+        )
+        detLimitTypeSpinner = addChoiceSpinner(
+            root, "Правило изменения размера (detLimitType)",
+            listOf("min", "max", "resize_long"), prefs.getString(KEY_DET_LIMIT_TYPE, "min") ?: "min"
+        )
+        detLimitSideLenSpinner = addChoiceSpinner(
+            root, "Опорная сторона детектора, px (detLimitSideLen)",
+            listOf("64", "320", "480", "640", "736", "960", "1280", "1536"),
+            prefs.getInt(KEY_DET_LIMIT_SIDE_LEN, 64).toString()
+        )
+        detMaxCandidatesSpinner = addChoiceSpinner(
+            root, "Максимум контуров-кандидатов (detMaxCandidates)",
+            listOf("500", "1000", "2000", "3000", "5000", "8000"),
+            prefs.getInt(KEY_DET_MAX_CANDIDATES, 3000).toString()
+        )
+        detScoreModeSpinner = addChoiceSpinner(
+            root, "Оценка рамки (detScoreMode)",
+            listOf("fast", "slow"), prefs.getString(KEY_DET_SCORE_MODE, "fast") ?: "fast"
+        )
+        detUseDilationSwitch = Switch(this).apply {
+            text = "Морфологическое расширение карты (detUseDilation)"
+            isChecked = prefs.getBoolean(KEY_DET_USE_DILATION, false)
+        }
+        root.addView(detUseDilationSwitch, matchWrap(dp(10)))
+        recBatchSizeSpinner = addChoiceSpinner(
+            root, "Размер пакета распознавания (recBatchSize)",
+            listOf("1", "2", "4", "8"), prefs.getInt(KEY_REC_BATCH_SIZE, 1).toString()
+        )
+        addText(root,
+            "Больший recBatchSize может ускорить обработку множества строк, но повышает пиковое потребление памяти. Для планшета безопасное исходное значение — 1. detBoxType зафиксирован как quad: другие типы рамок текущая реализация постобработки не поддерживает.",
+            12f, false, dp(16))
+
+        addText(root, "ПРОВЕРКА ПОДКЛЮЧЕНИЯ ДВИЖКОВ И МОДЕЛЕЙ", 16f, true, dp(8))
+        addText(root,
+            "Проверка запускает реальный тестовый проход PP-OCRv6, RT-DETR и BubblePop на синтетической странице. Для ML Kit проверяется наличие host-пути и SDK; для Cloud — регистрация провайдера. Сетевой запрос к Cloud не выполняется.",
+            12f, false, dp(8))
+        diagnosticsOutput = addText(root, "Проверка ещё не запускалась.", 13f, false, dp(4))
+        diagnosticsButton = Button(this).apply {
+            text = "Проверить движки и модели"
+            setOnClickListener { runDiagnostics() }
+        }
+        root.addView(diagnosticsButton, matchWrap(dp(18)))
+
         addText(root, "МАСКА ОБЛАСТЕЙ ДЛЯ ПЕРЕВОДА", 16f, true, dp(8))
         addText(root,
             "BubblePop строит общую маску внутренних областей баблов на всей странице. Она не пытается разделять соединённые баблы на отдельные объекты. OCR-группы PP-OCRv6 остаются самостоятельными; маска будет использоваться как ограничение допустимой зоны компоновки.",
@@ -265,6 +331,13 @@ class OcrSettingsActivity : Activity() {
                     .putBoolean(KEY_BUBBLE_AUTO_WRAP, bubbleWrapSwitch.isChecked)
                     .putInt(KEY_ALPHA_PERCENT, alphaSeek.progress.coerceIn(0, 100))
                     .putInt(KEY_MAX_SIDE, selectedLimit)
+                    .putString(KEY_DET_IMG_MODE, detImgModeSpinner.selectedItem.toString())
+                    .putString(KEY_DET_LIMIT_TYPE, detLimitTypeSpinner.selectedItem.toString())
+                    .putInt(KEY_DET_LIMIT_SIDE_LEN, detLimitSideLenSpinner.selectedItem.toString().toInt())
+                    .putInt(KEY_DET_MAX_CANDIDATES, detMaxCandidatesSpinner.selectedItem.toString().toInt())
+                    .putString(KEY_DET_SCORE_MODE, detScoreModeSpinner.selectedItem.toString())
+                    .putBoolean(KEY_DET_USE_DILATION, detUseDilationSwitch.isChecked)
+                    .putInt(KEY_REC_BATCH_SIZE, recBatchSizeSpinner.selectedItem.toString().toInt())
                     .putFloat(KEY_DET_THRESH, currentFloat(KEY_DET_THRESH, 0.20f))
                     .putFloat(KEY_DET_BOX_THRESH, currentFloat(KEY_DET_BOX_THRESH, 0.45f))
                     .putFloat(KEY_DET_UNCLIP_RATIO, currentFloat(KEY_DET_UNCLIP_RATIO, 1.40f))
@@ -348,6 +421,120 @@ class OcrSettingsActivity : Activity() {
             override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
             override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
         })
+    }
+
+    private fun addChoiceSpinner(parent: LinearLayout, titleText: String, choices: List<String>, selected: String): Spinner {
+        addText(parent, titleText, 13f, true, 2)
+        val spinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@OcrSettingsActivity, android.R.layout.simple_spinner_item, choices).also {
+                it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            }
+            setSelection(choices.indexOf(selected).coerceAtLeast(0))
+        }
+        parent.addView(spinner, matchWrap(12))
+        return spinner
+    }
+
+    private fun runDiagnostics() {
+        diagnosticsButton.isEnabled = false
+        diagnosticsOutput.text = "Проверка выполняется. Модели могут загружаться впервые…"
+        Thread({
+            val lines = ArrayList<String>()
+            var testBitmap: Bitmap? = null
+            fun check(label: String, action: () -> String) {
+                try { lines.add(label + ": " + action()) }
+                catch (t: Throwable) {
+                    var root: Throwable = t
+                    while (root.cause != null && root.cause !== root) root = root.cause!!
+                    lines.add(label + ": ОШИБКА — " + (root.message ?: root.javaClass.simpleName))
+                    Log.e(TAG, "OCR diagnostic failed: " + label, t)
+                }
+            }
+            try {
+                val diagnosticBitmap = Bitmap.createBitmap(1280, 360, Bitmap.Config.ARGB_8888)
+                testBitmap = diagnosticBitmap
+                val canvas = Canvas(diagnosticBitmap)
+                canvas.drawColor(Color.WHITE)
+                val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.BLACK
+                    textSize = 92f
+                    typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                }
+                canvas.drawText("COMIC OCR 123", 36f, 145f, paint)
+                canvas.drawText("TEST PAGE 456", 36f, 275f, paint)
+
+                var selectorOptions = emptySet<String>()
+                check("Штатный OCR-селектор") {
+                    val selector = Class.forName("vh.l")
+                    val selected = selector.getMethod("c").invoke(null)?.toString() ?: "не определён"
+                    selectorOptions = readSelectorOptions(selector)
+                    "доступен; выбран: " + selected + "; пункты: " +
+                        if (selectorOptions.isEmpty()) "список не удалось прочитать" else selectorOptions.joinToString()
+                }
+                check("ML Kit") {
+                    val registered = selectorOptions.contains("ML Kit (Device Text Recognition)")
+                    val hostPath = classAvailable("vh.j") && classAvailable("nf.d")
+                    val sdk = classAvailable("com.google.mlkit.vision.text.TextRecognition")
+                    "пункт меню=" + (if (registered) "да" else "не подтверждён") +
+                        "; host OCR-путь=" + (if (hostPath) "найден" else "не найден") +
+                        "; SDK=" + (if (sdk) "найден" else "не найден") +
+                        "; фактический запрос этим тестом не выполнялся"
+                }
+                check("Cloud Text Recognition") {
+                    if (selectorOptions.contains("Cloud Text Recognition"))
+                        "провайдер зарегистрирован в штатном списке; реальное соединение не проверялось"
+                    else "регистрация провайдера не подтверждена; сетевой запрос не выполнялся"
+                }
+                check("PP-OCRv6") {
+                    val cls = Class.forName("com.tap_to_translate.snap_translate.hymt2.ocr.PaddleOcrLiveBridge")
+                    val method = cls.getMethod("diagnosticSelfTest", Context::class.java, Bitmap::class.java)
+                    method.invoke(null, applicationContext, diagnosticBitmap)?.toString() ?: "тест вернул пустой результат"
+                }
+                check("RT-DETR") {
+                    val cls = Class.forName("com.tap_to_translate.snap_translate.hymt2.ocr.RtDetrLiveBridge")
+                    val method = cls.getMethod("diagnosticRtDetr", Context::class.java, Bitmap::class.java)
+                    method.invoke(null, applicationContext, testBitmap)?.toString() ?: "тест вернул пустой результат"
+                }
+                check("BubblePop") {
+                    val cls = Class.forName("com.tap_to_translate.snap_translate.hymt2.ocr.RtDetrLiveBridge")
+                    val method = cls.getMethod("diagnosticBubblePop", Context::class.java, Bitmap::class.java)
+                    val result = method.invoke(null, applicationContext, testBitmap)?.toString() ?: "тест вернул пустой результат"
+                    result + "; настройка использования сейчас: " +
+                        if (getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(KEY_BUBBLEPOP_PAGE_MASK, false)) "включена" else "выключена"
+                }
+            } catch (t: Throwable) {
+                var root: Throwable = t
+                while (root.cause != null && root.cause !== root) root = root.cause!!
+                lines.add("Общая ошибка диагностики: " + (root.message ?: root.javaClass.simpleName))
+                Log.e(TAG, "OCR diagnostics crashed", t)
+            } finally {
+                testBitmap?.recycle()
+            }
+            runOnUiThread {
+                diagnosticsOutput.text = lines.joinToString("\n")
+                diagnosticsButton.isEnabled = true
+            }
+        }, "taptranslate-ocr-diagnostics").start()
+    }
+
+    private fun classAvailable(name: String): Boolean = try {
+        Class.forName(name, false, classLoader)
+        true
+    } catch (_: Throwable) { false }
+
+    private fun readSelectorOptions(selector: Class<*>): Set<String> {
+        val output = LinkedHashSet<String>()
+        selector.declaredFields.forEach { field ->
+            try {
+                if (!java.lang.reflect.Modifier.isStatic(field.modifiers)) return@forEach
+                field.isAccessible = true
+                when (val value = field.get(null)) {
+                    is Array<*> -> value.filterIsInstance<String>().forEach { output.add(it) }
+                    is Iterable<*> -> value.filterIsInstance<String>().forEach { output.add(it) }
+                }
+            } catch (t: Throwable) { Log.d(TAG, "Could not inspect OCR selector field " + field.name, t) }
+        }
+        return output
     }
 
     private fun refreshFloatControl(spec: FloatControlSpec) {
@@ -438,6 +625,13 @@ class OcrSettingsActivity : Activity() {
         private const val KEY_DET_BOX_THRESH = "ocr_det_box_thresh"
         private const val KEY_DET_UNCLIP_RATIO = "ocr_det_unclip_ratio"
         private const val KEY_REC_SCORE_THRESH = "ocr_rec_score_thresh"
+        private const val KEY_DET_IMG_MODE = "ocr_det_img_mode"
+        private const val KEY_DET_LIMIT_SIDE_LEN = "ocr_det_limit_side_len"
+        private const val KEY_DET_LIMIT_TYPE = "ocr_det_limit_type"
+        private const val KEY_DET_MAX_CANDIDATES = "ocr_det_max_candidates"
+        private const val KEY_DET_USE_DILATION = "ocr_det_use_dilation"
+        private const val KEY_DET_SCORE_MODE = "ocr_det_score_mode"
+        private const val KEY_REC_BATCH_SIZE = "ocr_rec_batch_size"
         private const val SCREENSHOT_PREFS = "taptranslate_screenshot_settings"
         private const val KEY_SCREENSHOT_TREE_URI = "screenshot_tree_uri"
         private const val KEY_SCREENSHOT_FORMAT = "screenshot_format"

@@ -90,6 +90,27 @@ public final class BubblePopPageMaskDetector implements AutoCloseable {
         }
     }
 
+    /** Execute a real segmentation pass for the OCR diagnostics screen. */
+    public String diagnostic(Bitmap bitmap) {
+        if (bitmap == null || bitmap.isRecycled()) throw new IllegalArgumentException("BubblePop diagnostic image unavailable");
+        Mat image = new Mat();
+        BubblePopSegmenter.SegmentationResult result = null;
+        try {
+            Utils.bitmapToMat(bitmap, image);
+            result = segmenter.getSegmentation(image);
+            long maskPixels = org.opencv.core.Core.countNonZero(result.mask);
+            long boundaryPixels = org.opencv.core.Core.countNonZero(result.boundary);
+            long total = (long) bitmap.getWidth() * bitmap.getHeight();
+            return "PASS: ONNX-модель загружена, инференс выполнен; mask_pixels=" + maskPixels + "/" + total
+                    + "; boundary_pixels=" + boundaryPixels + "; image=" + bitmap.getWidth() + "x" + bitmap.getHeight();
+        } catch (Throwable error) {
+            throw new IllegalStateException("BubblePop inference failed: " + error.getMessage(), error);
+        } finally {
+            if (result != null) result.release();
+            image.release();
+        }
+    }
+
     @Override public void close() {
         segmenter.close();
     }

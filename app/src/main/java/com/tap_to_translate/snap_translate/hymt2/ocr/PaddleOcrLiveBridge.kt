@@ -73,6 +73,33 @@ object PaddleOcrLiveBridge {
         }
     }
 
+    /** Execute a real PP-OCRv6 detector + recognizer pass using the same engine as live translation. */
+    @JvmStatic
+    fun diagnosticSelfTest(context: Context?, source: Bitmap?): String {
+        if (context == null) throw IllegalArgumentException("Контекст приложения недоступен")
+        if (source == null || source.isRecycled) throw IllegalArgumentException("Тестовое изображение недоступно")
+        if (!busy.compareAndSet(false, true)) return "BUSY: PP-OCRv6 занят текущим распознаванием; повтори позже"
+        var bitmap: Bitmap? = null
+        try {
+            val testBitmap = source.copy(Bitmap.Config.ARGB_8888, false)
+                ?: throw IllegalStateException("Не удалось подготовить тестовое изображение")
+            bitmap = testBitmap
+            val ocr = getEngine(context.applicationContext ?: context)
+            val result = runBlocking { ocr.recognize(testBitmap) }
+            val state = if (result.lineCount > 0) "PASS: распознано строк=${result.lineCount}"
+                else "INFERENCE_OK: инференс завершён, но тестовые строки не обнаружены"
+            val report = state + "; total_ms=${result.totalTimeMs}; det_ms=${result.detectionTimeMs}; rec_ms=${result.recognitionTimeMs}; cold_load_ms=${result.coldLoadTimeMs}"
+            Log.i(TAG, "PP-OCR diagnostic: " + report)
+            return report
+        } catch (t: Throwable) {
+            Log.e(TAG, "PP-OCR diagnostic failed", t)
+            throw IllegalStateException("PP-OCRv6 test failed: ${t.message ?: t.javaClass.simpleName}", t)
+        } finally {
+            bitmap?.let { if (!it.isRecycled) it.recycle() }
+            busy.set(false)
+        }
+    }
+
     private fun getEngine(context: Context): PaddleOCR {
         engine?.let { return it }
         synchronized(lock) {
@@ -85,21 +112,40 @@ object PaddleOcrLiveBridge {
             val detBoxThresh = ocrPrefs.getFloat("ocr_det_box_thresh", 0.45f).coerceIn(0.10f, 0.90f)
             val detUnclipRatio = ocrPrefs.getFloat("ocr_det_unclip_ratio", 1.40f).coerceIn(1.00f, 2.00f)
             val recScoreThresh = ocrPrefs.getFloat("ocr_rec_score_thresh", 0.00f).coerceIn(0.00f, 1.00f)
-            Log.i(TAG, "PP-OCRv6 config detThresh=" + detThresh +
-                " detBoxThresh=" + detBoxThresh +
-                " detUnclipRatio=" + detUnclipRatio +
-                " recScoreThresh=" + recScoreThresh +
+            val detImgMode = (ocrPrefs.getString("ocr_det_img_mode", "BGR") ?: "BGR")
+                .uppercase(Locale.ROOT).let { if (it == "RGB" || it == "BGR") it else "BGR" }
+            val detLimitSideLen = ocrPrefs.getInt("ocr_det_limit_side_len", 64).coerceIn(32, 1536)
+            val detLimitType = (ocrPrefs.getString("ocr_det_limit_type", "min") ?: "min")
+                .lowercase(Locale.ROOT).let { if (it in setOf("min", "max", "resize_long")) it else "min" }
+            val detMaxCandidates = ocrPrefs.getInt("ocr_det_max_candidates", 3000).coerceIn(100, 20000)
+            val detUseDilation = ocrPrefs.getBoolean("ocr_det_use_dilation", false)
+            val detScoreMode = (ocrPrefs.getString("ocr_det_score_mode", "fast") ?: "fast")
+                .lowercase(Locale.ROOT).let { if (it == "fast" || it == "slow") it else "fast" }
+            val recBatchSize = ocrPrefs.getInt("ocr_rec_batch_size", 1).coerceIn(1, 8)
+            Log.i(TAG, "PP-OCRv6 config detImgMode=" + detImgMode +
+                " detLimitSideLen=" + detLimitSideLen + " detLimitType=" + detLimitType +
+                " detThresh=" + detThresh + " detBoxThresh=" + detBoxThresh +
+                " detUnclipRatio=" + detUnclipRatio + " detMaxCandidates=" + detMaxCandidates +
+                " detUseDilation=" + detUseDilation + " detScoreMode=" + detScoreMode +
+                " recScoreThresh=" + recScoreThresh + " recBatchSize=" + recBatchSize +
                 " detMaxSideLimit=" + maxSideLimit)
             val created = runBlocking {
                 PaddleOCR.create(
                     context = context,
                     config = PaddleOCRConfig(
+                        detImgMode = detImgMode,
+                        detLimitSideLen = detLimitSideLen,
+                        detLimitType = detLimitType,
+                        detMaxSideLimit = maxSideLimit,
                         detThresh = detThresh,
                         detBoxThresh = detBoxThresh,
                         detUnclipRatio = detUnclipRatio,
+                        detMaxCandidates = detMaxCandidates,
+                        detUseDilation = detUseDilation,
+                        detScoreMode = detScoreMode,
                         recScoreThresh = recScoreThresh,
-                        recBatchSize = 1,
-                        detMaxSideLimit = maxSideLimit
+                        recBatchSize = recBatchSize,
+                        detBoxType = "quad"
                     ),
                     engineConfig = EngineConfig(numThreads = 2),
                     detModelAssetPath = "models/det/inference.onnx",

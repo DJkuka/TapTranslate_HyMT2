@@ -550,6 +550,32 @@ public final class RtDetrLiveBridge {
         }
     }
 
+    /** Run a real RT-DETR inference with the cached model used by the live OCR path. */
+    public static String diagnosticRtDetr(Context context, Bitmap bitmap) throws Exception {
+        if (context == null || bitmap == null || bitmap.isRecycled()) {
+            throw new IllegalArgumentException("RT-DETR diagnostic context/image unavailable");
+        }
+        RtDetrComicRegionDetector active = getDetector(context.getApplicationContext());
+        OcrFrame frame = new OcrFrame(bitmap, new Rect(0, 0, bitmap.getWidth(), bitmap.getHeight()), 0, 0, 1f, 1f);
+        List<DetectedRegion> regions = active.detect(frame);
+        int containers = 0;
+        int textRegions = 0;
+        for (DetectedRegion region : regions) {
+            if (region.getKind() == OcrRegionKind.BUBBLE_CONTAINER) containers++; else textRegions++;
+        }
+        return "PASS: ONNX-модель загружена, инференс выполнен; областей=" + regions.size()
+                + "; bubble_containers=" + containers + "; text_regions=" + textRegions
+                + "; image=" + bitmap.getWidth() + "x" + bitmap.getHeight();
+    }
+
+    /** Run a real BubblePop segmentation inference with the cached model. */
+    public static String diagnosticBubblePop(Context context, Bitmap bitmap) throws Exception {
+        if (context == null || bitmap == null || bitmap.isRecycled()) {
+            throw new IllegalArgumentException("BubblePop diagnostic context/image unavailable");
+        }
+        return getPageMaskDetector(context.getApplicationContext()).diagnostic(bitmap);
+    }
+
     private static Rect readBlockBounds(Object block) {
         if (block == null) return null;
         try {

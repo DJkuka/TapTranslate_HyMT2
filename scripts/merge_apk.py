@@ -2125,6 +2125,7 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
                     "com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopPageMaskDetector",
                     "com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopSegmenter",
                     "com/tap_to_translate/snap_translate/hymt2/ocr/BubbleTextLayout",
+                    "com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrLiveBridge",
                     "com/tap_to_translate/snap_translate/hymt2/ocr/DetectedRegion",
                     "com/tap_to_translate/snap_translate/hymt2/ocr/OcrRegionKind",
                     "com/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge",

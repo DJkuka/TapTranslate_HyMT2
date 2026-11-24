@@ -4,7 +4,7 @@ name: Build Tap Translate 1.125 FontFit AutoFill + Hy-MT2 Vulkan
 on:
   workflow_dispatch:
   push:
-    branches: [ main, vulkan-v12-integration, ocr-hybrid-prototype, ocr-paddle-prototype, ocr-region-editing, ocr-region-geometry, ocr-region-gesture-presets, bubblepop-text-regions-apk219, apk219-bubblepop-preserve-hymt, taptranslate-1.125-smooth-font-resize, taptranslate-1.126-line-spacing-mask-inset ]
+    branches: [ main, vulkan-v12-integration, ocr-hybrid-prototype, ocr-paddle-prototype, ocr-region-editing, ocr-region-geometry, ocr-region-gesture-presets, bubblepop-text-regions-apk219, apk219-bubblepop-preserve-hymt, taptranslate-1.125-smooth-font-resize, taptranslate-1.126-line-spacing-mask-inset, taptranslate-1.127-ppocr-settings-diagnostics ]
 
 permissions:
   contents: write
@@ -87,7 +87,7 @@ jobs:
           sha256sum input/TapTranslate-1.125-HyMT2-STQ1_0-APK219-unsigned.apk
 
       - name: Export APK219 OCR renderer source for patch compatibility
-        if: (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset')
+        if: (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || (github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset' || github.ref == 'refs/heads/taptranslate-1.127-ppocr-settings-diagnostics'))
         shell: bash
         run: |
           set -euo pipefail
@@ -104,7 +104,7 @@ jobs:
           echo "APK219 renderer sources exported."
       
       - name: Upload APK219 OCR renderer source
-        if: (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset')
+        if: (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || (github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset' || github.ref == 'refs/heads/taptranslate-1.127-ppocr-settings-diagnostics'))
         uses: actions/upload-artifact@v4
         with:
           name: APK219-renderer-source
@@ -125,7 +125,7 @@ jobs:
           test "$(stat -c%s "$model")" -eq 11120765
 
       - name: Fetch pinned PP-OCRv6 small ONNX models and verify hashes
-        if: github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing' || github.ref == 'refs/heads/ocr-region-geometry' || (github.ref == 'refs/heads/ocr-region-gesture-presets' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset') || (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset')
+        if: github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing' || github.ref == 'refs/heads/ocr-region-geometry' || (github.ref == 'refs/heads/ocr-region-gesture-presets' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || (github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset' || github.ref == 'refs/heads/taptranslate-1.127-ppocr-settings-diagnostics')) || (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || (github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset' || github.ref == 'refs/heads/taptranslate-1.127-ppocr-settings-diagnostics'))
         shell: bash
         run: |
           set -euo pipefail
@@ -145,7 +145,7 @@ jobs:
           echo "PP-OCRv6 models and matching 18,708-character dictionary are ready."
 
       - name: Fetch pinned BubblePop page-mask model
-        if: (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset')
+        if: (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || (github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset' || github.ref == 'refs/heads/taptranslate-1.127-ppocr-settings-diagnostics'))
         shell: bash
         run: |
           set -euo pipefail
@@ -253,7 +253,7 @@ jobs:
           ls -lh build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
 
       - name: Verify BubblePop rendering and PP-OCRv6 live handoff
-        if: (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset')
+        if: (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || (github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset' || github.ref == 'refs/heads/taptranslate-1.127-ppocr-settings-diagnostics'))
         shell: bash
         run: |
           set -euo pipefail
@@ -306,7 +306,7 @@ jobs:
           echo "Verified BubblePop masks, word-safe layout, non-bubble opacity compatibility, per-block opacity slider, PP-OCRv6 models and OCR handoff."
       
       - name: Verify hybrid OCR contracts are present in the final APK DEX files
-        if: github.ref == 'refs/heads/ocr-hybrid-prototype' || github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing' || github.ref == 'refs/heads/ocr-region-geometry' || (github.ref == 'refs/heads/ocr-region-gesture-presets' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset') || (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset')
+        if: github.ref == 'refs/heads/ocr-hybrid-prototype' || github.ref == 'refs/heads/ocr-paddle-prototype' || github.ref == 'refs/heads/ocr-region-editing' || github.ref == 'refs/heads/ocr-region-geometry' || (github.ref == 'refs/heads/ocr-region-gesture-presets' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || (github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset' || github.ref == 'refs/heads/taptranslate-1.127-ppocr-settings-diagnostics')) || (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || (github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset' || github.ref == 'refs/heads/taptranslate-1.127-ppocr-settings-diagnostics'))
         shell: bash
         run: |
           set -euo pipefail
@@ -383,7 +383,7 @@ jobs:
           echo "RT-DETR detector, ONNX Runtime classes and OCR pipeline are present in the unsigned APK."
 
       - name: Verify Paddle OCR runtime, model assets and diagnostic hook
-        if: github.ref == 'refs/heads/ocr-paddle-prototype' || (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset')
+        if: github.ref == 'refs/heads/ocr-paddle-prototype' || (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || (github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset' || github.ref == 'refs/heads/taptranslate-1.127-ppocr-settings-diagnostics'))
         shell: bash
         run: |
           set -euo pipefail
@@ -437,7 +437,7 @@ jobs:
           PY
 
       - name: Verify double-tap cancellation and compact opacity dialog
-        if: github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset'
+        if: github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || (github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset' || github.ref == 'refs/heads/taptranslate-1.127-ppocr-settings-diagnostics')
         shell: bash
         run: |
           set -euo pipefail
