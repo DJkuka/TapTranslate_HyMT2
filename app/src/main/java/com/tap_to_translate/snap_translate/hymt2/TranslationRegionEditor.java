@@ -527,18 +527,19 @@ public final class TranslationRegionEditor {
         LinearLayout container = new LinearLayout(context);
         container.setOrientation(LinearLayout.VERTICAL);
         int horizontal = Math.round(dp(context, 20));
-        container.setPadding(horizontal, Math.round(dp(context, 12)),
-                horizontal, Math.round(dp(context, 4)));
+        // Keep the dialog compact vertically; preserve its current width.
+        container.setPadding(horizontal, Math.round(dp(context, 4)),
+                horizontal, 0);
 
         TextView explanation = new TextView(context);
-        explanation.setText("Регулируется заливка прямоугольника. Сам текст остаётся полностью видимым.");
-        explanation.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        explanation.setText("Меняется только заливка, не сам текст.");
+        explanation.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         container.addView(explanation, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         TextView valueLabel = new TextView(context);
-        valueLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        valueLabel.setPadding(0, Math.round(dp(context, 10)), 0, Math.round(dp(context, 4)));
+        valueLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        valueLabel.setPadding(0, Math.round(dp(context, 4)), 0, 0);
         container.addView(valueLabel, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -546,7 +547,7 @@ public final class TranslationRegionEditor {
         seekBar.setMax(100);
         seekBar.setProgress(initialPercent);
         container.addView(seekBar, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                ViewGroup.LayoutParams.MATCH_PARENT, Math.round(dp(context, 32))));
 
         AlertDialog dialog = new AlertDialog.Builder(context)
                 .setTitle("Непрозрачность свободного текста")
