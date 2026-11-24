@@ -4,7 +4,7 @@ name: Build Tap Translate 1.125 FontFit AutoFill + Hy-MT2 Vulkan
 on:
   workflow_dispatch:
   push:
-    branches: [ main, vulkan-v12-integration, ocr-hybrid-prototype, ocr-paddle-prototype, ocr-region-editing, ocr-region-geometry, ocr-region-gesture-presets, bubblepop-text-regions-apk219, apk219-bubblepop-preserve-hymt ]
+    branches: [ main, vulkan-v12-integration, ocr-hybrid-prototype, ocr-paddle-prototype, ocr-region-editing, ocr-region-geometry, ocr-region-gesture-presets, bubblepop-text-regions-apk219, apk219-bubblepop-preserve-hymt, taptranslate-1.125-smooth-font-resize ]
 
 permissions:
   contents: write
