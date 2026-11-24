@@ -11,6 +11,7 @@ import java.lang.reflect.Constructor;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Set;
 import java.util.List;
 import java.util.Map;
@@ -39,7 +40,7 @@ public final class RtDetrLiveBridge {
     private static final Map<Bitmap, Long> FRAME_GENERATIONS =
             Collections.synchronizedMap(new WeakHashMap<Bitmap, Long>());
     private static final Map<Object, Long> RESULT_GENERATIONS =
-            Collections.synchronizedMap(new WeakHashMap<Object, Long>());
+            Collections.synchronizedMap(new IdentityHashMap<Object, Long>());
     private static final Map<Object, Long> HOST_REQUEST_GENERATIONS =
             Collections.synchronizedMap(new WeakHashMap<Object, Long>());
     private static final Map<Object, PendingFrame> PENDING =
