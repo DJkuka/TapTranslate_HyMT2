@@ -11,6 +11,7 @@ import java.lang.reflect.Constructor;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Set;
 import java.util.List;
 import java.util.Map;
@@ -20,6 +21,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Live bridge from the host's existing vh.j OCR coordinator to RT-DETR.
@@ -32,6 +34,15 @@ import java.util.concurrent.TimeUnit;
 public final class RtDetrLiveBridge {
     private static final String TAG = "TapTranslateRTDETR";
     private static final Object LOCK = new Object();
+    // One active screen-translation request at a time. Tokens flow from the exact
+    // screenshot Bitmap to the resulting OCR List and finally to the Hy-MT2 host.
+    private static final AtomicLong REQUEST_GENERATION = new AtomicLong(0L);
+    private static final Map<Bitmap, Long> FRAME_GENERATIONS =
+            Collections.synchronizedMap(new WeakHashMap<Bitmap, Long>());
+    private static final Map<Object, Long> RESULT_GENERATIONS =
+            Collections.synchronizedMap(new IdentityHashMap<Object, Long>());
+    private static final Map<Object, Long> HOST_REQUEST_GENERATIONS =
+            Collections.synchronizedMap(new IdentityHashMap<Object, Long>());
     private static final Map<Object, PendingFrame> PENDING =
             Collections.synchronizedMap(new WeakHashMap<Object, PendingFrame>());
     private static final Map<Object, List<DetectedRegion>> ACTIVE_REGIONS =
@@ -71,9 +82,89 @@ public final class RtDetrLiveBridge {
 
     private RtDetrLiveBridge() {}
 
+    /** Invalidates in-flight OCR and translation work when the host double-tap cancel is used. */
+    public static void cancelActiveRequest() {
+        long generation;
+        synchronized (LOCK) {
+            generation = REQUEST_GENERATION.incrementAndGet();
+            for (PendingFrame pending : PENDING.values()) {
+                if (pending != null && !pending.task.isDone()) pending.task.cancel(true);
+            }
+            PENDING.clear();
+            ACTIVE_REGIONS.clear();
+            RESULT_GENERATIONS.clear();
+            HOST_REQUEST_GENERATIONS.clear();
+        }
+        Log.i(TAG, "Active screen translation cancelled; generation=" + generation);
+    }
+
+    /** Called from vh/j.l before an OCR result is handed to the host service. */
+    public static boolean acceptOcrResult(Object owner, Bitmap source, List<?> result) {
+        if (source == null || result == null) return true;
+        Long generation = FRAME_GENERATIONS.get(source);
+        if (generation == null) return true; // Preserve non-hooked/manual OCR paths.
+        if (generation.longValue() != REQUEST_GENERATION.get()) {
+            Log.i(TAG, "Discarding stale OCR result; frameGeneration=" + generation
+                    + " activeGeneration=" + REQUEST_GENERATION.get());
+            return false;
+        }
+        RESULT_GENERATIONS.put(result, generation);
+        return true;
+    }
+
+    /** Early guard in ScreenTranslateService.c(List), before changing the visible overlay. */
+    public static boolean isOcrResultCurrent(Object result) {
+        if (result == null) return true;
+        Long generation = RESULT_GENERATIONS.get(result);
+        return generation == null || generation.longValue() == REQUEST_GENERATION.get();
+    }
+
+    /** Associates the accepted OCR list with the host object that invokes HyMT2Runtime.translate. */
+    public static boolean bindHostRequest(Object host, Object result) {
+        if (host == null || result == null) return true;
+        Long generation = RESULT_GENERATIONS.remove(result);
+        if (generation == null) return true;
+        if (generation.longValue() != REQUEST_GENERATION.get()) {
+            Log.i(TAG, "Discarding stale host handoff; frameGeneration=" + generation
+                    + " activeGeneration=" + REQUEST_GENERATION.get());
+            return false;
+        }
+        HOST_REQUEST_GENERATIONS.put(host, generation);
+        return true;
+    }
+
+    /** Consumes the request token once, at the entry to HyMT2Runtime.translate. */
+    public static long takeHostRequestGeneration(Object host) {
+        if (host == null) return 0L;
+        Long generation = HOST_REQUEST_GENERATIONS.remove(host);
+        return generation == null ? 0L : generation.longValue();
+    }
+
+    /** A zero token denotes a manual/non-OCR translation and is never invalidated here. */
+    public static boolean isRequestGenerationCurrent(long generation) {
+        return generation == 0L || generation == REQUEST_GENERATION.get();
+    }
+
+    private static boolean isFrameCurrent(Bitmap source) {
+        if (source == null) return false;
+        Long generation = FRAME_GENERATIONS.get(source);
+        return generation == null || generation.longValue() == REQUEST_GENERATION.get();
+    }
+
     /** Called from the real vh.j.j(Bitmap) entry point before the existing OCR starts. */
     public static void onFrame(final Object owner, final Bitmap source) {
         if (owner == null || source == null || source.isRecycled()) return;
+
+        // A new screenshot supersedes every older OCR/translation request, even when
+        // optional RT-DETR/Paddle features are disabled for this capture.
+        synchronized (LOCK) {
+            PendingFrame previous = PENDING.get(owner);
+            if (previous != null && previous.source == source && !previous.task.isDone()) return;
+            long generation = REQUEST_GENERATION.incrementAndGet();
+            FRAME_GENERATIONS.put(source, Long.valueOf(generation));
+            RESULT_GENERATIONS.clear();
+            HOST_REQUEST_GENERATIONS.clear();
+        }
 
         final Context context = resolveContext(owner);
         if (context == null) {
@@ -180,6 +271,10 @@ public final class RtDetrLiveBridge {
             Log.w(TAG, "hybrid OCR skipped: null owner/result/source");
             return;
         }
+        if (!isFrameCurrent(source)) {
+            Log.i(TAG, "Stale OCR callback ignored before region/Paddle processing");
+            return;
+        }
 
         final Context resolvedContext = resolveContext(owner);
         final Context context = resolvedContext != null ? resolvedContext : hostContext;
@@ -225,6 +320,10 @@ public final class RtDetrLiveBridge {
         try {
             List<PaddleOcrTextGroup> paddleGroups = PaddleOcrLiveBridge.recognizeBlocking(
                     context, source, regions, 20000L);
+            if (!isFrameCurrent(source)) {
+                Log.i(TAG, "Discarding Paddle OCR output for a cancelled/stale frame");
+                return;
+            }
             if (paddleGroups != null && !paddleGroups.isEmpty()) {
                 @SuppressWarnings("unchecked")
                 List<Object> blocks = (List<Object>) mlKitResult.getClass().getField("a").get(mlKitResult);
