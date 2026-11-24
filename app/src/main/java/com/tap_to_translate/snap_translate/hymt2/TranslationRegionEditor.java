@@ -394,7 +394,7 @@ public final class TranslationRegionEditor {
         state.overlay.clearDrag();
         updateSelectionButtons(state);
         state.overlay.invalidate();
-        toast(state.root, "Перетаскивание — сдвиг текста; углы — размер шрифта");
+        toast(state.root, "Перетаскивание — сдвиг текста; углы: по диагонали — размер, вверх/вниз — межстрочный интервал");
     }
 
     private static float[] getTextTransform(Object item) {
@@ -407,11 +407,12 @@ public final class TranslationRegionEditor {
         }
     }
 
-    private static void setTextTransform(Object item, float dx, float dy, float scale) {
+    private static void setTextTransform(
+            Object item, float dx, float dy, float scale, float lineSpacing) {
         try {
             Class.forName(BRIDGE).getMethod("setBubbleTextTransform",
-                    Object.class, Float.TYPE, Float.TYPE, Float.TYPE)
-                    .invoke(null, item, dx, dy, scale);
+                    Object.class, Float.TYPE, Float.TYPE, Float.TYPE, Float.TYPE)
+                    .invoke(null, item, dx, dy, scale, lineSpacing);
         } catch (Throwable error) {
             Log.w(TAG, "Could not update BubblePop text transform", error);
         }
@@ -871,6 +872,8 @@ public final class TranslationRegionEditor {
         private boolean moved;
         private boolean dragging;
         private DragMode dragMode = DragMode.NONE;
+        // 0 = not classified, 1 = font size, 2 = line spacing.
+        private int textGestureMode;
         private Rect dragStart;
         private int[] rawStart;
         private float[] textTransformStart;
@@ -966,6 +969,7 @@ public final class TranslationRegionEditor {
                     exitDoubleTap = false;
                     dragging = false;
                     dragMode = DragMode.NONE;
+                    textGestureMode = 0;
                     dragStart = null;
                     rawStart = null;
                     twoFingerMove = false;
@@ -1192,33 +1196,60 @@ public final class TranslationRegionEditor {
             float nextX = textTransformStart[0];
             float nextY = textTransformStart[1];
             float nextScale = textTransformStart[2];
+            float startLineSpacing = textTransformStart.length > 3
+                    ? textTransformStart[3] : 1.0f;
+            float nextLineSpacing = startLineSpacing;
+
             if (dragMode == DragMode.NONE) {
                 nextX += dx;
                 nextY += dy;
             } else {
-                // Treat corner movement as a continuous font-size control.
-                // The gesture is always measured from ACTION_DOWN, so scale does
-                // not accumulate rounding/error from individual MotionEvents.
-                float outward;
-                switch (dragMode) {
-                    case NW: outward = -dx - dy; break;
-                    case NE: outward = dx - dy; break;
-                    case SE: outward = dx + dy; break;
-                    case SW: outward = -dx + dy; break;
-                    default: outward = 0f;
+                // Lock the gesture to one axis once the finger has moved far
+                // enough: vertical = line spacing, diagonal/horizontal = font size.
+                // This prevents one drag from changing both values.
+                float directionGate = Math.max(dp(getContext(), 16.0f), touchSlop * 1.5f);
+                if (textGestureMode == 0
+                        && Math.max(Math.abs(dx), Math.abs(dy)) >= directionGate) {
+                    textGestureMode = Math.abs(dy) >= Math.abs(dx) * 1.25f ? 2 : 1;
                 }
-                final float minScale = 0.25f;
-                final float maxScale = 2.50f;
-                float availableRange = outward >= 0f
-                        ? maxScale - textTransformStart[2]
-                        : textTransformStart[2] - minScale;
-                float sensitivity = Math.max(dp(getContext(), 64.0f),
-                        Math.min(dp(getContext(), 128.0f),
-                                (dragStart.width() + dragStart.height()) * 0.50f));
-                nextScale = Math.max(minScale, Math.min(maxScale,
-                        textTransformStart[2] + (outward / sensitivity) * availableRange));
+                if (textGestureMode == 0) return;
+
+                if (textGestureMode == 2) {
+                    // Vertical movement changes the distance between baselines.
+                    final float minLineSpacing = 0.85f;
+                    final float maxLineSpacing = 1.50f;
+                    float availableRange = dy >= 0f
+                            ? maxLineSpacing - startLineSpacing
+                            : startLineSpacing - minLineSpacing;
+                    float sensitivity = Math.max(dp(getContext(), 72.0f),
+                            Math.min(dp(getContext(), 120.0f), dragStart.height() * 0.80f));
+                    nextLineSpacing = Math.max(minLineSpacing, Math.min(maxLineSpacing,
+                            startLineSpacing + (dy / sensitivity) * availableRange));
+                } else {
+                    // The font-size gesture is measured from ACTION_DOWN, avoiding
+                    // cumulative rounding across individual MotionEvents.
+                    float outward;
+                    switch (dragMode) {
+                        case NW: outward = -dx - dy; break;
+                        case NE: outward = dx - dy; break;
+                        case SE: outward = dx + dy; break;
+                        case SW: outward = -dx + dy; break;
+                        default: outward = 0f;
+                    }
+                    final float minScale = 0.25f;
+                    final float maxScale = 2.50f;
+                    float availableRange = outward >= 0f
+                            ? maxScale - textTransformStart[2]
+                            : textTransformStart[2] - minScale;
+                    // About 25% more travel is required for the same font-size change.
+                    float sensitivity = Math.max(dp(getContext(), 80.0f),
+                            Math.min(dp(getContext(), 160.0f),
+                                    (dragStart.width() + dragStart.height()) * 0.625f));
+                    nextScale = Math.max(minScale, Math.min(maxScale,
+                            textTransformStart[2] + (outward / sensitivity) * availableRange));
+                }
             }
-            setTextTransform(state.transformTarget, nextX, nextY, nextScale);
+            setTextTransform(state.transformTarget, nextX, nextY, nextScale, nextLineSpacing);
             refreshRenderers(state);
         }
 
@@ -1335,6 +1366,7 @@ public final class TranslationRegionEditor {
         private void clearDrag() {
             dragging = false;
             dragMode = DragMode.NONE;
+            textGestureMode = 0;
             dragStart = null;
             rawStart = null;
             textTransformStart = null;

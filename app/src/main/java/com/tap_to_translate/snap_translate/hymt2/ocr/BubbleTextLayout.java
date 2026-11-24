@@ -41,6 +41,15 @@ public final class BubbleTextLayout {
             Rect maskBounds, Rect overlayBounds, CharSequence source, TextPaint paint,
             float minTextSize, float maxTextSize, int padding, boolean autoWrap,
             float offsetX, float offsetY, float fontScale) {
+        return draw(canvas, mask, maskWidth, maskHeight, maskBounds, overlayBounds,
+                source, paint, minTextSize, maxTextSize, padding, autoWrap,
+                offsetX, offsetY, fontScale, 1.0f);
+    }
+
+    public static boolean draw(Canvas canvas, byte[] mask, int maskWidth, int maskHeight,
+            Rect maskBounds, Rect overlayBounds, CharSequence source, TextPaint paint,
+            float minTextSize, float maxTextSize, int padding, boolean autoWrap,
+            float offsetX, float offsetY, float fontScale, float lineSpacing) {
         if (canvas == null || mask == null || maskWidth <= 0 || maskHeight <= 0
                 || mask.length != maskWidth * maskHeight || maskBounds == null
                 || maskBounds.width() != maskWidth || maskBounds.height() != maskHeight
@@ -50,9 +59,12 @@ public final class BubbleTextLayout {
         // The mask has already been localized to this OCR overlay. Use its
         // complete interior, not the source OCR rectangle, as the layout area.
         Rect area = new Rect(maskBounds);
-        int verticalInset = 2;
+        // Keep glyphs a little farther inside the balloon contour. The
+        // adaptive 3-6 px inset scales with the detected bubble size.
+        int contourInset = Math.max(3,
+                Math.min(6, Math.round(Math.min(maskWidth, maskHeight) * 0.012f)));
         int horizontalPadding = Math.max(2, padding);
-        area.inset(verticalInset, verticalInset);
+        area.inset(contourInset, contourInset);
         area.offset(Math.round(offsetX), Math.round(offsetY));
         // Clamp the text's available layout area to the same detected container.
         // The actual glyph bands are still checked against the per-pixel mask.
@@ -72,7 +84,7 @@ public final class BubbleTextLayout {
                 String layoutText = source.toString();
                 if (!autoWrap) layoutText = layoutText.replace('\n', ' ').replace('\r', ' ');
                 List<Line> lines = layout(mask, maskWidth, maskHeight, maskBounds,
-                        area, layoutText, paint, horizontalPadding, autoWrap);
+                        area, layoutText, paint, horizontalPadding, autoWrap, lineSpacing);
                 if (lines != null && !lines.isEmpty()) {
                     android.graphics.Paint.FontMetrics fm = paint.getFontMetrics();
                     float usedTop = lines.get(0).baseline + fm.ascent;
@@ -95,7 +107,7 @@ public final class BubbleTextLayout {
                 for (float size = upper; size >= lower - 0.01f; size -= 0.5f) {
                     paint.setTextSize(size);
                     List<Line> lines = layout(mask, maskWidth, maskHeight, maskBounds,
-                            area, source.toString(), paint, horizontalPadding, true);
+                            area, source.toString(), paint, horizontalPadding, true, lineSpacing);
                     if (lines == null || lines.isEmpty()) continue;
                     android.graphics.Paint.FontMetrics fm = paint.getFontMetrics();
                     float usedTop = lines.get(0).baseline + fm.ascent;
@@ -122,10 +134,13 @@ public final class BubbleTextLayout {
     }
 
     private static List<Line> layout(byte[] mask, int width, int height, Rect maskBounds,
-            Rect area, String text, TextPaint paint, int padding, boolean autoWrap) {
+            Rect area, String text, TextPaint paint, int padding, boolean autoWrap,
+            float lineSpacing) {
         android.graphics.Paint.FontMetrics fm = paint.getFontMetrics();
-        int lineHeight = Math.max(1, (int) Math.ceil(fm.descent - fm.ascent + fm.leading));
-        int scanStep = Math.max(1, lineHeight / 4);
+        int glyphHeight = Math.max(1, (int) Math.ceil(fm.descent - fm.ascent + fm.leading));
+        float safeLineSpacing = Math.max(0.85f, Math.min(1.50f, lineSpacing));
+        int lineAdvance = Math.max(1, Math.round(glyphHeight * safeLineSpacing));
+        int scanStep = Math.max(1, glyphHeight / 4);
         int y = area.top;
         int offset = 0;
         ArrayList<Line> result = new ArrayList<>();
@@ -133,13 +148,13 @@ public final class BubbleTextLayout {
         while (offset < text.length()) {
             if (text.charAt(offset) == '\n') {
                 offset++;
-                y += lineHeight;
+                y += lineAdvance;
                 continue;
             }
             while (offset < text.length() && Character.isWhitespace(text.charAt(offset))
                     && text.charAt(offset) != '\n') offset++;
             if (offset >= text.length()) break;
-            if (y + lineHeight > area.bottom) return null;
+            if (y + glyphHeight > area.bottom) return null;
 
             int paragraphEnd = text.indexOf('\n', offset);
             if (paragraphEnd < 0) paragraphEnd = text.length();
@@ -147,9 +162,9 @@ public final class BubbleTextLayout {
             // Build lines from complete words only. Never let breakText() split the
             // first word (or any later word) at an arbitrary character boundary.
             boolean placed = false;
-            while (!placed && y + lineHeight <= area.bottom) {
+            while (!placed && y + glyphHeight <= area.bottom) {
                 int[] run = widestCommonRun(mask, width, height, maskBounds, area,
-                        y, lineHeight, padding);
+                        y, glyphHeight, padding);
                 if (run == null) {
                     y += scanStep;
                     continue;
@@ -199,10 +214,10 @@ public final class BubbleTextLayout {
                     offset = paragraphEnd;
                     if (offset < text.length() && text.charAt(offset) == '\n') offset++;
                 }
-                y += lineHeight;
+                y += lineAdvance;
                 placed = true;
             }
-            if (!placed && y + lineHeight > area.bottom) return null;
+            if (!placed && y + glyphHeight > area.bottom) return null;
         }
         return result;
     }

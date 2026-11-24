@@ -919,14 +919,15 @@ public final class RtDetrLiveBridge {
             Rect overlayBounds = readOverlayBounds(overlay);
             if (overlayBounds == null) return false;
             float[] transform = BUBBLE_TEXT_TRANSFORMS.get(overlay);
-            if (transform == null) transform = new float[] {0f, 0f, 1f};
+            if (transform == null) transform = new float[] {0f, 0f, 1f, 1f};
             Context context = resolveContextFromOverlay(overlay);
             boolean autoWrap = context == null || context.getSharedPreferences(
                     OCR_PREFS, Context.MODE_PRIVATE).getBoolean(BUBBLE_AUTO_WRAP, true);
             return BubbleTextLayout.draw(canvas, region.maskDataView(),
                     region.getMaskWidth(), region.getMaskHeight(), region.getBounds(),
                     overlayBounds, text, paint, minTextSize, maxTextSize, padding,
-                    autoWrap, transform[0], transform[1], transform[2]);
+                    autoWrap, transform[0], transform[1], transform[2],
+                    transform.length > 3 ? transform[3] : 1.0f);
         } catch (Throwable error) {
             Log.w(TAG, "BubblePop text layout failed; rectangular host layout retained", error);
             return false;
@@ -1017,13 +1018,23 @@ public final class RtDetrLiveBridge {
 
     public static void setBubbleTextTransform(Object overlay, float dx, float dy, float scale) {
         if (overlay == null) return;
+        float[] current = BUBBLE_TEXT_TRANSFORMS.get(overlay);
+        float lineSpacing = current != null && current.length > 3 ? current[3] : 1.0f;
+        setBubbleTextTransform(overlay, dx, dy, scale, lineSpacing);
+    }
+
+    public static void setBubbleTextTransform(
+            Object overlay, float dx, float dy, float scale, float lineSpacing) {
+        if (overlay == null) return;
         BUBBLE_TEXT_TRANSFORMS.put(overlay, new float[] {
-                dx, dy, Math.max(0.25f, Math.min(2.50f, scale))});
+                dx, dy,
+                Math.max(0.25f, Math.min(2.50f, scale)),
+                Math.max(0.85f, Math.min(1.50f, lineSpacing))});
     }
 
     public static float[] getBubbleTextTransform(Object overlay) {
         float[] value = BUBBLE_TEXT_TRANSFORMS.get(overlay);
-        return value == null ? new float[] {0f, 0f, 1f} : value.clone();
+        return value == null ? new float[] {0f, 0f, 1f, 1f} : value.clone();
     }
 
     private static Context resolveContextFromOverlay(Object overlay) {
