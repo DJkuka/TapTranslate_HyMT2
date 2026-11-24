@@ -308,6 +308,10 @@ public final class RtDetrLiveBridge {
             }
         }
 
+        if (!isFrameCurrent(source)) {
+            Log.i(TAG, "Cancelled/stale frame discarded after RT-DETR wait");
+            return;
+        }
         synchronized (LOCK) {
             ACTIVE_REGIONS.put(owner, new ArrayList<>(regions));
         }
@@ -316,6 +320,10 @@ public final class RtDetrLiveBridge {
 
         if (!paddleEnabled) return;
 
+        if (!isFrameCurrent(source)) {
+            Log.i(TAG, "Cancelled/stale frame discarded before Paddle OCR");
+            return;
+        }
         try {
             List<PaddleOcrTextGroup> paddleGroups = PaddleOcrLiveBridge.recognizeBlocking(
                     context, source, regions, 20000L);
