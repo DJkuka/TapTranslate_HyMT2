@@ -433,15 +433,7 @@ def patch_request_cancellation(base: Path) -> None:
     if start < 0 or end < 0:
         raise RuntimeError("Could not isolate vh/j OCR result-to-host handoff")
     method = text[start:end]
-    hook = f"""    invoke-static {{p0, p2, p1}}, {bridge}->acceptOcrResult(Ljava/lang/Object;Landroid/graphics/Bitmap;Ljava/util/List;)Z
-
-    move-result v0
-
-    if-nez v0, :hymt2_accept_ocr
-
-    return-void
-
-    :hymt2_accept_ocr
+    hook = f"""    invoke-static {{p0, p2, p1}}, {bridge}->acceptOcrResult(Ljava/lang/Object;Landroid/graphics/Bitmap;Ljava/util/List;)V
 """
     if "RtDetrLiveBridge;->acceptOcrResult" not in method:
         anchor = "    .locals 9\n"
