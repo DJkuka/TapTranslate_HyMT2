@@ -49,5 +49,24 @@ public class BubbleRegionMatcherTest {
         assertEquals(-1, BubbleRegionMatcher.findBestContainer(
                 220, 220, 260, 250,
                 Arrays.asList(new BubbleRegionMatcher.Bounds(0, 0, 100, 80))));
+    } 
+    @Test public void erodesOnlyTheOuterPixelOfAFullMask() {
+        byte[] mask = new byte[25];
+        Arrays.fill(mask, (byte) 255);
+        byte[] inner = BubbleOverlayMasker.erodeMask(mask, 5, 5, 1);
+
+        assertEquals(0, inner[0] & 0xff);
+        assertEquals(0, inner[2] & 0xff);
+        assertEquals(255, inner[12] & 0xff);
+        assertEquals(0, inner[24] & 0xff);
+        assertEquals(255, mask[0] & 0xff);
+    }
+
+    @Test public void preservesAntialiasedAlphaInsideTheErodedMask() {
+        byte[] mask = new byte[25];
+        Arrays.fill(mask, (byte) 255);
+        mask[2 * 5 + 1] = (byte) 180;
+        byte[] inner = BubbleOverlayMasker.erodeMask(mask, 5, 5, 1);
+        assertEquals(180, inner[2 * 5 + 2] & 0xff);
     }
 }
