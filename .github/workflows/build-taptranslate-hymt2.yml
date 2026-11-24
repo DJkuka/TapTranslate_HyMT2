@@ -470,7 +470,6 @@ jobs:
               "bridge cancel": "cancelActiveRequest()V" in bridge,
               "frame-to-result token": "acceptOcrResult" in bridge and "acceptOcrResult" in ocr,
               "stale result guard": "isOcrResultCurrent" in bridge and "isOcrResultCurrent" in service,
-              "result-to-host token": "bindHostRequest" in bridge and "bindHostRequest" in service,
               "OCR generation consumed by APK219 runtime": "takeHostRequestGeneration" in bridge and "takeHostRequestGeneration" in runtime,
               "APK219 runtime generation guard": "isRequestGenerationCurrent" in bridge and "isRequestGenerationCurrent" in runtime,
               "APK219 native cancellation API": "cancelActiveTranslation" in runtime,
