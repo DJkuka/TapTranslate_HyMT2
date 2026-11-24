@@ -1196,7 +1196,9 @@ public final class TranslationRegionEditor {
                 nextX += dx;
                 nextY += dy;
             } else {
-                float denominator = Math.max(1f, dragStart.width() + dragStart.height());
+                // Treat corner movement as a continuous font-size control.
+                // The gesture is always measured from ACTION_DOWN, so scale does
+                // not accumulate rounding/error from individual MotionEvents.
                 float outward;
                 switch (dragMode) {
                     case NW: outward = -dx - dy; break;
@@ -1205,8 +1207,16 @@ public final class TranslationRegionEditor {
                     case SW: outward = -dx + dy; break;
                     default: outward = 0f;
                 }
-                nextScale = Math.max(0.55f, Math.min(1.65f,
-                        nextScale * (1f + outward / denominator)));
+                final float minScale = 0.25f;
+                final float maxScale = 2.50f;
+                float availableRange = outward >= 0f
+                        ? maxScale - textTransformStart[2]
+                        : textTransformStart[2] - minScale;
+                float sensitivity = Math.max(dp(getContext(), 64.0f),
+                        Math.min(dp(getContext(), 128.0f),
+                                (dragStart.width() + dragStart.height()) * 0.50f));
+                nextScale = Math.max(minScale, Math.min(maxScale,
+                        textTransformStart[2] + (outward / sensitivity) * availableRange));
             }
             setTextTransform(state.transformTarget, nextX, nextY, nextScale);
             refreshRenderers(state);
