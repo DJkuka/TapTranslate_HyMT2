@@ -63,7 +63,7 @@ public final class BubbleTextLayout {
         if (area.width() < 4 || area.height() < 4) return false;
 
         float originalSize = paint.getTextSize();
-        float safeScale = Math.max(0.55f, Math.min(1.65f, fontScale));
+        float safeScale = Math.max(0.25f, Math.min(2.50f, fontScale));
         float upper = Math.max(minTextSize, maxTextSize) * safeScale;
         float lower = Math.max(4.0f, Math.min(minTextSize * safeScale, upper));
         try {
