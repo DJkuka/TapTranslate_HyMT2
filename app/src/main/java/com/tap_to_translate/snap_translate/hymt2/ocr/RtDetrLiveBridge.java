@@ -41,6 +41,8 @@ public final class RtDetrLiveBridge {
             Collections.synchronizedMap(new WeakHashMap<Bitmap, Long>());
     private static final Map<Object, Long> RESULT_GENERATIONS =
             Collections.synchronizedMap(new IdentityHashMap<Object, Long>());
+    private static final Map<Object, Long> HOST_REQUEST_GENERATIONS =
+            Collections.synchronizedMap(new IdentityHashMap<Object, Long>());
     private static final Map<Object, PendingFrame> PENDING =
             Collections.synchronizedMap(new WeakHashMap<Object, PendingFrame>());
     private static final Map<Object, List<DetectedRegion>> ACTIVE_REGIONS =
@@ -111,14 +113,41 @@ public final class RtDetrLiveBridge {
     /** Early guard in ScreenTranslateService.c(List), before changing the visible overlay. */
     public static boolean isOcrResultCurrent(Object result) {
         if (result == null) return true;
-        Long generation = RESULT_GENERATIONS.remove(result);
+        Long generation = RESULT_GENERATIONS.get(result);
         if (generation == null) return true;
         boolean current = generation.longValue() == REQUEST_GENERATION.get();
         if (!current) {
+            RESULT_GENERATIONS.remove(result);
             Log.i(TAG, "Discarding stale OCR list before Hy-MT2 dispatch; frameGeneration="
                     + generation + " activeGeneration=" + REQUEST_GENERATION.get());
         }
         return current;
+    }
+
+    /** Bind an accepted OCR List to the exact APK219 translator host before dispatch. */
+    public static boolean bindHostRequest(Object host, Object result) {
+        if (host == null || result == null) return true;
+        Long generation = RESULT_GENERATIONS.remove(result);
+        if (generation == null) return true;
+        if (generation.longValue() != REQUEST_GENERATION.get()) {
+            Log.i(TAG, "Discarding stale host handoff; frameGeneration=" + generation
+                    + " activeGeneration=" + REQUEST_GENERATION.get());
+            return false;
+        }
+        HOST_REQUEST_GENERATIONS.put(host, generation);
+        return true;
+    }
+
+    /** Consume the generation token when APK219 HyMT2Runtime.translate is entered. */
+    public static long takeHostRequestGeneration(Object host) {
+        if (host == null) return 0L;
+        Long generation = HOST_REQUEST_GENERATIONS.remove(host);
+        return generation == null ? 0L : generation.longValue();
+    }
+
+    /** A zero token denotes a manual/non-OCR translation and is never invalidated here. */
+    public static boolean isRequestGenerationCurrent(long generation) {
+        return generation == 0L || generation == REQUEST_GENERATION.get();
     }
 
     private static boolean isFrameCurrent(Bitmap source) {
