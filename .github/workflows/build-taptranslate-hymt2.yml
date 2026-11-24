@@ -1,5 +1,6 @@
 name: Build Tap Translate 1.125 FontFit AutoFill + Hy-MT2 Vulkan
 # Rebuild with the verified STQ1_0 runtime AAR checksum.
+# Includes restored PP-OCR tuning controls and model self-diagnostics.
 
 on:
   workflow_dispatch:
