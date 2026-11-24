@@ -435,6 +435,54 @@ jobs:
           print("Paddle OCR, OpenCV, native bubble/free-text geometry, host child constructor and ML Kit fallback verified.")
           PY
 
+      - name: Verify double-tap cancellation and compact opacity dialog
+        if: github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt'
+        shell: bash
+        run: |
+          set -euo pipefail
+          decoded="build/ocr-final-check"
+          find_one_smali() {
+            local rel="$1"
+            local -a matches
+            mapfile -t matches < <(find "$decoded" -type f -path "*/$rel" -print)
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "Expected exactly one DEX definition for $rel; found ${#matches[@]}" >&2
+              printf '%s\\n' "${matches[@]}" >&2
+              exit 1
+            fi
+            printf '%s' "${matches[0]}"
+          }
+          bridge="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge.smali)"
+          runtime="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/HyMT2Runtime.smali)"
+          ocr="$(find_one_smali vh/j.smali)"
+          service="$(find_one_smali com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali)"
+          click="$(find_one_smali androidx/appcompat/app/b.smali)"
+          BRIDGE="$bridge" RUNTIME="$runtime" OCR="$ocr" SERVICE="$service" CLICK="$click" python - <<'PY'
+          from pathlib import Path
+          import os
+          bridge = Path(os.environ["BRIDGE"]).read_text()
+          runtime = Path(os.environ["RUNTIME"]).read_text()
+          ocr = Path(os.environ["OCR"]).read_text()
+          service = Path(os.environ["SERVICE"]).read_text()
+          click = Path(os.environ["CLICK"]).read_text()
+          checks = {
+              "bridge cancel": "cancelActiveRequest()V" in bridge,
+              "frame-to-result token": "acceptOcrResult" in bridge and "acceptOcrResult" in ocr,
+              "stale result guard": "isOcrResultCurrent" in bridge and "isOcrResultCurrent" in service,
+              "result-to-host token": "bindHostRequest" in bridge and "bindHostRequest" in service,
+              "Hy-MT2 token consumption": "takeHostRequestGeneration" in bridge and "takeHostRequestGeneration" in runtime,
+              "Hy-MT2 stale delivery guard": "isRequestGenerationCurrent" in bridge and "isRequestGenerationCurrent" in runtime,
+              "double-tap cancel hook": "cancelActiveRequest()V" in click,
+          }
+          failed = [name for name, passed in checks.items() if not passed]
+          if failed:
+              raise SystemExit("Cancellation wiring missing: " + ", ".join(failed))
+          print("Verified cancellation token from double-tap through OCR, Hy-MT2 inference and UI delivery.")
+          PY
+          grep -q 'Меняется только заливка, не сам текст.' app/src/main/java/com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor.java
+          grep -q 'Math.round(dp(context, 32))' app/src/main/java/com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor.java
+          echo "Verified reduced opacity dialog height; width unchanged."
+
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
