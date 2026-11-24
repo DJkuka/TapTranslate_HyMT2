@@ -1018,7 +1018,7 @@ public final class RtDetrLiveBridge {
     public static void setBubbleTextTransform(Object overlay, float dx, float dy, float scale) {
         if (overlay == null) return;
         BUBBLE_TEXT_TRANSFORMS.put(overlay, new float[] {
-                dx, dy, Math.max(0.55f, Math.min(1.65f, scale))});
+                dx, dy, Math.max(0.25f, Math.min(2.50f, scale))});
     }
 
     public static float[] getBubbleTextTransform(Object overlay) {
