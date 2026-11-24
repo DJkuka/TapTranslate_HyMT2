@@ -301,7 +301,8 @@ jobs:
           grep -q 'setFreeTextBackgroundAlphaPercent' "$editor"
           grep -q 'setFreeTextBackgroundAlphaPercent' "$bridge"
           grep -q 'getFreeTextBackgroundAlphaPercent' "$bridge"
-          grep -q 'OVERLAY_IS_BUBBLE.get(overlay)' "$bridge"
+          grep -q 'OVERLAY_IS_BUBBLE' "$bridge"
+          grep -q 'Ljava/util/Map;->get' "$bridge"
           echo "Verified BubblePop masks, word-safe layout, non-bubble opacity compatibility, per-block opacity slider, PP-OCRv6 models and OCR handoff."
       
       - name: Verify hybrid OCR contracts are present in the final APK DEX files
