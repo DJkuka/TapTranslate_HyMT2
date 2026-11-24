@@ -420,6 +420,124 @@ def patch_ocr_engine_picker(base: Path) -> None:
     print("Added PP-OCRv6 and true ML Kit options; old Device default maps to PP-OCRv6")
 
 
+def patch_request_cancellation(base: Path) -> None:
+    """Bind screenshot OCR to a generation token and suppress cancelled handoffs."""
+    bridge = "Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;"
+
+    # 1) Accept/reject the OCR result at the last point where the exact source
+    # Bitmap and the resulting host List are both available.
+    ocr = base / "smali_classes3/vh/j.smali"
+    text = ocr.read_text(encoding="utf-8")
+    start = text.find(".method public final l(Ljava/util/List;Landroid/graphics/Bitmap;Z)V")
+    end = text.find(".end method", start)
+    if start < 0 or end < 0:
+        raise RuntimeError("Could not isolate vh/j OCR result-to-host handoff")
+    method = text[start:end]
+    hook = f"""    invoke-static {{p0, p2, p1}}, {bridge}->acceptOcrResult(Ljava/lang/Object;Landroid/graphics/Bitmap;Ljava/util/List;)Z
+
+    move-result v0
+
+    if-nez v0, :hymt2_accept_ocr
+
+    return-void
+
+    :hymt2_accept_ocr
+"""
+    if "RtDetrLiveBridge;->acceptOcrResult" not in method:
+        anchor = "    .locals 9\n"
+        if method.count(anchor) != 1:
+            raise RuntimeError("Unexpected vh/j OCR handoff register layout")
+        method = method.replace(anchor, anchor + "\n" + hook + "\n", 1)
+        text = text[:start] + method + text[end:]
+        ocr.write_text(text, encoding="utf-8")
+
+    # 2) Reject stale OCR results before they update the visible overlay, then
+    # transfer the accepted generation from the result List to the yh/f host.
+    service = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali"
+    text = service.read_text(encoding="utf-8")
+    start = text.find(".method public final c(Ljava/util/List;)V")
+    end = text.find(".end method", start)
+    if start < 0 or end < 0:
+        raise RuntimeError("Could not isolate ScreenTranslateService.c(List)")
+    method = text[start:end]
+    guard = f"""    invoke-static {{p1}}, {bridge}->isOcrResultCurrent(Ljava/lang/Object;)Z
+
+    move-result v0
+
+    if-nez v0, :hymt2_result_current
+
+    return-void
+
+    :hymt2_result_current
+"""
+    if "RtDetrLiveBridge;->isOcrResultCurrent" not in method:
+        anchor = "    .locals 2\n"
+        if method.count(anchor) != 1:
+            raise RuntimeError("Unexpected ScreenTranslateService.c(List) register layout")
+        method = method.replace(anchor, anchor + "\n" + guard + "\n", 1)
+
+    if "RtDetrLiveBridge;->bindHostRequest" not in method:
+        anchor = """    invoke-virtual {p0}, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->t()Lyh/f;
+
+    move-result-object p1"""
+        replacement = f"""    move-object v1, p1
+
+    invoke-virtual {{p0}}, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->t()Lyh/f;
+
+    move-result-object p1
+
+    invoke-static {{p1, v1}}, {bridge}->bindHostRequest(Ljava/lang/Object;Ljava/lang/Object;)Z
+
+    move-result v0
+
+    if-nez v0, :hymt2_request_bound
+
+    return-void
+
+    :hymt2_request_bound"""
+        if method.count(anchor) != 1:
+            raise RuntimeError("Could not bind OCR generation to Hy-MT2 host in ScreenTranslateService.c")
+        method = method.replace(anchor, replacement, 1)
+    text = text[:start] + method + text[end:]
+    service.write_text(text, encoding="utf-8")
+
+    # 3) The host's double-tap cancel path is the branch that hides its
+    # ProgressBar. Invalidate the OCR/Hy-MT2 generation at that exact branch.
+    candidates = list(base.glob("smali*/androidx/appcompat/app/b.smali"))
+    if len(candidates) != 1:
+        raise RuntimeError("Expected one decoded androidx.appcompat.app.b.smali; found " + str(len(candidates)))
+    click_path = candidates[0]
+    click_text = click_path.read_text(encoding="utf-8")
+    start = click_text.find(".method public final onClick(Landroid/view/View;)V")
+    end = click_text.find(".end method", start)
+    if start < 0 or end < 0:
+        raise RuntimeError("Could not isolate host double-tap progress cancellation listener")
+    method = click_text[start:end]
+    if "countClickProgressBar:" not in method:
+        raise RuntimeError("Host progress cancellation listener no longer matches expected class")
+    if "RtDetrLiveBridge;->cancelActiveRequest" not in method:
+        visibility = "Landroid/view/View;->setVisibility(I)V"
+        if method.count(visibility) != 1:
+            raise RuntimeError("Could not uniquely identify the double-tap cancel ProgressBar hide call")
+        at = method.find(visibility)
+        line_start = method.rfind("\n", 0, at) + 1
+        method = method[:line_start] + f"    invoke-static {{}}, {bridge}->cancelActiveRequest()V\n\n" + method[line_start:]
+        click_text = click_text[:start] + method + click_text[end:]
+        click_path.write_text(click_text, encoding="utf-8")
+
+    # 4) Keep the cancellation wiring explicit and fail the build if any link is lost.
+    checks = (
+        "RtDetrLiveBridge;->acceptOcrResult",
+        "RtDetrLiveBridge;->isOcrResultCurrent",
+        "RtDetrLiveBridge;->bindHostRequest",
+    )
+    if any(item not in ocr.read_text(encoding="utf-8") + service.read_text(encoding="utf-8") for item in checks):
+        raise RuntimeError("OCR generation-token handoff is incomplete")
+    if "RtDetrLiveBridge;->cancelActiveRequest" not in click_path.read_text(encoding="utf-8"):
+        raise RuntimeError("Double-tap cancel does not invalidate the active OCR request")
+    print("Added generation-token cancellation across double-tap, OCR and Hy-MT2 handoff")
+
+
 def patch_free_text_alpha_renderers(base: Path) -> None:
     """Patch free-text alpha and invoke BubblePop layout before rectangular fallback."""
     for rel, owner in (
@@ -2186,6 +2304,7 @@ def main() -> int:
     patch_ocr_engine_picker(base)
     patch_dispatcher(base)
     patch_live_hybrid_ocr(base)
+    patch_request_cancellation(base)
     patch_free_text_alpha_renderers(base)
     patch_fixed_font_size_renderers(base)
     patch_max_font_size(base)
