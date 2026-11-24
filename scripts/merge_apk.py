@@ -501,8 +501,9 @@ def patch_request_cancellation(base: Path) -> None:
     text = text[:start] + method + text[end:]
     service.write_text(text, encoding="utf-8")
 
-    # 3) Preserve APK219's own HyMT2Runtime class and use its existing
-    # cancelActiveTranslation() implementation (which sets the native abort flag).
+    # 3) Confirm APK219 exposes its native cancel API. The helper's HyMT2Runtime
+    # is built from the exact v1.125-stq1.0 source plus generation guards; its
+    # existing cancelActiveTranslation() still sets the native abort flag.
     runtime_candidates = list(base.glob("smali*/com/tap_to_translate/snap_translate/hymt2/HyMT2Runtime.smali"))
     if len(runtime_candidates) != 1:
         raise RuntimeError("Expected one APK219 HyMT2Runtime.smali; found " + str(len(runtime_candidates)))
