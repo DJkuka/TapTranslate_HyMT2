@@ -471,9 +471,9 @@ jobs:
               "frame-to-result token": "acceptOcrResult" in bridge and "acceptOcrResult" in ocr,
               "stale result guard": "isOcrResultCurrent" in bridge and "isOcrResultCurrent" in service,
               "result-to-host token": "bindHostRequest" in bridge and "bindHostRequest" in service,
-              "Hy-MT2 token consumption": "takeHostRequestGeneration" in bridge and "takeHostRequestGeneration" in runtime,
-              "Hy-MT2 stale delivery guard": "isRequestGenerationCurrent" in bridge and "isRequestGenerationCurrent" in runtime,
-              "double-tap cancel hook": "cancelActiveRequest()V" in click,
+              "APK219 native cancellation API": "cancelActiveTranslation" in runtime,
+              "double-tap OCR cancel hook": "cancelActiveRequest()V" in click,
+              "double-tap Hy-MT2 cancel hook": "cancelActiveTranslation()V" in click,
           }
           failed = [name for name, passed in checks.items() if not passed]
           if failed:
