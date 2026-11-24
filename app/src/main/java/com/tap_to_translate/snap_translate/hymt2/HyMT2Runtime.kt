@@ -14,6 +14,7 @@ import android.widget.Toast
 import dev.ffmpegkit.llama.Llama
 import dev.ffmpegkit.llama.LlamaConfig
 import dev.ffmpegkit.llama.LlamaModel
+import com.tap_to_translate.snap_translate.hymt2.ocr.RtDetrLiveBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -25,6 +26,8 @@ import java.util.Locale
 import java.util.ArrayDeque
 import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.CancellationException
 import kotlin.math.min
 
 /** Runtime bridge called from the original app's translation dispatcher (yh.f). */
@@ -44,6 +47,9 @@ object HyMT2Runtime {
     private val inferenceMutex = Mutex()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val fallbackNoticeShown = AtomicBoolean(false)
+    private val activeTranslationId = AtomicLong(0L)
+    private val nextTranslationId = AtomicLong(1L)
+    private val translationCancelRequested = AtomicBoolean(false)
     private data class HistoryEntry(
         val sourceLanguage: String,
         val targetLanguage: String,
@@ -60,6 +66,35 @@ object HyMT2Runtime {
     @Volatile private var loadedDescriptor: ParcelFileDescriptor? = null
 
     /** Path of the old copied model, used only to display its location for manual cleanup. */
+    /** Stop the currently active Hy-MT2 generation without cancelling queued requests. */
+    @JvmStatic
+    fun cancelActiveTranslation() {
+        if (activeTranslationId.get() == 0L) return
+        if (translationCancelRequested.compareAndSet(false, true)) {
+            HyMT2PenaltyNative.setAbortRequested(true)
+            Log.i(TAG, "Cancellation requested for active Hy-MT2 translation id=${activeTranslationId.get()}")
+        }
+    }
+
+    private fun ensureTranslationNotCancelled() {
+        if (translationCancelRequested.get()) {
+            throw CancellationException("Hy-MT2 translation cancelled by user")
+        }
+    }
+
+    private fun clearHostResult(host: Any) {
+        try {
+            // Clear only the cached host field. Calling the app callback with an empty
+            // string is interpreted as a real UI update by some host states and can
+            // interfere with the later asynchronous result delivery.
+            host.javaClass.getField("d").set(host, "")
+            Log.i(TAG, "Cleared previous host result field without invoking the UI callback")
+        } catch (t: Throwable) {
+            // Clearing a previous result is best-effort; it must never block a new translation.
+            Log.w(TAG, "Cannot clear previous Hy-MT2 result before new inference", t)
+        }
+    }
+
     @JvmStatic
     fun modelFile(context: Context): File {
         val base = context.getExternalFilesDir("models") ?: File(context.filesDir, "models")
@@ -73,6 +108,9 @@ object HyMT2Runtime {
         return value?.let { runCatching { Uri.parse(it) }.getOrNull() }
     }
 
+    // Keep the original two-argument JVM signature used by APK 219 while
+    // exposing the optional model-kind argument to new code.
+    @JvmOverloads
     @JvmStatic
     fun setSelectedModelUri(context: Context, uri: Uri, modelKind: String = MODEL_KIND_Q4) {
         val safeKind = if (modelKind == MODEL_KIND_STQ1) MODEL_KIND_STQ1 else MODEL_KIND_Q4
@@ -171,6 +209,7 @@ object HyMT2Runtime {
 
     @JvmStatic
     fun unload(callback: (String) -> Unit) {
+        cancelActiveTranslation()
         try {
             scope.launch {
                 val message = try {
@@ -203,35 +242,72 @@ object HyMT2Runtime {
      */
     @JvmStatic
     fun translate(host: Any, sourceText: String, sourceCode: String, targetCode: String) {
+        // OCR requests are tied to the captured frame; manual text requests use generation 0.
+        val requestGeneration = RtDetrLiveBridge.takeHostRequestGeneration(host)
+        fun requestIsCurrent(): Boolean =
+            RtDetrLiveBridge.isRequestGenerationCurrent(requestGeneration)
+        if (!requestIsCurrent()) {
+            Log.i(TAG, "Ignoring stale Hy-MT2 request before dispatch; generation=$requestGeneration")
+            return
+        }
         val context = resolveContext(host)
         if (context == null) {
-            fallbackToGoogleOffline(host, sourceText)
+            if (requestIsCurrent()) fallbackToGoogleOffline(host, sourceText)
             return
         }
         val appContext = context.applicationContext
         if (!hasModel(appContext)) {
+            if (!requestIsCurrent()) return
             HyMT2Launcher.openIfModelMissing(appContext)
             showFallbackNotice(appContext, "Файл Hy-MT2 не выбран. Открываю выбор GGUF; этот фрагмент переведёт Google Offline Translate.")
             fallbackToGoogleOffline(host, sourceText)
             return
         }
 
+        mainHandler.post { clearHostResult(host) }
         try {
             scope.launch {
                 try {
+                    if (!requestIsCurrent()) {
+                        Log.i(TAG, "Queued Hy-MT2 request cancelled before inference; generation=$requestGeneration")
+                        return@launch
+                    }
                     val result = inferenceMutex.withLock {
+                        if (!requestIsCurrent()) {
+                            throw CancellationException("OCR request cancelled while waiting for Hy-MT2")
+                        }
+                        val translationId = nextTranslationId.getAndIncrement()
+                        activeTranslationId.set(translationId)
+                        translationCancelRequested.set(false)
+                        HyMT2PenaltyNative.setAbortRequested(false)
+                        try {
                         val model = ensureLoaded(appContext)
                         val options = HyMT2Settings.load(appContext)
                         val modelKind = selectedModelKind(appContext)
+                        val affinityReport = applyConfiguredCpuAffinity(appContext, options)
+                        Log.i(TAG, "CPU_AFFINITY_BEFORE_INFERENCE $affinityReport")
+                        val loadedConfig = model.config
+                        Log.i(TAG, "MODEL_CONFIG_ACTIVE kind=$modelKind context=${loadedConfig.contextSize} threads=${loadedConfig.threads} gpuLayers=${loadedConfig.gpuLayers} temperature=${loadedConfig.temperature} topP=${loadedConfig.topP} topK=${loadedConfig.topK} seed=${loadedConfig.seed}")
                         val isStqModel = modelKind == MODEL_KIND_STQ1
                         val appliedRepetitionPenalty = if (isStqModel) 1.0f else options.repetitionPenalty
+                        // Match the known-good standalone STQ1_0 CPU benchmark exactly.
+                        // Keep this as a temporary parity profile until on-device A/B tests
+                        // establish which individual setting can safely be relaxed.
+                        val appliedContextSize = if (isStqModel) maxOf(options.contextSize, 2048) else options.contextSize
+                        val appliedMaxTokens = if (isStqModel) maxOf(options.maxTokens, 768) else options.maxTokens
+                        val appliedTemperature = if (isStqModel) 0.7f else options.temperature
+                        val appliedTopP = if (isStqModel) 0.6f else options.topP
+                        val appliedTopK = if (isStqModel) 20 else options.topK
+                        val appliedSeed = if (isStqModel) 42 else -1
                         val activeVulkan = !isStqModel && options.useVulkan
                         val activeGpuLayers = if (activeVulkan) options.gpuLayers else 0
                         val sourceLanguage = languageName(sourceCode)
                         val sourceLanguageKey = sourceLanguage ?: "auto"
                         val targetLanguage = languageName(targetCode) ?: "Russian"
-                        val systemPrompt = buildTranslationSystemPrompt(sourceLanguage, targetLanguage)
-                        Log.i(TAG, "Hy-MT2 request: modelKind=$modelKind sourceCode=$sourceCode source=${sourceLanguage ?: "auto"} targetCode=$targetCode target=$targetLanguage sourceChars=${sourceText.length} sourcePreview=${if (sourceText.length <= 64) sourceText.replace("\\n", "\\\\n") else "<omitted>"} background=${options.backgroundContext.isNotBlank()} glossary=${options.glossary.isNotBlank()} style=${options.stylePreset}; context=${options.contextSize} maxTokens=${options.maxTokens} temperature=${options.temperature} topP=${options.topP} topK=${options.topK} threads=${options.threads} Vulkan=$activeVulkan gpuLayers=$activeGpuLayers; generation=HyMT2PenaltyNative")
+                        // Hy-MT2's known-good STQ1_0 standalone test uses the simple
+                        // translation instruction with no system message.
+                        val systemPrompt = if (isStqModel) "" else buildTranslationSystemPrompt(sourceLanguage, targetLanguage)
+                        Log.i(TAG, "Hy-MT2 request: modelKind=$modelKind sourceCode=$sourceCode source=${sourceLanguage ?: "auto"} targetCode=$targetCode target=$targetLanguage sourceChars=${sourceText.length} sourcePreview=${if (sourceText.length <= 64) sourceText.replace("\\n", "\\\\n") else "<omitted>"} background=${options.backgroundContext.isNotBlank()} glossary=${options.glossary.isNotBlank()} style=${options.stylePreset}; effectiveContext=$appliedContextSize effectiveMaxTokens=$appliedMaxTokens temperature=$appliedTemperature topP=$appliedTopP topK=$appliedTopK seed=$appliedSeed threads=${options.threads} Vulkan=$activeVulkan gpuLayers=$activeGpuLayers; generation=${if (isStqModel) "Llama.complete (standalone parity)" else "HyMT2PenaltyNative"}")
                         val contextPairs = if (options.useRecentContext && options.recentContextPairs > 0) {
                             recentContextFor(host, sourceLanguageKey, targetLanguage, options.recentContextPairs)
                         } else emptyList()
@@ -248,42 +324,59 @@ object HyMT2Runtime {
                         var generatedTimeMs = 0L
 
                         sourceBlocks.forEachIndexed { index, sourceBlock ->
+                            if (!requestIsCurrent()) {
+                                throw CancellationException("OCR request cancelled during Hy-MT2 generation")
+                            }
                             if (sourceBlock.isBlank()) {
                                 translatedBlocks += ""
                             } else {
                                 val cleanSourceBlock = sourceBlock.trim()
-                                val prompt = buildTranslationPrompt(
-                                    sourceText = cleanSourceBlock,
-                                    targetLanguage = targetLanguage,
-                                )
-                                val promptTokens = HyMT2PenaltyNative.countPromptTokens(model, prompt, systemPrompt)
-                                val availableOutputTokens = (options.contextSize - promptTokens - 32).coerceAtLeast(0)
-                                if (availableOutputTokens < 8) {
-                                    error("OCR-блок ${index + 1}/${sourceBlocks.size} не помещается в контекст ${options.contextSize}. Выбери больший контекст.")
+                                val prompt = if (isStqModel) {
+                                    buildStq1TranslationPrompt(cleanSourceBlock, targetLanguage)
+                                } else {
+                                    buildTranslationPrompt(cleanSourceBlock, targetLanguage)
                                 }
-                                // Respect the user's configured output limit for both model formats.
-                                val effectiveMaxTokens = min(options.maxTokens, availableOutputTokens)
+                                val promptTokens = HyMT2PenaltyNative.countPromptTokens(model, prompt, systemPrompt)
+                                val availableOutputTokens = (appliedContextSize - promptTokens - 32).coerceAtLeast(0)
+                                if (availableOutputTokens < 8) {
+                                    error("OCR-блок ${index + 1}/${sourceBlocks.size} не помещается в эффективный контекст $appliedContextSize.")
+                                }
+                                val effectiveMaxTokens = min(appliedMaxTokens, availableOutputTokens)
                                 Log.i(
                                     TAG,
                                     "GENERATION_START block=${index + 1}/${sourceBlocks.size} " +
                                         "sourceChars=${cleanSourceBlock.length} promptTokens=$promptTokens " +
-                                        "contextSize=${options.contextSize} reservedTokens=32 availableOutputTokens=$availableOutputTokens " +
-                                        "configuredMaxTokens=${options.maxTokens} effectiveMaxTokens=$effectiveMaxTokens " +
-                                        "temperature=${options.temperature} " +
-                                        "topP=${options.topP} topK=${options.topK} repetitionPenalty=$appliedRepetitionPenalty modelKind=$modelKind"
+                                        "contextSize=$appliedContextSize reservedTokens=32 availableOutputTokens=$availableOutputTokens " +
+                                        "configuredMaxTokens=$appliedMaxTokens effectiveMaxTokens=$effectiveMaxTokens " +
+                                        "temperature=$appliedTemperature topP=$appliedTopP topK=$appliedTopK seed=$appliedSeed " +
+                                        "repetitionPenalty=$appliedRepetitionPenalty modelKind=$modelKind"
                                 )
                                 val generationStartedAt = SystemClock.elapsedRealtime()
+                                ensureTranslationNotCancelled()
                                 val completion = try {
-                                    HyMT2PenaltyNative.complete(
-                                        model = model,
-                                        prompt = prompt,
-                                        systemPrompt = systemPrompt,
-                                        maxTokens = effectiveMaxTokens,
-                                        // Match the verified STQ1_0 standalone sampler: no repetition penalty.
-                                        // Q4_K_M retains the configured setting.
-                                        repetitionPenalty = appliedRepetitionPenalty,
-                                    )
+                                    if (isStqModel) {
+                                        // Use the original llama-android completion entry point, not
+                                        // the reimplemented JNI loop. This is exactly what the working
+                                        // standalone STQ1_0 test app calls.
+                                        Llama.complete(
+                                            model = model,
+                                            prompt = prompt,
+                                            systemPrompt = "",
+                                            maxTokens = effectiveMaxTokens,
+                                        )
+                                    } else {
+                                        HyMT2PenaltyNative.complete(
+                                            model = model,
+                                            prompt = prompt,
+                                            systemPrompt = systemPrompt,
+                                            maxTokens = effectiveMaxTokens,
+                                            repetitionPenalty = appliedRepetitionPenalty,
+                                        )
+                                    }
                                 } catch (t: Throwable) {
+                                    if (translationCancelRequested.get()) {
+                                        throw CancellationException("Hy-MT2 generation cancelled")
+                                    }
                                     Log.e(
                                         TAG,
                                         "GENERATION_EXCEPTION block=${index + 1}/${sourceBlocks.size} " +
@@ -291,6 +384,10 @@ object HyMT2Runtime {
                                         t
                                     )
                                     throw t
+                                }
+                                ensureTranslationNotCancelled()
+                                if (!requestIsCurrent()) {
+                                    throw CancellationException("OCR request cancelled while native inference was running")
                                 }
                                 val generationElapsedMs = SystemClock.elapsedRealtime() - generationStartedAt
                                 Log.i(
@@ -324,6 +421,10 @@ object HyMT2Runtime {
                         if (translatedBlocks.size != sourceBlocks.size) {
                             error("Нарушено соответствие OCR-блоков: вход=${sourceBlocks.size}, выход=${translatedBlocks.size}")
                         }
+                        ensureTranslationNotCancelled()
+                        if (!requestIsCurrent()) {
+                            throw CancellationException("OCR request cancelled before result finalization")
+                        }
                         val translated = translatedBlocks.joinToString("\n")
                         val elapsedMs = (SystemClock.elapsedRealtime() - translationStartedAt).coerceAtLeast(1L)
                         val aggregateTokensPerSecond = if (generatedTimeMs > 0L) {
@@ -338,10 +439,28 @@ object HyMT2Runtime {
                             translated.length,
                         )
                         translated
+                        } finally {
+                            activeTranslationId.compareAndSet(translationId, 0L)
+                            HyMT2PenaltyNative.setAbortRequested(false)
+                            translationCancelRequested.set(false)
+                            Log.i(TAG, "Hy-MT2 translation lifecycle closed id=$translationId")
+                        }
                     }
 
-                    mainHandler.post { deliverResult(host, result, sourceText) }
+                    if (!requestIsCurrent()) {
+                        Log.i(TAG, "Hy-MT2 result suppressed after OCR cancellation; generation=$requestGeneration")
+                        return@launch
+                    }
+                    val resultPosted = mainHandler.post {
+                        if (requestIsCurrent()) deliverResult(host, result, sourceText)
+                        else Log.i(TAG, "Queued UI delivery suppressed after OCR cancellation; generation=$requestGeneration")
+                    }
+                    Log.i(TAG, "RESULT_DISPATCH_QUEUED chars=${result.length} posted=$resultPosted")
                 } catch (t: Throwable) {
+                    if (!requestIsCurrent() || t is CancellationException) {
+                        Log.i(TAG, "Hy-MT2 translation cancelled cleanly; no fallback result will be delivered")
+                        return@launch
+                    }
                     Log.e(TAG, "Hy-MT2 translation failed; falling back to ML Kit", t)
                     mainHandler.post {
                         showFallbackNotice(appContext, "Ошибка Hy-MT2. Для этого фрагмента используется Google Offline Translate.")
@@ -352,8 +471,10 @@ object HyMT2Runtime {
         } catch (t: Throwable) {
             // A broken/missing coroutine dependency must never crash the host translation service.
             Log.e(TAG, "Unable to schedule Hy-MT2 translation; falling back to ML Kit", t)
-            showFallbackNotice(appContext, "Не удалось запустить Hy-MT2. Используется Google Offline Translate.")
-            fallbackToGoogleOffline(host, sourceText)
+            if (requestIsCurrent()) {
+                showFallbackNotice(appContext, "Не удалось запустить Hy-MT2. Используется Google Offline Translate.")
+                fallbackToGoogleOffline(host, sourceText)
+            }
         }
     }
 
@@ -370,12 +491,20 @@ object HyMT2Runtime {
         }
     }
 
+    private fun buildStq1TranslationPrompt(
+        sourceText: String,
+        targetLanguage: String,
+    ): String {
+        // Exact prompt verified in the standalone STQ1_0 CPU test application.
+        return "Translate the following segment into $targetLanguage, without additional explanation:\n\n$sourceText"
+    }
+
     private fun buildTranslationPrompt(
         sourceText: String,
         targetLanguage: String,
     ): String {
         // Exact prompt text from the verified APK 217 source.
-        // Keep this wording unchanged for the diagnostic comparison.
+        // Keep this wording unchanged for Q4_K_M.
         return """Translate the following text into $targetLanguage. Output only the translated result without explanations:
 
 $sourceText"""
@@ -421,19 +550,59 @@ $sourceText"""
         Log.i(TAG, "Recent dialogue context cleared")
     }
 
+    private fun applyConfiguredCpuAffinity(context: Context, options: HyMT2Options): String {
+        val mask = when (options.cpuAffinityMode) {
+            HyMT2Settings.AFFINITY_PERFORMANCE -> {
+                var detected = 0L
+                val cpus = HyMT2PenaltyNative.cpuTopology()
+                for (i in 0 until cpus.length()) {
+                    val cpu = cpus.getJSONObject(i)
+                    val id = cpu.optInt("id", -1)
+                    if (id in 0..63 && cpu.optBoolean("online") &&
+                        cpu.optBoolean("allowed") && cpu.optBoolean("performance")) {
+                        detected = detected or (1L shl id)
+                    }
+                }
+                detected
+            }
+            HyMT2Settings.AFFINITY_CUSTOM -> options.cpuAffinityMask
+            else -> 0L
+        }
+        val report = HyMT2PenaltyNative.applyCpuAffinity(mask)
+        HyMT2Settings.recordAffinityReport(context, report)
+        val requestedMask = if (mask == 0L) "system" else "0x" + mask.toULong().toString(16)
+        return "mode=${options.cpuAffinityMode}, requestedMask=$requestedMask, result=$report"
+    }
+
     private suspend fun ensureLoaded(context: Context): LlamaModel = modelMutex.withLock {
         val selectedUri = selectedModelUri(context)
             ?: error("GGUF-файл Hy-MT2 не выбран. Выбери исходную модель через системный проводник.")
         val sourceKey = selectedUri.toString()
         val modelKind = selectedModelKind(context)
         val isStqModel = modelKind == MODEL_KIND_STQ1
+        val options = HyMT2Settings.load(context)
+        val threads = options.threads.coerceIn(1, Runtime.getRuntime().availableProcessors().coerceAtLeast(1))
+        val targetConfig = LlamaConfig(
+            contextSize = if (isStqModel) maxOf(options.contextSize, 2048) else options.contextSize,
+            threads = threads,
+            gpuLayers = if (isStqModel) 0 else if (options.useVulkan) options.gpuLayers else 0,
+            temperature = if (isStqModel) 0.7f else options.temperature,
+            topP = if (isStqModel) 0.6f else options.topP,
+            topK = if (isStqModel) 20 else options.topK,
+            seed = if (isStqModel) 42 else -1,
+        )
 
         val existing = loadedModel
         if (existing != null &&
             loadedSource == sourceKey &&
-            loadedModelKind == modelKind
-        ) return@withLock existing
+            loadedModelKind == modelKind &&
+            existing.config == targetConfig
+        ) {
+            Log.i(TAG, "Reusing loaded model; source, kind and full inference config match: $targetConfig")
+            return@withLock existing
+        }
         if (existing != null) {
+            Log.i(TAG, "Reloading model because source/kind/config changed: oldSource=$loadedSource oldKind=$loadedModelKind oldConfig=${existing.config} newSource=$sourceKey newKind=$modelKind newConfig=$targetConfig")
             Llama.releaseModel(existing)
             loadedModel = null
             loadedSource = null
@@ -460,27 +629,20 @@ $sourceText"""
             verifyProcFdPath(modelPath, stat.st_size)
             Log.i(TAG, "SAF descriptor ready and reopenable: fd=$fdNumber, size=${stat.st_size}, path=$modelPath; no model data copied")
 
-            val options = HyMT2Settings.load(context)
-            val threads = options.threads.coerceIn(1, Runtime.getRuntime().availableProcessors().coerceAtLeast(1))
+            val affinityReport = applyConfiguredCpuAffinity(context, options)
+            Log.i(TAG, "CPU_AFFINITY_BEFORE_MODEL_LOAD $affinityReport")
+
             val created = Llama.loadModel(
                 modelPath = modelPath,
-                config = LlamaConfig(
-                    contextSize = options.contextSize,
-                    threads = threads,
-                    // Tencent's STQ1_0 format is supported by the native CPU backend,
-                    // but the current Vulkan backend has no STQ1_0 tensor kernel.
-                    gpuLayers = if (isStqModel) 0 else if (options.useVulkan) options.gpuLayers else 0,
-                    temperature = options.temperature,
-                    topP = options.topP,
-                    topK = options.topK,
-                ),
+                config = targetConfig,
             )
+            HyMT2PenaltyNative.installAbortCallback(created)
             loadedSource = sourceKey
             loadedModelKind = modelKind
             loadedModel = created
             loadedDescriptor = descriptor
             descriptor = null // Ownership moved to loadedDescriptor.
-            Log.i(TAG, "Hy-MT2 loaded from $sourceKey; kind=$modelKind, CPU threads=$threads, context=${options.contextSize}, Vulkan=${!isStqModel && options.useVulkan}, GPU layers=${if (!isStqModel && options.useVulkan) options.gpuLayers else 0}")
+            Log.i(TAG, "Hy-MT2 loaded from $sourceKey; kind=$modelKind; actualConfig=$targetConfig; Vulkan=${!isStqModel && options.useVulkan}")
             Log.i(TAG, "llama.cpp system info: ${Llama.getSystemInfo()}")
             created
         } finally {
@@ -550,7 +712,9 @@ $sourceText"""
             val method = if (usePrimary) "a" else "f"
             val targetMethod = callback.javaClass.getMethod(method, String::class.java)
             targetMethod.isAccessible = true
+            Log.i(TAG, "RESULT_DELIVERY_START chars=${translated.length} usePrimary=$usePrimary callback=${callback.javaClass.name} method=$method")
             targetMethod.invoke(callback, translated)
+            Log.i(TAG, "RESULT_DELIVERY_OK chars=${translated.length}")
         } catch (t: Throwable) {
             Log.e(TAG, "Cannot deliver Hy-MT2 result to app callback", t)
             fallbackToGoogleOffline(host, originalSource)
