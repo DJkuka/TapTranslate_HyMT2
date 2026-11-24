@@ -14,8 +14,6 @@ import android.widget.Toast
 import dev.ffmpegkit.llama.Llama
 import dev.ffmpegkit.llama.LlamaConfig
 import dev.ffmpegkit.llama.LlamaModel
-import com.tap_to_translate.snap_translate.hymt2.ocr.RtDetrLiveBridge
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -205,24 +203,13 @@ object HyMT2Runtime {
      */
     @JvmStatic
     fun translate(host: Any, sourceText: String, sourceCode: String, targetCode: String) {
-        // OCR-originated requests carry a generation token from the exact captured frame.
-        // Manual text translation has no token and retains the original behavior.
-        val requestGeneration = RtDetrLiveBridge.takeHostRequestGeneration(host)
-        fun requestIsCurrent(): Boolean =
-            RtDetrLiveBridge.isRequestGenerationCurrent(requestGeneration)
-
-        if (!requestIsCurrent()) {
-            Log.i(TAG, "Ignoring already-cancelled OCR translation request; generation=$requestGeneration")
-            return
-        }
         val context = resolveContext(host)
         if (context == null) {
-            if (requestIsCurrent()) fallbackToGoogleOffline(host, sourceText)
+            fallbackToGoogleOffline(host, sourceText)
             return
         }
         val appContext = context.applicationContext
         if (!hasModel(appContext)) {
-            if (!requestIsCurrent()) return
             HyMT2Launcher.openIfModelMissing(appContext)
             showFallbackNotice(appContext, "Файл Hy-MT2 не выбран. Открываю выбор GGUF; этот фрагмент переведёт Google Offline Translate.")
             fallbackToGoogleOffline(host, sourceText)
@@ -232,12 +219,7 @@ object HyMT2Runtime {
         try {
             scope.launch {
                 try {
-                    if (!requestIsCurrent()) {
-                        Log.i(TAG, "Queued Hy-MT2 request cancelled before inference; generation=$requestGeneration")
-                        return@launch
-                    }
                     val result = inferenceMutex.withLock {
-                        if (!requestIsCurrent()) throw CancellationException("OCR request cancelled before inference")
                         val model = ensureLoaded(appContext)
                         val options = HyMT2Settings.load(appContext)
                         val modelKind = selectedModelKind(appContext)
@@ -265,10 +247,7 @@ object HyMT2Runtime {
                         var generatedTokens = 0
                         var generatedTimeMs = 0L
 
-                        for ((index, sourceBlock) in sourceBlocks.withIndex()) {
-                            if (!requestIsCurrent()) {
-                                throw CancellationException("OCR request cancelled during Hy-MT2 generation")
-                            }
+                        sourceBlocks.forEachIndexed { index, sourceBlock ->
                             if (sourceBlock.isBlank()) {
                                 translatedBlocks += ""
                             } else {
@@ -293,9 +272,6 @@ object HyMT2Runtime {
                                         "temperature=${options.temperature} " +
                                         "topP=${options.topP} topK=${options.topK} repetitionPenalty=$appliedRepetitionPenalty modelKind=$modelKind"
                                 )
-                                if (!requestIsCurrent()) {
-                                    throw CancellationException("OCR request cancelled before native inference")
-                                }
                                 val generationStartedAt = SystemClock.elapsedRealtime()
                                 val completion = try {
                                     HyMT2PenaltyNative.complete(
@@ -315,9 +291,6 @@ object HyMT2Runtime {
                                         t
                                     )
                                     throw t
-                                }
-                                if (!requestIsCurrent()) {
-                                    throw CancellationException("OCR request cancelled while native inference was running")
                                 }
                                 val generationElapsedMs = SystemClock.elapsedRealtime() - generationStartedAt
                                 Log.i(
@@ -357,9 +330,6 @@ object HyMT2Runtime {
                             generatedTokens * 1000.0 / generatedTimeMs
                         } else 0.0
                         Log.i(TAG, "OCR block mapping preserved: input=${sourceBlocks.size}, output=${translatedBlocks.size}")
-                        if (!requestIsCurrent()) {
-                            throw CancellationException("OCR request cancelled before result finalization")
-                        }
                         rememberRecentContext(host, sourceLanguageKey, targetLanguage, sourceText, translated)
                         HyMT2Settings.recordTranslation(
                             appContext,
@@ -370,25 +340,12 @@ object HyMT2Runtime {
                         translated
                     }
 
-                    if (!requestIsCurrent()) {
-                        Log.i(TAG, "Hy-MT2 result suppressed after cancellation; generation=$requestGeneration")
-                        return@launch
-                    }
-                    mainHandler.post {
-                        if (requestIsCurrent()) deliverResult(host, result, sourceText)
-                        else Log.i(TAG, "Queued UI delivery suppressed after cancellation; generation=$requestGeneration")
-                    }
+                    mainHandler.post { deliverResult(host, result, sourceText) }
                 } catch (t: Throwable) {
-                    if (!requestIsCurrent() || t is CancellationException) {
-                        Log.i(TAG, "Hy-MT2 request stopped without fallback; generation=$requestGeneration")
-                        return@launch
-                    }
                     Log.e(TAG, "Hy-MT2 translation failed; falling back to ML Kit", t)
                     mainHandler.post {
-                        if (requestIsCurrent()) {
-                            showFallbackNotice(appContext, "Ошибка Hy-MT2. Для этого фрагмента используется Google Offline Translate.")
-                            fallbackToGoogleOffline(host, sourceText)
-                        }
+                        showFallbackNotice(appContext, "Ошибка Hy-MT2. Для этого фрагмента используется Google Offline Translate.")
+                        fallbackToGoogleOffline(host, sourceText)
                     }
                 }
             }
