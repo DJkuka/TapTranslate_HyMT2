@@ -99,12 +99,16 @@ public final class RtDetrLiveBridge {
         if (source == null || result == null) return true;
         Long generation = FRAME_GENERATIONS.get(source);
         if (generation == null) return true; // Preserve non-hooked/manual OCR paths.
-        if (generation.longValue() != REQUEST_GENERATION.get()) {
-            Log.i(TAG, "Discarding stale OCR result; frameGeneration=" + generation
-                    + " activeGeneration=" + REQUEST_GENERATION.get());
-            return false;
-        }
+
+        // Always let the host OCR callback finish its own cleanup. The generation
+        // token is checked later in ScreenTranslateService.c(List), immediately
+        // before the result can change the overlay or start any translation engine.
         RESULT_GENERATIONS.put(result, generation);
+        long activeGeneration = REQUEST_GENERATION.get();
+        if (generation.longValue() != activeGeneration) {
+            Log.i(TAG, "Marking stale OCR result for service-side discard; frameGeneration="
+                    + generation + " activeGeneration=" + activeGeneration);
+        }
         return true;
     }
 
