@@ -95,21 +95,20 @@ public final class RtDetrLiveBridge {
     }
 
     /** Called from vh/j.l before an OCR result is handed to the host service. */
-    public static boolean acceptOcrResult(Object owner, Bitmap source, List<?> result) {
-        if (source == null || result == null) return true;
+    public static void acceptOcrResult(Object owner, Bitmap source, List<?> result) {
+        if (source == null || result == null) return;
         Long generation = FRAME_GENERATIONS.get(source);
-        if (generation == null) return true; // Preserve non-hooked/manual OCR paths.
+        if (generation == null) return; // Preserve non-hooked/manual OCR paths.
 
-        // Always let the host OCR callback finish its own cleanup. The generation
-        // token is checked later in ScreenTranslateService.c(List), immediately
-        // before the result can change the overlay or start any translation engine.
+        // Tag the exact OCR result for service-side rejection if it became stale.
+        // Never abort vh/j.l here: its finally path calls g(boolean) to release
+        // the OCR pipeline state and must run for every callback.
         RESULT_GENERATIONS.put(result, generation);
         long activeGeneration = REQUEST_GENERATION.get();
         if (generation.longValue() != activeGeneration) {
             Log.i(TAG, "Marking stale OCR result for service-side discard; frameGeneration="
                     + generation + " activeGeneration=" + activeGeneration);
         }
-        return true;
     }
 
     /** Early guard in ScreenTranslateService.c(List), before changing the visible overlay. */
