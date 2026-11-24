@@ -42,7 +42,7 @@ public final class RtDetrLiveBridge {
     private static final Map<Object, Long> RESULT_GENERATIONS =
             Collections.synchronizedMap(new IdentityHashMap<Object, Long>());
     private static final Map<Object, Long> HOST_REQUEST_GENERATIONS =
-            Collections.synchronizedMap(new WeakHashMap<Object, Long>());
+            Collections.synchronizedMap(new IdentityHashMap<Object, Long>());
     private static final Map<Object, PendingFrame> PENDING =
             Collections.synchronizedMap(new WeakHashMap<Object, PendingFrame>());
     private static final Map<Object, List<DetectedRegion>> ACTIVE_REGIONS =
