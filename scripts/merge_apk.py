@@ -421,11 +421,11 @@ def patch_ocr_engine_picker(base: Path) -> None:
 
 
 def patch_request_cancellation(base: Path) -> None:
-    """Bind screenshot OCR to a generation token and suppress cancelled handoffs."""
+    """Invalidate stale OCR and call APK219's existing native Hy-MT2 cancel API."""
     bridge = "Lcom/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge;"
+    runtime = "Lcom/tap_to_translate/snap_translate/hymt2/HyMT2Runtime;"
 
-    # 1) Accept/reject the OCR result at the last point where the exact source
-    # Bitmap and the resulting host List are both available.
+    # 1) Attach the current screenshot generation to the exact OCR result List.
     ocr = base / "smali_classes3/vh/j.smali"
     text = ocr.read_text(encoding="utf-8")
     start = text.find(".method public final l(Ljava/util/List;Landroid/graphics/Bitmap;Z)V")
@@ -451,8 +451,7 @@ def patch_request_cancellation(base: Path) -> None:
         text = text[:start] + method + text[end:]
         ocr.write_text(text, encoding="utf-8")
 
-    # 2) Reject stale OCR results before they update the visible overlay, then
-    # transfer the accepted generation from the result List to the yh/f host.
+    # 2) Reject stale OCR before it changes the overlay or dispatches Hy-MT2.
     service = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali"
     text = service.read_text(encoding="utf-8")
     start = text.find(".method public final c(Ljava/util/List;)V")
@@ -475,34 +474,21 @@ def patch_request_cancellation(base: Path) -> None:
         if method.count(anchor) != 1:
             raise RuntimeError("Unexpected ScreenTranslateService.c(List) register layout")
         method = method.replace(anchor, anchor + "\n" + guard + "\n", 1)
+        text = text[:start] + method + text[end:]
+        service.write_text(text, encoding="utf-8")
 
-    if "RtDetrLiveBridge;->bindHostRequest" not in method:
-        anchor = """    invoke-virtual {p0}, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->t()Lyh/f;
+    # 3) Preserve APK219's own HyMT2Runtime class and use its existing
+    # cancelActiveTranslation() implementation (which sets the native abort flag).
+    runtime_candidates = list(base.glob("smali*/com/tap_to_translate/snap_translate/hymt2/HyMT2Runtime.smali"))
+    if len(runtime_candidates) != 1:
+        raise RuntimeError("Expected one APK219 HyMT2Runtime.smali; found " + str(len(runtime_candidates)))
+    runtime_path = runtime_candidates[0]
+    runtime_text = runtime_path.read_text(encoding="utf-8")
+    if "cancelActiveTranslation" not in runtime_text:
+        raise RuntimeError("APK219 HyMT2Runtime has no existing cancelActiveTranslation() API")
 
-    move-result-object p1"""
-        replacement = f"""    move-object v1, p1
-
-    invoke-virtual {{p0}}, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->t()Lyh/f;
-
-    move-result-object p1
-
-    invoke-static {{p1, v1}}, {bridge}->bindHostRequest(Ljava/lang/Object;Ljava/lang/Object;)Z
-
-    move-result v0
-
-    if-nez v0, :hymt2_request_bound
-
-    return-void
-
-    :hymt2_request_bound"""
-        if method.count(anchor) != 1:
-            raise RuntimeError("Could not bind OCR generation to Hy-MT2 host in ScreenTranslateService.c")
-        method = method.replace(anchor, replacement, 1)
-    text = text[:start] + method + text[end:]
-    service.write_text(text, encoding="utf-8")
-
-    # 3) The host's double-tap cancel path is the branch that hides its
-    # ProgressBar. Invalidate the OCR/Hy-MT2 generation at that exact branch.
+    # The host's double-tap cancel path is the branch that hides its ProgressBar.
+    # Invalidate pending OCR and abort the active native Hy-MT2 generation there.
     candidates = list(base.glob("smali*/androidx/appcompat/app/b.smali"))
     if len(candidates) != 1:
         raise RuntimeError("Expected one decoded androidx.appcompat.app.b.smali; found " + str(len(candidates)))
@@ -521,21 +507,24 @@ def patch_request_cancellation(base: Path) -> None:
             raise RuntimeError("Could not uniquely identify the double-tap cancel ProgressBar hide call")
         at = method.find(visibility)
         line_start = method.rfind("\n", 0, at) + 1
-        method = method[:line_start] + f"    invoke-static {{}}, {bridge}->cancelActiveRequest()V\n\n" + method[line_start:]
+        cancel_calls = (
+            f"    invoke-static {{}}, {bridge}->cancelActiveRequest()V\n\n"
+            f"    invoke-static {{}}, {runtime}->cancelActiveTranslation()V\n\n"
+        )
+        method = method[:line_start] + cancel_calls + method[line_start:]
         click_text = click_text[:start] + method + click_text[end:]
         click_path.write_text(click_text, encoding="utf-8")
 
-    # 4) Keep the cancellation wiring explicit and fail the build if any link is lost.
-    checks = (
-        "RtDetrLiveBridge;->acceptOcrResult",
-        "RtDetrLiveBridge;->isOcrResultCurrent",
-        "RtDetrLiveBridge;->bindHostRequest",
-    )
-    if any(item not in ocr.read_text(encoding="utf-8") + service.read_text(encoding="utf-8") for item in checks):
-        raise RuntimeError("OCR generation-token handoff is incomplete")
-    if "RtDetrLiveBridge;->cancelActiveRequest" not in click_path.read_text(encoding="utf-8"):
+    if "RtDetrLiveBridge;->acceptOcrResult" not in ocr.read_text(encoding="utf-8"):
+        raise RuntimeError("OCR result generation hook was not installed")
+    if "RtDetrLiveBridge;->isOcrResultCurrent" not in service.read_text(encoding="utf-8"):
+        raise RuntimeError("Stale OCR result guard was not installed")
+    final_click = click_path.read_text(encoding="utf-8")
+    if "RtDetrLiveBridge;->cancelActiveRequest()V" not in final_click:
         raise RuntimeError("Double-tap cancel does not invalidate the active OCR request")
-    print("Added generation-token cancellation across double-tap, OCR and Hy-MT2 handoff")
+    if "HyMT2Runtime;->cancelActiveTranslation()V" not in final_click:
+        raise RuntimeError("Double-tap cancel does not invoke APK219 native Hy-MT2 cancellation")
+    print("Added double-tap cancellation for stale OCR and APK219 native Hy-MT2 generation")
 
 
 def patch_free_text_alpha_renderers(base: Path) -> None:
