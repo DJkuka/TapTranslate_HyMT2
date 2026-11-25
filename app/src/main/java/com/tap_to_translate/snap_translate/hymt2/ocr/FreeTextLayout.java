@@ -12,6 +12,14 @@ public final class FreeTextLayout {
     public static boolean draw(Canvas canvas, Rect bounds, CharSequence source,
             TextPaint paint, float minTextSize, float maxTextSize, int padding,
             float offsetX, float offsetY, float fontScale, float lineSpacing) {
+        return draw(canvas, bounds, source, paint, minTextSize, maxTextSize, padding,
+                offsetX, offsetY, fontScale, lineSpacing, 0f);
+    }
+
+    public static boolean draw(Canvas canvas, Rect bounds, CharSequence source,
+            TextPaint paint, float minTextSize, float maxTextSize, int padding,
+            float offsetX, float offsetY, float fontScale, float lineSpacing,
+            float rotationDegrees) {
         if (canvas == null || bounds == null || source == null || source.length() == 0
                 || paint == null || bounds.width() < 4 || bounds.height() < 4) return false;
         float originalSize = paint.getTextSize();
@@ -42,7 +50,11 @@ public final class FreeTextLayout {
             if (result == null) return false;
             int save = canvas.save();
             try {
+                // Keep the clip fixed to the original rectangle, then rotate
+                // the text around the rectangle center. Rotated glyphs can never
+                // paint outside the free-text panel.
                 canvas.clipRect(bounds);
+                canvas.rotate(rotationDegrees, bounds.exactCenterX(), bounds.exactCenterY());
                 canvas.translate(bounds.left + inset + offsetX,
                         bounds.top + inset + offsetY
                                 + (height - result.getHeight()) * 0.5f);
