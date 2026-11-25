@@ -107,7 +107,14 @@ object PaddleOcrLiveBridge {
             check(OpenCVUtils.init(context)) { "OpenCV initialization failed" }
             Log.i(TAG, "OpenCV initialization confirmed; abi=${Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"}")
             val ocrPrefs = context.getSharedPreferences("taptranslate_ocr_settings", Context.MODE_PRIVATE)
-            val maxSideLimit = ocrPrefs.getInt("ocr_det_max_side_limit", 4000).coerceIn(256, 8192)
+            val requestedMaxSideLimit = ocrPrefs.getInt("ocr_det_max_side_limit", 1600).coerceIn(256, 8192)
+            // Bound detector input dimensions on the tablet to reduce ONNX peak allocation.
+            // This also clamps older saved values (for example 4000 px) after app update.
+            val maxSideLimit = requestedMaxSideLimit.coerceAtMost(1600)
+            if (maxSideLimit != requestedMaxSideLimit) {
+                Log.w(TAG, "PP-OCR detMaxSideLimit capped from " + requestedMaxSideLimit
+                    + " to " + maxSideLimit + " px to reduce peak ONNX memory")
+            }
             val detThresh = ocrPrefs.getFloat("ocr_det_thresh", 0.20f).coerceIn(0.00f, 1.00f)
             val detBoxThresh = ocrPrefs.getFloat("ocr_det_box_thresh", 0.45f).coerceIn(0.00f, 1.00f)
             val detUnclipRatio = ocrPrefs.getFloat("ocr_det_unclip_ratio", 1.40f).coerceIn(0.10f, 10.00f)
