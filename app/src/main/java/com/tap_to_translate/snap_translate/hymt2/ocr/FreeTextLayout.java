@@ -38,8 +38,13 @@ public final class FreeTextLayout {
             StaticLayout result = makeLayout(source, paint, width, spacing);
             float low = min, high = wanted;
             if (result == null || result.getHeight() > height) {
-                if (wanted >= base) low = base; else high = wanted;
-                result = baseLayout;
+                if (wanted >= base) {
+                    low = base;
+                    result = baseLayout;
+                } else {
+                    high = wanted;
+                    result = null;
+                }
                 for (int i = 0; i < 16; i++) {
                     float mid = (low + high) * 0.5f;
                     paint.setTextSize(mid);
@@ -48,6 +53,7 @@ public final class FreeTextLayout {
                         low = mid; result = candidate;
                     } else high = mid;
                 }
+                paint.setTextSize(low);
             }
             if (result == null) return false;
             int save = canvas.save();
