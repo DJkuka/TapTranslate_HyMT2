@@ -244,7 +244,8 @@ public final class TranslationRegionEditor {
             Object renderer = rendererField.get(state.root);
             if (renderer != null) renderer.getClass().getMethod("setList", List.class).invoke(renderer, updated);
             updateSecondaryRenderer(state.root, updated);
-            refreshOverlayAssociation(item);
+            // A manually added free-text panel remains an independent rectangle;
+            // it must not inherit a speech-balloon mask from the area underneath.
             state.overlay.lastTapTarget = null;
             updateSelectionButtons(state);
             refreshRenderers(state);
@@ -421,12 +422,20 @@ public final class TranslationRegionEditor {
 
     private static void setTextTransform(
             Object item, float dx, float dy, float scale, float lineSpacing) {
+        float rotation = 0f;
+        float[] current = getTextTransform(item);
+        if (current != null && current.length > 4) rotation = current[4];
+        setTextTransform(item, dx, dy, scale, lineSpacing, rotation);
+    }
+
+    private static void setTextTransform(
+            Object item, float dx, float dy, float scale, float lineSpacing, float rotation) {
         try {
             Class.forName(BRIDGE).getMethod("setBubbleTextTransform",
-                    Object.class, Float.TYPE, Float.TYPE, Float.TYPE, Float.TYPE)
-                    .invoke(null, item, dx, dy, scale, lineSpacing);
+                    Object.class, Float.TYPE, Float.TYPE, Float.TYPE, Float.TYPE, Float.TYPE)
+                    .invoke(null, item, dx, dy, scale, lineSpacing, rotation);
         } catch (Throwable error) {
-            Log.w(TAG, "Could not update BubblePop text transform", error);
+            Log.w(TAG, "Could not update text transform", error);
         }
     }
 
@@ -886,6 +895,9 @@ public final class TranslationRegionEditor {
         private Rect dragStart;
         private int[] rawStart;
         private float[] textTransformStart;
+        private boolean rotatingText;
+        private float rotationStartPointerAngle;
+        private float rotationStartValue;
 
         // Whole-region movement is deliberately a two-finger gesture. This avoids
         // competing with the four single-finger corner resize targets on small panels.
@@ -941,6 +953,9 @@ public final class TranslationRegionEditor {
                 canvas.drawRoundRect(bounds, radius, radius, outline);
                 if ((state.transformMode || state.textTransformMode) && item == state.transformTarget) {
                     drawHandles(canvas, rect);
+                    if (state.textTransformMode && isFreeTextOverlay(item)) {
+                        drawRotationHandle(canvas, rect);
+                    }
                 }
             }
         }
@@ -962,6 +977,29 @@ public final class TranslationRegionEditor {
                 canvas.drawRoundRect(handle, dp(getContext(), 2.0f), dp(getContext(), 2.0f), handleFill);
                 canvas.drawRoundRect(handle, dp(getContext(), 2.0f), dp(getContext(), 2.0f), handleOutline);
             }
+        }
+
+        private void drawRotationHandle(Canvas canvas, Rect rect) {
+            float centerX = rect.exactCenterX();
+            float topY = rect.top;
+            float radius = dp(getContext(), 8.0f);
+            float handleY = topY - dp(getContext(), 26.0f);
+            outline.setColor(0xFF00A6D6);
+            outline.setStrokeWidth(dp(getContext(), 2.0f));
+            canvas.drawLine(centerX, topY, centerX, handleY + radius, outline);
+            canvas.drawCircle(centerX, handleY, radius, handleFill);
+            canvas.drawCircle(centerX, handleY, radius, outline);
+            // Small curved-arrow cue.
+            canvas.drawArc(centerX - radius * 0.48f, handleY - radius * 0.48f,
+                    centerX + radius * 0.48f, handleY + radius * 0.48f,
+                    -55f, 285f, false, outline);
+        }
+
+        private boolean hitRotationHandle(float x, float y, Rect rect) {
+            float cx = rect.exactCenterX();
+            float cy = rect.top - dp(getContext(), 26.0f);
+            float radius = dp(getContext(), 18.0f);
+            return distanceSquared(x, y, cx, cy) <= radius * radius;
         }
 
         @Override public boolean onTouchEvent(MotionEvent event) {
@@ -993,8 +1031,20 @@ public final class TranslationRegionEditor {
                         Rect activeBounds = readBounds(state.transformTarget);
                         if (activeBounds != null) {
                             dragStart = new Rect(activeBounds);
-                            dragMode = findDragMode(x, y, activeBounds);
                             textTransformStart = getTextTransform(state.transformTarget);
+                            if (isFreeTextOverlay(state.transformTarget)
+                                    && hitRotationHandle(x, y, activeBounds)) {
+                                rotatingText = true;
+                                rotationStartPointerAngle = (float) Math.toDegrees(Math.atan2(
+                                        y - activeBounds.exactCenterY(),
+                                        x - activeBounds.exactCenterX()));
+                                rotationStartValue = textTransformStart != null
+                                        && textTransformStart.length > 4 ? textTransformStart[4] : 0f;
+                                dragging = true;
+                                dragMode = DragMode.NONE;
+                                return true;
+                            }
+                            dragMode = findDragMode(x, y, activeBounds);
                             dragging = true;
                             return true;
                         }
@@ -1057,7 +1107,8 @@ public final class TranslationRegionEditor {
                         moved = true;
                     }
                     if (state.textTransformMode && dragging && dragStart != null && moved) {
-                        applyTextTransform(x, y);
+                        if (rotatingText) applyTextRotation(x, y);
+                        else applyTextTransform(x, y);
                     } else if (state.transformMode && dragging && dragStart != null && rawStart != null && moved) {
                         applyCornerResize(x, y);
                     }
@@ -1087,7 +1138,10 @@ public final class TranslationRegionEditor {
                         return true;
                     }
                     if (state.textTransformMode && dragging) {
-                        if (moved) applyTextTransform(x, y);
+                        if (moved) {
+                            if (rotatingText) applyTextRotation(x, y);
+                            else applyTextTransform(x, y);
+                        }
                         clearDrag();
                     } else if (state.transformMode && exitDoubleTap && !moved) {
                         exitTransformMode(state);
@@ -1258,6 +1312,22 @@ public final class TranslationRegionEditor {
             return true;
         }
 
+        private void applyTextRotation(float x, float y) {
+            if (state.transformTarget == null || dragStart == null || textTransformStart == null) return;
+            float pointerAngle = (float) Math.toDegrees(Math.atan2(
+                    y - dragStart.exactCenterY(), x - dragStart.exactCenterX()));
+            float delta = pointerAngle - rotationStartPointerAngle;
+            while (delta > 180f) delta -= 360f;
+            while (delta < -180f) delta += 360f;
+            float rotation = rotationStartValue + delta;
+            float dx = textTransformStart[0];
+            float dy = textTransformStart[1];
+            float scale = textTransformStart[2];
+            float spacing = textTransformStart.length > 3 ? textTransformStart[3] : 1.0f;
+            setTextTransform(state.transformTarget, dx, dy, scale, spacing, rotation);
+            refreshRenderers(state);
+        }
+
         private void applyTextTransform(float x, float y) {
             if (state.transformTarget == null || dragStart == null || textTransformStart == null) return;
             float dx = x - downX;
@@ -1418,6 +1488,7 @@ public final class TranslationRegionEditor {
             dragging = false;
             dragMode = DragMode.NONE;
             textGestureMode = 0;
+            rotatingText = false;
             dragStart = null;
             rawStart = null;
             textTransformStart = null;
