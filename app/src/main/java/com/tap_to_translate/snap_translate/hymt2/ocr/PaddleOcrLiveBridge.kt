@@ -122,12 +122,15 @@ object PaddleOcrLiveBridge {
             val detScoreMode = (ocrPrefs.getString("ocr_det_score_mode", "fast") ?: "fast")
                 .lowercase(Locale.ROOT).let { if (it == "fast" || it == "slow") it else "fast" }
             val recBatchSize = ocrPrefs.getInt("ocr_rec_batch_size", 1).coerceIn(1, 8)
+            val recPreprocessScale = (ocrPrefs.getString("ocr_rec_preprocess_scale", "1.0") ?: "1.0")
+                .toFloatOrNull()?.let { if (it == 1.0f || it == 1.5f || it == 2.0f) it else 1.0f } ?: 1.0f
             Log.i(TAG, "PP-OCRv6 config detImgMode=" + detImgMode +
                 " detLimitSideLen=" + detLimitSideLen + " detLimitType=" + detLimitType +
                 " detThresh=" + detThresh + " detBoxThresh=" + detBoxThresh +
                 " detUnclipRatio=" + detUnclipRatio + " detMaxCandidates=" + detMaxCandidates +
                 " detUseDilation=" + detUseDilation + " detScoreMode=" + detScoreMode +
                 " recScoreThresh=" + recScoreThresh + " recBatchSize=" + recBatchSize +
+                " recPreprocessScale=" + recPreprocessScale +
                 " detMaxSideLimit=" + maxSideLimit)
             val created = runBlocking {
                 PaddleOCR.create(
@@ -145,6 +148,7 @@ object PaddleOcrLiveBridge {
                         detScoreMode = detScoreMode,
                         recScoreThresh = recScoreThresh,
                         recBatchSize = recBatchSize,
+                        recPreprocessScale = recPreprocessScale,
                         detBoxType = "quad"
                     ),
                     engineConfig = EngineConfig(numThreads = 2),
