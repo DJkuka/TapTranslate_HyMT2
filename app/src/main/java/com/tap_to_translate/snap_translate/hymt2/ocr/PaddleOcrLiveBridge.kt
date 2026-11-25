@@ -21,6 +21,9 @@ import kotlin.math.floor
 /** PP-OCRv6 recognition adapter. RT-DETR supplies bubble boundaries; ML Kit is only a free-text fallback. */
 object PaddleOcrLiveBridge {
     private const val TAG = "TapTranslatePaddle"
+    // First controlled experiment: enlarge the complete frame before PP-OCR Detection.
+    // Detection's own detMaxSideLimit remains the upper bound on model input size.
+    private const val DETECTION_UPSCALE = 2
     private val busy = AtomicBoolean(false)
     private val lock = Any()
     @Volatile private var engine: PaddleOCR? = null
@@ -55,8 +58,36 @@ object PaddleOcrLiveBridge {
         executor.execute {
             try {
                 val ocr = getEngine(app)
-                val result = runBlocking { ocr.recognize(bitmap) }
-                future.complete(logAndAssemble(result, bitmap.width, bitmap.height, regions))
+                // Upscale the full screenshot before PP-OCR Detection. RecognitionEngine
+                // then crops from this same enlarged source, so both detector and
+                // recognizer receive the extra pixel detail. Keep RT-DETR regions and
+                // host overlay geometry in original screenshot coordinates.
+                val originalWidth = bitmap.width
+                val originalHeight = bitmap.height
+                val detectionScale = DETECTION_UPSCALE
+                val detectionBitmap = Bitmap.createScaledBitmap(
+                    bitmap,
+                    (originalWidth * detectionScale).coerceAtLeast(1),
+                    (originalHeight * detectionScale).coerceAtLeast(1),
+                    true
+                )
+                try {
+                    Log.i(TAG, "PP-OCR input upscale=${detectionScale}x original=${originalWidth}x${originalHeight} detection=${detectionBitmap.width}x${detectionBitmap.height}")
+                    val result = runBlocking { ocr.recognize(detectionBitmap) }
+                    future.complete(
+                        logAndAssemble(
+                            result,
+                            originalWidth,
+                            originalHeight,
+                            regions,
+                            detectionScale.toFloat()
+                        )
+                    )
+                } finally {
+                    if (detectionBitmap !== bitmap && !detectionBitmap.isRecycled) {
+                        detectionBitmap.recycle()
+                    }
+                }
             } catch (t: Throwable) {
                 Log.e(TAG, "Paddle inference failed; ML Kit output remains unchanged", t)
                 future.completeExceptionally(t)
@@ -164,8 +195,14 @@ object PaddleOcrLiveBridge {
         }
     }
 
-    private fun logAndAssemble(result: OCRRunResult, width: Int, height: Int, regions: List<DetectedRegion>): List<PaddleOcrTextGroup> {
-        Log.i(TAG, "frame=${width}x${height} lines=${result.lineCount} det_ms=${result.detectionTimeMs} rec_ms=${result.recognitionTimeMs} total_ms=${result.totalTimeMs}")
+    private fun logAndAssemble(
+        result: OCRRunResult,
+        width: Int,
+        height: Int,
+        regions: List<DetectedRegion>,
+        detectionScale: Float
+    ): List<PaddleOcrTextGroup> {
+        Log.i(TAG, "frame=${width}x${height} detection_scale=${detectionScale}x lines=${result.lineCount} det_ms=${result.detectionTimeMs} rec_ms=${result.recognitionTimeMs} total_ms=${result.totalTimeMs}")
         data class Line(val index: Int, val confidence: Float, val bounds: Rect, val text: String, val bubbleId: String?)
         val bubbleRegions = regions.filter { it.kind == OcrRegionKind.BUBBLE_CONTAINER }
         val bubbleBounds = bubbleRegions.map { it.bounds }.map {
@@ -182,10 +219,13 @@ object PaddleOcrLiveBridge {
                 Log.w(TAG, "skip OCR detection with empty polygon index=$i text=$text")
                 return@mapIndexedNotNull null
             }
-            val l = floor(pts.minOf { it.x }.toDouble()).toInt().coerceIn(0, width)
-            val t = floor(pts.minOf { it.y }.toDouble()).toInt().coerceIn(0, height)
-            val r = ceil(pts.maxOf { it.x }.toDouble()).toInt().coerceIn(0, width)
-            val b = ceil(pts.maxOf { it.y }.toDouble()).toInt().coerceIn(0, height)
+            // PP-OCR boxes are measured on the enlarged bitmap; map them back to
+            // the original screenshot before matching RT-DETR bubbles or drawing overlays.
+            val safeScale = detectionScale.coerceAtLeast(1.0f)
+            val l = floor(pts.minOf { it.x }.toDouble() / safeScale).toInt().coerceIn(0, width)
+            val t = floor(pts.minOf { it.y }.toDouble() / safeScale).toInt().coerceIn(0, height)
+            val r = ceil(pts.maxOf { it.x }.toDouble() / safeScale).toInt().coerceIn(0, width)
+            val b = ceil(pts.maxOf { it.y }.toDouble() / safeScale).toInt().coerceIn(0, height)
             val rect = Rect(l, t, r, b)
             if (rect.width() <= 0 || rect.height() <= 0) {
                 Log.w(TAG, "skip OCR detection with empty bounds index=$i text=$text")
