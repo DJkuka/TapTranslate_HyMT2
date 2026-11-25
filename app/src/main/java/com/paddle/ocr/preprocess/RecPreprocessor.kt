@@ -20,6 +20,7 @@ import org.opencv.core.Mat
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 import kotlin.math.ceil
+import kotlin.math.roundToInt
 
 data class RecPreprocessResult(
     val tensorData: FloatArray,
@@ -30,7 +31,8 @@ object RecPreprocessor {
     private const val FIXED_HEIGHT = 48
     private const val MAX_IMG_W = 3200
 
-    fun preprocessBatch(crops: List<Mat>): RecPreprocessResult {
+    fun preprocessBatch(crops: List<Mat>, upscaleFactor: Float = 1.0f): RecPreprocessResult {
+        val scale = upscaleFactor.coerceIn(1.0f, 2.0f)
         // Convert BGR to RGB and resize to fixed height while preserving aspect ratio
         val resizedMats = mutableListOf<Mat>()
         for (crop in crops) {
@@ -42,7 +44,25 @@ object RecPreprocessor {
             val aspectRatio = if (h > 0) w.toDouble() / h else 1.0
             val newW = ceil(FIXED_HEIGHT * aspectRatio).toInt().coerceAtMost(MAX_IMG_W)
             val dst = Mat()
-            Imgproc.resize(rgb, dst, Size(newW.toDouble(), FIXED_HEIGHT.toDouble()), 0.0, 0.0, Imgproc.INTER_LINEAR)
+            if (scale <= 1.0f) {
+                // Preserve the original APK219 preprocessing path exactly at 1.0x.
+                Imgproc.resize(rgb, dst, Size(newW.toDouble(), FIXED_HEIGHT.toDouble()), 0.0, 0.0, Imgproc.INTER_LINEAR)
+            } else {
+                // ONNX Recognition has a fixed input height of 48 px.
+                // Enlarge and mildly sharpen the crop, then resample to that fixed height.
+                val enlarged = Mat()
+                val enlargedW = (w * scale).roundToInt().coerceAtLeast(1)
+                val enlargedH = (h * scale).roundToInt().coerceAtLeast(1)
+                Imgproc.resize(rgb, enlarged, Size(enlargedW.toDouble(), enlargedH.toDouble()), 0.0, 0.0, Imgproc.INTER_CUBIC)
+                val blurred = Mat()
+                val sharpened = Mat()
+                Imgproc.GaussianBlur(enlarged, blurred, Size(0.0, 0.0), 0.8)
+                Core.addWeighted(enlarged, 1.35, blurred, -0.35, 0.0, sharpened)
+                Imgproc.resize(sharpened, dst, Size(newW.toDouble(), FIXED_HEIGHT.toDouble()), 0.0, 0.0, Imgproc.INTER_LANCZOS4)
+                enlarged.release()
+                blurred.release()
+                sharpened.release()
+            }
             rgb.release()
             resizedMats.add(dst)
         }
