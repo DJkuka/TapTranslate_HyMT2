@@ -524,14 +524,10 @@ public final class TranslationRegionEditor {
 
     private static void editFreeTextOpacity(State state) {
         if (!state.editing || state.selected.size() != 1) {
-            toast(state.root, "Выберите один прямоугольник свободного текста");
+            toast(state.root, "Выберите одну панель");
             return;
         }
         final Object item = state.selected.keySet().iterator().next();
-        if (!isFreeTextOverlay(item)) {
-            toast(state.root, "Непрозрачность доступна только для свободного текста вне баблов");
-            return;
-        }
 
         final Context context = state.root.getContext();
         final int originalHostAlpha = readHostBackgroundAlpha();
@@ -564,7 +560,7 @@ public final class TranslationRegionEditor {
                 ViewGroup.LayoutParams.MATCH_PARENT, Math.round(dp(context, 32))));
 
         AlertDialog dialog = new AlertDialog.Builder(context)
-                .setTitle("Непрозрачность свободного текста")
+                .setTitle("Непрозрачность фона панели")
                 .setView(container)
                 .setPositiveButton("Готово", null)
                 .setNegativeButton("Отмена", null)
