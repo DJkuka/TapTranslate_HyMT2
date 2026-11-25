@@ -116,24 +116,28 @@ object PaddleOcrLiveBridge {
                     if (!detectionBitmap.isRecycled) detectionBitmap.recycle()
                 }
 
-                // Pass 2: re-run only small RT-DETR bubble regions on a 2x2 mosaic.
-                // A single inference can therefore inspect four enlarged bubbles.
-                val regionalGroups = runBubbleMosaics(ocr, bitmap, regions)
+                // Pass 2: tile the ENTIRE source frame, independently of RT-DETR.
+                // Each overlapping tile is enlarged to the detector's configured max side.
+                // Thus isolated glyphs outside every bubble rectangle are still searched.
+                val tiledGroups = runFullFrameTiles(ocr, bitmap, regions)
                 val fullByBubble = fullFrameGroups.filter { it.bubbleId != null }
                     .groupBy { it.bubbleId!! }
-                val regionalByBubble = regionalGroups.filter { it.bubbleId != null }
+                val tiledByBubble = tiledGroups.filter { it.bubbleId != null }
                     .groupBy { it.bubbleId!! }
-                val bubbleIds = (fullByBubble.keys + regionalByBubble.keys).distinct()
+                val bubbleIds = (fullByBubble.keys + tiledByBubble.keys).distinct()
                 val selectedBubbleGroups = bubbleIds.mapNotNull { id ->
                     val candidates = (fullByBubble[id] ?: emptyList()) +
-                        (regionalByBubble[id] ?: emptyList())
+                        (tiledByBubble[id] ?: emptyList())
                     candidates.maxByOrNull { groupQuality(it) }
                 }
-                val freeTextGroups = fullFrameGroups.filter { it.bubbleId == null }
+                val freeTextGroups = deduplicateGroups(
+                    fullFrameGroups.filter { it.bubbleId == null } +
+                        tiledGroups.filter { it.bubbleId == null }
+                )
                 val combined = (freeTextGroups + selectedBubbleGroups)
                     .sortedWith(compareBy<PaddleOcrTextGroup> { it.bounds.top }.thenBy { it.bounds.left })
 
-                Log.i(TAG, "PP-OCR merge summary full_groups=${fullFrameGroups.size} regional_groups=${regionalGroups.size} bubbles_reprocessed=${regionalByBubble.size} final_groups=${combined.size}")
+                Log.i(TAG, "PP-OCR merge summary full_groups=${fullFrameGroups.size} tiled_groups=${tiledGroups.size} bubbles_seen_in_tiles=${tiledByBubble.size} final_groups=${combined.size}")
                 combined.forEachIndexed { i, group ->
                     Log.i(TAG, "final_group[${i}] bubble=${group.bubbleId ?: "FREE"} lines=${group.lineCount} conf=${group.confidence} bounds=${group.bounds.flattenToString()} text=${group.text}")
                 }
@@ -157,6 +161,82 @@ object PaddleOcrLiveBridge {
     private fun groupQuality(group: PaddleOcrTextGroup): Float {
         // Prefer the pass that recovered more characters/lines; confidence breaks ties.
         return group.text.length.toFloat() + group.lineCount * 6.0f + group.confidence * 2.0f
+    }
+
+    /**
+     * Runs PP-OCR on overlapping tiles covering the complete source image.
+     * No RT-DETR region is used to choose or crop these tiles.
+     */
+    private fun runFullFrameTiles(
+        ocr: PaddleOCR,
+        source: Bitmap,
+        regions: List<DetectedRegion>
+    ): List<PaddleOcrTextGroup> {
+        val maxSide = min(activeMaxSideLimit, 4000).coerceAtLeast(1024)
+        val tileWidth = (source.width * 0.46f).roundToInt().coerceIn(1, source.width)
+        val tileHeight = (source.height * 0.59f).roundToInt().coerceIn(1, source.height)
+        val xPositions = listOf(0, (source.width - tileWidth) / 2, source.width - tileWidth).distinct()
+        val yPositions = listOf(0, source.height - tileHeight).distinct()
+        val tiles = yPositions.flatMap { top ->
+            xPositions.map { left -> Rect(left, top, left + tileWidth, top + tileHeight) }
+        }
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
+        val output = mutableListOf<PaddleOcrTextGroup>()
+        Log.i(TAG, "PP-OCR whole-frame tiling start tiles=${tiles.size} source=${source.width}x${source.height} overlap=approx20pct maxSide=${maxSide}")
+
+        tiles.forEachIndexed { index, crop ->
+            var tile: Bitmap? = null
+            try {
+                val scale = maxSide.toFloat() / maxOf(crop.width(), crop.height()).toFloat()
+                val targetWidth = ((crop.width() * scale).roundToInt() / 32 * 32).coerceAtLeast(32)
+                val targetHeight = ((crop.height() * scale).roundToInt() / 32 * 32).coerceAtLeast(32)
+                tile = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+                Canvas(tile).drawBitmap(
+                    source, crop, Rect(0, 0, targetWidth, targetHeight), paint
+                )
+                val transform = CoordinateTransform(
+                    outputBounds = Rect(0, 0, targetWidth, targetHeight),
+                    sourceBounds = Rect(crop),
+                    scaleX = targetWidth.toFloat() / crop.width().toFloat(),
+                    scaleY = targetHeight.toFloat() / crop.height().toFloat()
+                )
+                Log.i(TAG, "PP-OCR full-frame tile=${index + 1}/${tiles.size} source=${crop.flattenToString()} input=${targetWidth}x${targetHeight} scale=${"%.2f".format(Locale.US, transform.scaleX)}x")
+                val result = runBlocking { ocr.recognize(tile) }
+                Log.i(TAG, "PP-OCR full-frame tile result tile=${index + 1}/${tiles.size} det_shape=${result.detInputShape} lines=${result.lineCount} det_ms=${result.detectionTimeMs} rec_ms=${result.recognitionTimeMs}")
+                output.addAll(
+                    logAndAssemble(
+                        result, source.width, source.height, regions,
+                        listOf(transform), "full-frame-tile-${index + 1}"
+                    )
+                )
+            } catch (t: Throwable) {
+                Log.e(TAG, "PP-OCR full-frame tile ${index + 1}/${tiles.size} failed; other tiles retained", t)
+            } finally {
+                tile?.let { if (!it.isRecycled) it.recycle() }
+            }
+        }
+        Log.i(TAG, "PP-OCR whole-frame tiling complete tiles=${tiles.size} groups=${output.size}")
+        return output
+    }
+
+    private fun deduplicateGroups(groups: List<PaddleOcrTextGroup>): List<PaddleOcrTextGroup> {
+        val kept = mutableListOf<PaddleOcrTextGroup>()
+        groups.sortedByDescending { groupQuality(it) }.forEach { candidate ->
+            val duplicateIndex = kept.indexOfFirst { existing ->
+                val intersection = Rect(existing.bounds)
+                if (!intersection.intersect(candidate.bounds)) false
+                else {
+                    val intersectionArea = intersection.width().toLong() * intersection.height().toLong()
+                    val smallerArea = min(
+                        existing.bounds.width().toLong() * existing.bounds.height().toLong(),
+                        candidate.bounds.width().toLong() * candidate.bounds.height().toLong()
+                    ).coerceAtLeast(1L)
+                    intersectionArea.toFloat() / smallerArea.toFloat() >= 0.70f
+                }
+            }
+            if (duplicateIndex < 0) kept.add(candidate)
+        }
+        return kept
     }
 
     private fun runBubbleMosaics(
