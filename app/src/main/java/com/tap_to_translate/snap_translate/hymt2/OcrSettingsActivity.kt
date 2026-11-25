@@ -1,6 +1,12 @@
 package com.tap_to_translate.snap_translate.hymt2
 
 import android.app.Activity
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Typeface
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
