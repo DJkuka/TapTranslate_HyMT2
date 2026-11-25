@@ -28,4 +28,6 @@ data class PaddleOCRConfig(
     val detBoxType: String = "quad",
     val recScoreThresh: Float = 0.0f,
     val recBatchSize: Int = 1,
+    /** Crop enlargement/sharpening before fixed 48 px Recognition input. */
+    val recPreprocessScale: Float = 1.0f,
 )
