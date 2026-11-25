@@ -21,6 +21,7 @@ import org.opencv.core.Mat
 class RecognitionEngine(
     private val ortManager: ORTSessionManager,
     private val characterList: List<String>,
+    private val recPreprocessScale: Float = 1.0f,
 ) {
     data class RecognitionResult(
         val texts: List<Pair<String, Float>>,
@@ -34,7 +35,7 @@ class RecognitionEngine(
     fun recognize(crops: List<Mat>): RecognitionResult {
         // Preprocess
         val preStart = System.currentTimeMillis()
-        val preResult = RecPreprocessor.preprocessBatch(crops)
+        val preResult = RecPreprocessor.preprocessBatch(crops, recPreprocessScale)
         val preprocessMs = System.currentTimeMillis() - preStart
 
         // Inference
