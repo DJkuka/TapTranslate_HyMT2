@@ -20,7 +20,7 @@ public final class FreeTextLayout {
         if (width < 2 || height < 2) return false;
         float min = Math.max(4f, Math.min(minTextSize, maxTextSize));
         float max = Math.max(minTextSize, maxTextSize);
-        float spacing = Math.max(0.85f, Math.min(1.50f, lineSpacing));
+        float spacing = Math.max(0.85f, Math.min(3.0f, lineSpacing));
         float scale = Math.max(0.25f, Math.min(2.50f, fontScale));
         try {
             float base = 0f;
@@ -33,35 +33,19 @@ public final class FreeTextLayout {
                 }
             }
             if (baseLayout == null) return false;
+            // The natural fit gives us a stable starting size. The user's scale is
+            // applied after that fit and is not reduced back to the original panel
+            // height; the panel clips overflow while the text remains visibly scalable.
             float wanted = Math.max(min, base * scale);
             paint.setTextSize(wanted);
             StaticLayout result = makeLayout(source, paint, width, spacing);
-            float low = min, high = wanted;
-            if (result == null || result.getHeight() > height) {
-                if (wanted >= base) {
-                    low = base;
-                    result = baseLayout;
-                } else {
-                    high = wanted;
-                    result = null;
-                }
-                for (int i = 0; i < 16; i++) {
-                    float mid = (low + high) * 0.5f;
-                    paint.setTextSize(mid);
-                    StaticLayout candidate = makeLayout(source, paint, width, spacing);
-                    if (candidate != null && candidate.getHeight() <= height) {
-                        low = mid; result = candidate;
-                    } else high = mid;
-                }
-                paint.setTextSize(low);
-            }
             if (result == null) return false;
             int save = canvas.save();
             try {
                 canvas.clipRect(bounds);
                 canvas.translate(bounds.left + inset + offsetX,
                         bounds.top + inset + offsetY
-                                + Math.max(0f, (height - result.getHeight()) * 0.5f));
+                                + (height - result.getHeight()) * 0.5f);
                 result.draw(canvas);
             } finally { canvas.restoreToCount(save); }
             return true;
