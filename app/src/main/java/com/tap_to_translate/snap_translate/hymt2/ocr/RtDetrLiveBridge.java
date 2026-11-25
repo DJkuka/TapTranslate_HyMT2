@@ -960,6 +960,26 @@ public final class RtDetrLiveBridge {
         }
     }
 
+    /** Draws free-text overlays with the same per-block typography controls. */
+    public static boolean drawFreeText(android.graphics.Canvas canvas, Object overlay,
+            CharSequence text, android.text.TextPaint paint,
+            float minTextSize, float maxTextSize, int padding) {
+        if (canvas == null || overlay == null || text == null || paint == null
+                || text.length() == 0 || !isFreeTextOverlay(overlay)) return false;
+        try {
+            Rect bounds = readOverlayBounds(overlay);
+            if (bounds == null) return false;
+            float[] transform = BUBBLE_TEXT_TRANSFORMS.get(overlay);
+            if (transform == null) transform = new float[] {0f, 0f, 1f, 1f};
+            return FreeTextLayout.draw(canvas, bounds, text, paint, minTextSize, maxTextSize,
+                    padding, transform[0], transform[1], transform[2],
+                    transform.length > 3 ? transform[3] : 1.0f);
+        } catch (Throwable error) {
+            Log.w(TAG, "Free-text layout failed; rectangular host layout retained", error);
+            return false;
+        }
+    }
+
     public static boolean drawBubbleBackground(android.graphics.Canvas canvas, Object overlay,
             float radius, android.graphics.Paint paint) {
         try {
