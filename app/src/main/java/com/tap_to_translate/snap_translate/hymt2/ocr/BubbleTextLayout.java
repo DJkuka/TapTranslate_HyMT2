@@ -111,8 +111,12 @@ public final class BubbleTextLayout {
                     area, source.toString(), paint, horizontalPadding, wrap, lineSpacing);
             float low = lower, high = wantedSize;
             if (finalLines == null || finalLines.isEmpty()) {
-                if (wantedSize >= baseSize) low = baseSize;
-                else high = wantedSize;
+                if (wantedSize >= baseSize) {
+                    low = baseSize;
+                    finalLines = baseLines;
+                } else {
+                    high = wantedSize;
+                }
                 for (int i = 0; i < 16; i++) {
                     float mid = (low + high) * 0.5f;
                     paint.setTextSize(mid);
@@ -122,6 +126,7 @@ public final class BubbleTextLayout {
                         low = mid; finalLines = candidate;
                     } else high = mid;
                 }
+                paint.setTextSize(low);
             }
             if (finalLines == null || finalLines.isEmpty()) return false;
             float finalSize = paint.getTextSize();
