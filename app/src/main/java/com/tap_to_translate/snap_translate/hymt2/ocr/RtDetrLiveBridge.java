@@ -681,7 +681,6 @@ public final class RtDetrLiveBridge {
                     unreadable++;
                     OVERLAY_IS_BUBBLE.put(group, Boolean.FALSE);
                     OVERLAY_IS_FREE_TEXT.put(group, Boolean.FALSE);
-                    FREE_TEXT_ALPHA_OVERRIDES.remove(group);
                     underlays.add(group);
                     continue;
                 }
@@ -700,7 +699,6 @@ public final class RtDetrLiveBridge {
                 boolean isFreeText = !isBubbleText && freeTextScore > 0d;
                 OVERLAY_IS_BUBBLE.put(group, Boolean.valueOf(isBubbleText));
                 OVERLAY_IS_FREE_TEXT.put(group, Boolean.valueOf(isFreeText));
-                if (isBubbleText) FREE_TEXT_ALPHA_OVERRIDES.remove(group);
                 if (!isBubbleText) {
                     DetectedRegion pageMask = null;
                     for (DetectedRegion candidate : regions) {
@@ -752,14 +750,14 @@ public final class RtDetrLiveBridge {
         // the separate free-text alpha even when RT-DETR has no direct FREE_TEXT
         // score for its bounds. Requiring a positive score here made all such
         // backgrounds revert to the host's fully opaque alpha.
-        Boolean isBubble = OVERLAY_IS_BUBBLE.get(overlay);
-        if (isBubble == null || isBubble.booleanValue()) return originalAlpha;
         try {
             Integer override = FREE_TEXT_ALPHA_OVERRIDES.get(overlay);
             int percent;
             if (override != null) {
                 percent = override.intValue();
             } else {
+                Boolean isBubble = OVERLAY_IS_BUBBLE.get(overlay);
+                if (isBubble == null || isBubble.booleanValue()) return originalAlpha;
                 if (context == null) return originalAlpha;
                 android.content.SharedPreferences prefs =
                         context.getSharedPreferences(OCR_PREFS, Context.MODE_PRIVATE);
@@ -777,12 +775,12 @@ public final class RtDetrLiveBridge {
 
     /** The editor uses the same non-bubble classification as APK219's alpha path. */
     public static boolean isFreeTextOverlay(Object overlay) {
-        return overlay != null && Boolean.FALSE.equals(OVERLAY_IS_BUBBLE.get(overlay));
+        return overlay != null && !Boolean.TRUE.equals(OVERLAY_IS_BUBBLE.get(overlay));
     }
 
     /** Sets a per-overlay fill opacity override without changing other free-text rectangles. */
     public static void setFreeTextBackgroundAlphaPercent(Object overlay, int percent) {
-        if (!isFreeTextOverlay(overlay)) return;
+        if (overlay == null) return;
         FREE_TEXT_ALPHA_OVERRIDES.put(overlay, Integer.valueOf(Math.max(0, Math.min(100, percent))));
     }
 
@@ -1077,7 +1075,7 @@ public final class RtDetrLiveBridge {
         BUBBLE_TEXT_TRANSFORMS.put(overlay, new float[] {
                 dx, dy,
                 Math.max(0.25f, Math.min(2.50f, scale)),
-                Math.max(0.85f, Math.min(1.50f, lineSpacing))});
+                Math.max(0.85f, Math.min(3.0f, lineSpacing))});
     }
 
     public static float[] getBubbleTextTransform(Object overlay) {
