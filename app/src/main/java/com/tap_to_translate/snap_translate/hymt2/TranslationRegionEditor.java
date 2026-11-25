@@ -407,7 +407,7 @@ public final class TranslationRegionEditor {
         state.overlay.clearDrag();
         updateSelectionButtons(state);
         state.overlay.invalidate();
-        toast(state.root, "Один палец: горизонтально — размер, вертикально — интервал; два пальца — перемещение текста");
+        toast(state.root, "Один палец: горизонтально — размер, вертикально — интервал; два пальца — перемещение; верхний маркер — поворот свободного текста");
     }
 
     private static float[] getTextTransform(Object item) {
