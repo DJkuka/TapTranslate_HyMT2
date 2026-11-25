@@ -2125,6 +2125,7 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
                     "com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopPageMaskDetector",
                     "com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopSegmenter",
                     "com/tap_to_translate/snap_translate/hymt2/ocr/BubbleTextLayout",
+                    "com/tap_to_translate/snap_translate/hymt2/ocr/FreeTextLayout",
                     "com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrLiveBridge",
                     "com/tap_to_translate/snap_translate/hymt2/ocr/DetectedRegion",
                     "com/tap_to_translate/snap_translate/hymt2/ocr/OcrRegionKind",
@@ -2189,6 +2190,31 @@ def copy_helper_payload(helper: Path, base: Path) -> None:
     if count == 0:
         raise RuntimeError("No approved BubblePop/OCR UI classes were found in the helper APK")
     print(f"Ported {count} approved BubblePop/OCR classes; Hy-MT2 inference classes were excluded.")
+
+    # FreeTextLayout is called from RtDetrLiveBridge.drawFreeText. It must be
+    # present in the final host DEX, otherwise Android throws NoClassDefFoundError
+    # on every render pass and free-text typography silently falls back to host layout.
+    free_text_layouts = list(base.glob(
+        "smali*/com/tap_to_translate/snap_translate/hymt2/ocr/FreeTextLayout.smali"
+    ))
+    if len(free_text_layouts) != 1:
+        raise RuntimeError(
+            "Expected exactly one merged FreeTextLayout class, found "
+            + str(len(free_text_layouts))
+        )
+    bridge_classes = list(base.glob(
+        "smali*/com/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge.smali"
+    ))
+    if len(bridge_classes) != 1:
+        raise RuntimeError(
+            "Expected exactly one merged RtDetrLiveBridge class, found "
+            + str(len(bridge_classes))
+        )
+    bridge_text = bridge_classes[0].read_text(encoding="utf-8")
+    if "FreeTextLayout;->draw" not in bridge_text:
+        raise RuntimeError("RtDetrLiveBridge no longer references FreeTextLayout.draw")
+    print("Verified FreeTextLayout is included exactly once for the live free-text renderer.")
+
     target_root = base / "smali_classes5"
 
     # Copy the prebuilt ARM64 native libraries from the AAR dependency.
