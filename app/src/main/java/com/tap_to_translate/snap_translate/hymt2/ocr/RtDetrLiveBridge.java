@@ -51,6 +51,11 @@ public final class RtDetrLiveBridge {
             Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
     private static final Map<Object, DetectedRegion> OVERLAY_BUBBLE_MASKS =
             Collections.synchronizedMap(new WeakHashMap<Object, DetectedRegion>());
+    // Reuse one cropped mask while the overlay remains attached to the same OCR frame/bubble.
+    private static final Map<Object, List<DetectedRegion>> OVERLAY_MASK_SOURCES =
+            Collections.synchronizedMap(new WeakHashMap<Object, List<DetectedRegion>>());
+    private static final Map<Object, String> OVERLAY_MASK_KEYS =
+            Collections.synchronizedMap(new WeakHashMap<Object, String>());
     private static final Map<Object, DetectedRegion> OVERLAY_FREE_EXCLUSION_MASKS =
             Collections.synchronizedMap(new WeakHashMap<Object, DetectedRegion>());
     private static final Map<Object, float[]> BUBBLE_TEXT_TRANSFORMS =
@@ -675,12 +680,18 @@ public final class RtDetrLiveBridge {
             ArrayList<Object> underlays = new ArrayList<>();
             ArrayList<Object> bubbleOverlays = new ArrayList<>();
             int unreadable = 0;
+            int bubbleMasksReady = 0;
+            int bubbleMaskFallbacks = 0;
             for (Object group : overlayGroups) {
                 Rect bounds = readOverlayBounds(group);
                 if (bounds == null) {
                     unreadable++;
                     OVERLAY_IS_BUBBLE.put(group, Boolean.FALSE);
                     OVERLAY_IS_FREE_TEXT.put(group, Boolean.FALSE);
+                    OVERLAY_BUBBLE_MASKS.remove(group);
+                    OVERLAY_MASK_SOURCES.remove(group);
+                    OVERLAY_MASK_KEYS.remove(group);
+                    OVERLAY_FREE_EXCLUSION_MASKS.remove(group);
                     underlays.add(group);
                     continue;
                 }
@@ -714,12 +725,22 @@ public final class RtDetrLiveBridge {
                     OVERLAY_FREE_EXCLUSION_MASKS.remove(group);
                 }
                 if (isBubbleText) {
+                    String maskKey = findOverlayBubbleMaskId(bounds, regions);
                     DetectedRegion localMask = createOverlayBubbleMask(bounds, regions);
-                    if (localMask != null) OVERLAY_BUBBLE_MASKS.put(group, localMask);
-                    else OVERLAY_BUBBLE_MASKS.remove(group);
+                    OVERLAY_MASK_SOURCES.put(group, regions);
+                    OVERLAY_MASK_KEYS.put(group, maskKey == null ? "" : maskKey);
+                    if (localMask != null) {
+                        OVERLAY_BUBBLE_MASKS.put(group, localMask);
+                        bubbleMasksReady++;
+                    } else {
+                        OVERLAY_BUBBLE_MASKS.remove(group);
+                        bubbleMaskFallbacks++;
+                    }
                     bubbleOverlays.add(group);
                 } else {
                     OVERLAY_BUBBLE_MASKS.remove(group);
+                    OVERLAY_MASK_SOURCES.remove(group);
+                    OVERLAY_MASK_KEYS.remove(group);
                     underlays.add(group);
                 }
             }
@@ -732,6 +753,8 @@ public final class RtDetrLiveBridge {
             mutable.addAll(bubbleOverlays);
             Log.i(TAG, "overlay draw priority: free_or_unknown_first=" + underlays.size()
                     + " bubble_last=" + bubbleOverlays.size()
+                    + " bubble_masks_ready=" + bubbleMasksReady
+                    + " bubble_mask_fallbacks=" + bubbleMaskFallbacks
                     + " unreadable_bounds=" + unreadable);
         } catch (Throwable error) {
             Log.w(TAG, "Overlay draw priority failed; original order retained", error);
@@ -758,6 +781,8 @@ public final class RtDetrLiveBridge {
         }
         if (best == null) {
             OVERLAY_BUBBLE_MASKS.remove(overlay);
+            OVERLAY_MASK_SOURCES.remove(overlay);
+            OVERLAY_MASK_KEYS.remove(overlay);
             OVERLAY_IS_BUBBLE.remove(overlay);
             OVERLAY_IS_FREE_TEXT.remove(overlay);
             OVERLAY_FREE_EXCLUSION_MASKS.remove(overlay);
@@ -771,11 +796,23 @@ public final class RtDetrLiveBridge {
         OVERLAY_IS_FREE_TEXT.put(overlay, Boolean.valueOf(!isBubble && freeScore > 0d));
         if (isBubble) {
             OVERLAY_FREE_EXCLUSION_MASKS.remove(overlay);
+            String maskKey = findOverlayBubbleMaskId(bounds, best);
+            String previousKey = OVERLAY_MASK_KEYS.get(overlay);
+            DetectedRegion cachedMask = OVERLAY_BUBBLE_MASKS.get(overlay);
+            if (OVERLAY_MASK_SOURCES.get(overlay) == best
+                    && maskKey != null && maskKey.equals(previousKey)
+                    && cachedMask != null && cachedMask.maskDataView() != null) {
+                return;
+            }
             DetectedRegion local = createOverlayBubbleMask(bounds, best);
+            OVERLAY_MASK_SOURCES.put(overlay, best);
+            OVERLAY_MASK_KEYS.put(overlay, maskKey == null ? "" : maskKey);
             if (local != null) OVERLAY_BUBBLE_MASKS.put(overlay, local);
             else OVERLAY_BUBBLE_MASKS.remove(overlay);
         } else {
             OVERLAY_BUBBLE_MASKS.remove(overlay);
+            OVERLAY_MASK_SOURCES.remove(overlay);
+            OVERLAY_MASK_KEYS.remove(overlay);
             DetectedRegion pageMask = null;
             for (DetectedRegion candidate : best) {
                 if (candidate != null && candidate.getKind() == OcrRegionKind.PAGE_BUBBLE_MASK
@@ -922,6 +959,30 @@ public final class RtDetrLiveBridge {
         return index >= 0 && index < ids.size() ? ids.get(index) : null;
     }
 
+    private static String findOverlayBubbleMaskId(
+            Rect overlayBounds, List<DetectedRegion> regions) {
+        if (overlayBounds == null || regions == null) return null;
+        DetectedRegion pageMask = null;
+        for (DetectedRegion region : regions) {
+            if (region != null && region.getKind() == OcrRegionKind.PAGE_BUBBLE_MASK
+                    && region.maskDataView() != null) {
+                pageMask = region;
+                break;
+            }
+        }
+        if (pageMask == null) return null;
+        int containerIndex = findBubbleContainer(overlayBounds, regions);
+        if (containerIndex < 0) return null;
+        int current = 0;
+        for (DetectedRegion region : regions) {
+            if (region.getKind() != OcrRegionKind.BUBBLE_CONTAINER) continue;
+            if (current++ == containerIndex) {
+                return pageMask.getId() + ":container:" + region.getId();
+            }
+        }
+        return null;
+    }
+
     private static DetectedRegion createOverlayBubbleMask(
             Rect overlayBounds, List<DetectedRegion> regions) {
         DetectedRegion pageMask = null;
@@ -932,29 +993,48 @@ public final class RtDetrLiveBridge {
                 break;
             }
         }
-        if (pageMask == null) return null;
+        if (pageMask == null) {
+            Log.d(TAG, "BubblePop mask unavailable: page mask missing");
+            return null;
+        }
         int containerIndex = findBubbleContainer(overlayBounds, regions);
-        if (containerIndex < 0) return null;
+        if (containerIndex < 0) {
+            Log.d(TAG, "BubblePop mask unavailable: overlay did not match a BUBBLE_CONTAINER; bounds="
+                    + overlayBounds.flattenToString());
+            return null;
+        }
         DetectedRegion container = null;
         int current = 0;
         for (DetectedRegion region : regions) {
             if (region.getKind() != OcrRegionKind.BUBBLE_CONTAINER) continue;
             if (current++ == containerIndex) { container = region; break; }
         }
-        if (container == null) return null;
+        if (container == null) {
+            Log.d(TAG, "BubblePop mask unavailable: matched container index was not resolved");
+            return null;
+        }
 
         Rect pageBounds = pageMask.getBounds();
         Rect crop = container.getBounds();
-        if (!crop.intersect(pageBounds)) return null;
+        if (!crop.intersect(pageBounds)) {
+            Log.d(TAG, "BubblePop mask unavailable: container outside page-mask bounds");
+            return null;
+        }
         int width = crop.width();
         int height = crop.height();
-        if (width <= 0 || height <= 0 || (long) width * height > 16000000L) return null;
+        if (width <= 0 || height <= 0 || (long) width * height > 16000000L) {
+            Log.d(TAG, "BubblePop mask unavailable: invalid crop=" + width + "x" + height);
+            return null;
+        }
         byte[] source = pageMask.maskDataView();
         int sourceWidth = pageMask.getMaskWidth();
         int sourceHeight = pageMask.getMaskHeight();
         if (source == null || sourceWidth != pageBounds.width()
                 || sourceHeight != pageBounds.height()
-                || source.length != sourceWidth * sourceHeight) return null;
+                || source.length != sourceWidth * sourceHeight) {
+            Log.w(TAG, "BubblePop mask unavailable: source mask dimensions do not match bounds");
+            return null;
+        }
 
         byte[] local = new byte[width * height];
         int foreground = 0;
@@ -969,7 +1049,8 @@ public final class RtDetrLiveBridge {
             }
         }
         if (foreground < 40) {
-            Log.d(TAG, "BubblePop mask too sparse for overlay; rectangular fallback");
+            Log.d(TAG, "BubblePop mask too sparse for overlay; foreground=" + foreground
+                    + " crop=" + width + "x" + height + "; rectangular fallback");
             return null;
         }
         return new DetectedRegion(
@@ -1035,6 +1116,9 @@ public final class RtDetrLiveBridge {
     public static boolean drawBubbleBackground(android.graphics.Canvas canvas, Object overlay,
             float radius, android.graphics.Paint paint) {
         try {
+            // The host paints the fill before drawing text. Refresh the shape here,
+            // not later in drawBubbleText(), so the fill gets the same contour.
+            refreshOverlayAssociation(overlay);
             Rect bounds = readOverlayBounds(overlay);
             if (bounds == null) return false;
             Boolean isBubble = OVERLAY_IS_BUBBLE.get(overlay);
