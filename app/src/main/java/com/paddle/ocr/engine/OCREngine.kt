@@ -48,7 +48,7 @@ class OCREngine(
             throw t
         }
         detectionEngine = DetectionEngine(ortManager, config)
-        recognitionEngine = RecognitionEngine(ortManager, configured.characterList)
+        recognitionEngine = RecognitionEngine(ortManager, configured.characterList, config.recPreprocessScale)
     }
 
     fun run(bitmap: Bitmap): OCREngineResult {
