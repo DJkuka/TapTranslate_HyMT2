@@ -51,22 +51,37 @@ public final class BubbleTextLayout {
             Rect maskBounds, Rect overlayBounds, CharSequence source, TextPaint paint,
             float minTextSize, float maxTextSize, int padding, boolean autoWrap,
             float offsetX, float offsetY, float fontScale, float lineSpacing) {
+        return draw(canvas, mask, maskWidth, maskHeight, maskBounds, overlayBounds,
+                source, paint, minTextSize, maxTextSize, padding, autoWrap,
+                offsetX, offsetY, fontScale, lineSpacing, false);
+    }
+
+    /** BubblePop may let the text block continue past the detected balloon contour. */
+    public static boolean draw(Canvas canvas, byte[] mask, int maskWidth, int maskHeight,
+            Rect maskBounds, Rect overlayBounds, CharSequence source, TextPaint paint,
+            float minTextSize, float maxTextSize, int padding, boolean autoWrap,
+            float offsetX, float offsetY, float fontScale, float lineSpacing,
+            boolean allowOverflow) {
         if (canvas == null || mask == null || maskWidth <= 0 || maskHeight <= 0
                 || mask.length != maskWidth * maskHeight || maskBounds == null
                 || maskBounds.width() != maskWidth || maskBounds.height() != maskHeight
                 || overlayBounds == null || source == null || paint == null
                 || source.length() == 0) return false;
 
-        // The mask has already been localized to this OCR overlay. Use its
-        // complete interior, not the source OCR rectangle, as the layout area.
+        // Use the full local balloon mask as the layout area. In ordinary OCR
+        // mode keep the complete text block inside that contour, as before.
+        // BubblePop may opt into continuing the translated block beyond the contour.
         Rect area = new Rect(maskBounds);
         int verticalInset = 2;
         int horizontalPadding = Math.max(2, padding);
         area.inset(verticalInset, verticalInset);
         area.offset(Math.round(offsetX), Math.round(offsetY));
-        // The layout area follows the user's text offset. The mask constrains only
-        // the part of each line that still overlaps the balloon; outside it, text
-        // remains visible and continues in the translated layout rectangle.
+        if (!allowOverflow) {
+            if (area.left < maskBounds.left) area.offset(maskBounds.left - area.left, 0);
+            if (area.top < maskBounds.top) area.offset(0, maskBounds.top - area.top);
+            if (area.right > maskBounds.right) area.offset(maskBounds.right - area.right, 0);
+            if (area.bottom > maskBounds.bottom) area.offset(0, maskBounds.bottom - area.bottom);
+        }
         if (area.width() < 4 || area.height() < 4) return false;
 
         float originalSize = paint.getTextSize();
@@ -84,7 +99,7 @@ public final class BubbleTextLayout {
             for (float size = upper; size >= lower - 0.01f; size -= 0.5f) {
                 paint.setTextSize(size);
                 List<Line> candidate = layout(mask, maskWidth, maskHeight, maskBounds,
-                        area, layoutText, paint, horizontalPadding, autoWrap, lineSpacing);
+                        area, layoutText, paint, horizontalPadding, autoWrap, lineSpacing, allowOverflow);
                 if (candidate != null && !candidate.isEmpty()) {
                     baseSize = size; baseLines = candidate; break;
                 }
@@ -93,7 +108,7 @@ public final class BubbleTextLayout {
                 for (float size = upper; size >= lower - 0.01f; size -= 0.5f) {
                     paint.setTextSize(size);
                     List<Line> candidate = layout(mask, maskWidth, maskHeight, maskBounds,
-                            area, source.toString(), paint, horizontalPadding, true, lineSpacing);
+                            area, source.toString(), paint, horizontalPadding, true, lineSpacing, allowOverflow);
                     if (candidate != null && !candidate.isEmpty()) {
                         baseSize = size; baseLines = candidate; wrapFallback = true; break;
                     }
@@ -104,7 +119,7 @@ public final class BubbleTextLayout {
             boolean wrap = wrapFallback || autoWrap;
             paint.setTextSize(wantedSize);
             List<Line> finalLines = layout(mask, maskWidth, maskHeight, maskBounds,
-                    area, source.toString(), paint, horizontalPadding, wrap, lineSpacing);
+                    area, source.toString(), paint, horizontalPadding, wrap, lineSpacing, allowOverflow);
             float low = lower, high = wantedSize;
             if (finalLines == null || finalLines.isEmpty()) {
                 if (wantedSize >= baseSize) {
@@ -117,7 +132,7 @@ public final class BubbleTextLayout {
                     float mid = (low + high) * 0.5f;
                     paint.setTextSize(mid);
                     List<Line> candidate = layout(mask, maskWidth, maskHeight, maskBounds,
-                            area, source.toString(), paint, horizontalPadding, wrap, lineSpacing);
+                            area, source.toString(), paint, horizontalPadding, wrap, lineSpacing, allowOverflow);
                     if (candidate != null && !candidate.isEmpty()) {
                         low = mid; finalLines = candidate;
                     } else high = mid;
@@ -145,7 +160,7 @@ public final class BubbleTextLayout {
 
     private static List<Line> layout(byte[] mask, int width, int height, Rect maskBounds,
             Rect area, String text, TextPaint paint, int padding, boolean autoWrap,
-            float lineSpacing) {
+            float lineSpacing, boolean allowOverflow) {
         android.graphics.Paint.FontMetrics fm = paint.getFontMetrics();
         int glyphHeight = Math.max(1, (int) Math.ceil(fm.descent - fm.ascent + fm.leading));
         float safeLineSpacing = Math.max(0.85f, Math.min(3.0f, lineSpacing));
@@ -174,7 +189,7 @@ public final class BubbleTextLayout {
             boolean placed = false;
             while (!placed && y + glyphHeight <= area.bottom) {
                 int[] run = widestCommonRun(mask, width, height, maskBounds, area,
-                        y, glyphHeight, padding);
+                        y, glyphHeight, padding, allowOverflow);
                 if (run == null) {
                     y += scanStep;
                     continue;
@@ -240,20 +255,27 @@ public final class BubbleTextLayout {
 
     /** Longest x interval whose pixels are all inside the mask for every row of the glyph band. */
     private static int[] widestCommonRun(byte[] mask, int width, int height, Rect maskBounds,
-            Rect area, int top, int lineHeight, int padding) {
+            Rect area, int top, int lineHeight, int padding, boolean allowOverflow) {
         int y0 = top;
         int y1 = top + lineHeight;
         if (y1 <= y0 || area.right <= area.left) return null;
-        int x0 = area.left;
-        int x1 = area.right;
+        int x0 = allowOverflow ? area.left : Math.max(area.left, maskBounds.left);
+        int x1 = allowOverflow ? area.right : Math.min(area.right, maskBounds.right);
+        if (!allowOverflow) {
+            y0 = Math.max(area.top, y0);
+            y1 = Math.min(Math.min(area.bottom, y1), maskBounds.bottom);
+        }
         int bestStart = -1, bestEnd = -1, runStart = -1;
         for (int x = x0; x < x1; x++) {
             boolean inside = true;
-            // Outside the balloon is available text space. Only pixels that still
-            // overlap the mask are constrained by its per-pixel contour.
-            if (x >= maskBounds.left && x < maskBounds.right) {
+            // In ordinary mode every pixel of the glyph band must remain inside
+            // the contour. BubblePop can relax only the part outside the mask.
+            if (!allowOverflow && (y0 < maskBounds.top || y1 > maskBounds.bottom)) {
+                inside = false;
+            }
+            if (inside) {
                 for (int y = y0; y < y1; y++) {
-                    if (y < maskBounds.top || y >= maskBounds.bottom) continue;
+                    if (allowOverflow && (y < maskBounds.top || y >= maskBounds.bottom)) continue;
                     int ix = x - maskBounds.left;
                     int iy = y - maskBounds.top;
                     if (ix < 0 || ix >= width || iy < 0 || iy >= height
