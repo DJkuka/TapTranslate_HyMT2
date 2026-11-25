@@ -244,6 +244,7 @@ public final class TranslationRegionEditor {
             Object renderer = rendererField.get(state.root);
             if (renderer != null) renderer.getClass().getMethod("setList", List.class).invoke(renderer, updated);
             updateSecondaryRenderer(state.root, updated);
+            refreshOverlayAssociation(item);
             state.overlay.lastTapTarget = null;
             updateSelectionButtons(state);
             refreshRenderers(state);
@@ -341,10 +342,10 @@ public final class TranslationRegionEditor {
             state.textPlacementButton.setContentDescription("Размер и межстрочный интервал текста");
         }
         if (state.opacityButton != null) {
-            state.opacityButton.setVisibility(freeTextRegion ? View.VISIBLE : View.GONE);
-            state.opacityButton.setEnabled(freeTextRegion);
-            state.opacityButton.setAlpha(freeTextRegion ? 1.0f : 0.35f);
-            state.opacityButton.setContentDescription("Непрозрачность фона свободного текста");
+            state.opacityButton.setVisibility(oneRegion ? View.VISIBLE : View.GONE);
+            state.opacityButton.setEnabled(oneRegion);
+            state.opacityButton.setAlpha(oneRegion ? 1.0f : 0.35f);
+            state.opacityButton.setContentDescription("Непрозрачность заливки панели");
         }
     }
 
@@ -376,6 +377,15 @@ public final class TranslationRegionEditor {
         }
     }
 
+    private static void refreshOverlayAssociation(Object item) {
+        try {
+            Class.forName(BRIDGE).getMethod("refreshOverlayAssociation", Object.class)
+                    .invoke(null, item);
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not associate editor panel with OCR regions", error);
+        }
+    }
+
     private static void toggleTextPlacementMode(State state) {
         if (!state.editing || state.selected.size() != 1) {
             toast(state.root, "Выберите одну область");
@@ -396,7 +406,7 @@ public final class TranslationRegionEditor {
         state.overlay.clearDrag();
         updateSelectionButtons(state);
         state.overlay.invalidate();
-        toast(state.root, "Перетаскивание — сдвиг текста; горизонтально — размер, вертикально — межстрочный интервал");
+        toast(state.root, "Один палец: горизонтально — размер, вертикально — интервал; два пальца — перемещение текста");
     }
 
     private static float[] getTextTransform(Object item) {
@@ -478,6 +488,7 @@ public final class TranslationRegionEditor {
                 save.setOnClickListener(v -> {
                     String updated = editor.getText() == null ? "" : editor.getText().toString();
                     if (writeStringField(item, "b", updated)) {
+                        refreshOverlayAssociation(item);
                         refreshRenderers(state);
                         toast(state.root, "Текст области обновлён");
                         dialog.dismiss();
@@ -883,6 +894,8 @@ public final class TranslationRegionEditor {
         // Whole-region movement is deliberately a two-finger gesture. This avoids
         // competing with the four single-finger corner resize targets on small panels.
         private boolean twoFingerMove;
+        private boolean twoFingerTextMove;
+        private float[] twoFingerTextStartTransform;
         private boolean twoFingerConsumed;
         private boolean twoFingerMoved;
         private int pointerIdA = -1;
@@ -975,6 +988,8 @@ public final class TranslationRegionEditor {
                     dragStart = null;
                     rawStart = null;
                     twoFingerMove = false;
+                    twoFingerTextMove = false;
+                    twoFingerTextStartTransform = null;
                     twoFingerConsumed = false;
                     twoFingerMoved = false;
 
@@ -1026,12 +1041,18 @@ public final class TranslationRegionEditor {
                     return true;
 
                 case MotionEvent.ACTION_POINTER_DOWN:
-                    if (state.transformMode && event.getPointerCount() >= 2) {
+                    if (state.textTransformMode && event.getPointerCount() >= 2) {
+                        beginTwoFingerTextMove(event);
+                    } else if (state.transformMode && event.getPointerCount() >= 2) {
                         beginTwoFingerMove(event);
                     }
                     return true;
 
                 case MotionEvent.ACTION_MOVE:
+                    if (twoFingerTextMove && event.getPointerCount() >= 2) {
+                        updateTwoFingerTextMove(event);
+                        return true;
+                    }
                     if (twoFingerMove && event.getPointerCount() >= 2) {
                         updateTwoFingerMove(event);
                         return true;
@@ -1047,7 +1068,13 @@ public final class TranslationRegionEditor {
                     return true;
 
                 case MotionEvent.ACTION_POINTER_UP:
-                    if (twoFingerMove) {
+                    if (twoFingerTextMove) {
+                        updateTwoFingerTextMove(event);
+                        twoFingerTextMove = false;
+                        twoFingerConsumed = true;
+                        twoFingerTextStartTransform = null;
+                        clearTwoFingerData();
+                    } else if (twoFingerMove) {
                         updateTwoFingerMove(event);
                         twoFingerMove = false;
                         twoFingerConsumed = true;
@@ -1103,6 +1130,8 @@ public final class TranslationRegionEditor {
                 case MotionEvent.ACTION_CANCEL:
                     clearDrag();
                     clearTwoFingerData();
+                    twoFingerTextMove = false;
+                    twoFingerTextStartTransform = null;
                     twoFingerConsumed = false;
                     moved = false;
                     pendingDoubleTap = false;
@@ -1112,6 +1141,48 @@ public final class TranslationRegionEditor {
                 default:
                     return true;
             }
+        }
+
+
+        private void beginTwoFingerTextMove(MotionEvent event) {
+            if (twoFingerTextMove || event.getPointerCount() < 2 || state.transformTarget == null) return;
+            int secondIndex = event.getActionIndex();
+            int firstIndex = secondIndex == 0 ? 1 : 0;
+            if (firstIndex >= event.getPointerCount() || secondIndex >= event.getPointerCount()) return;
+            float[] transform = getTextTransform(state.transformTarget);
+            if (transform == null || transform.length < 3) return;
+            pointerIdA = event.getPointerId(firstIndex);
+            pointerIdB = event.getPointerId(secondIndex);
+            twoFingerStartCenterX = (event.getX(firstIndex) + event.getX(secondIndex)) / 2.0f;
+            twoFingerStartCenterY = (event.getY(firstIndex) + event.getY(secondIndex)) / 2.0f;
+            twoFingerTextStartTransform = transform;
+            twoFingerTextMove = true;
+            twoFingerConsumed = true;
+            twoFingerMoved = false;
+            dragging = false;
+            dragMode = DragMode.NONE;
+            textGestureMode = 0;
+            clearTap();
+            Log.i(TAG, "Two-finger text movement started");
+        }
+
+        private void updateTwoFingerTextMove(MotionEvent event) {
+            if (!twoFingerTextMove || twoFingerTextStartTransform == null) return;
+            int indexA = event.findPointerIndex(pointerIdA);
+            int indexB = event.findPointerIndex(pointerIdB);
+            if (indexA < 0 || indexB < 0) return;
+            float centerX = (event.getX(indexA) + event.getX(indexB)) / 2.0f;
+            float centerY = (event.getY(indexA) + event.getY(indexB)) / 2.0f;
+            if (distanceSquared(centerX, centerY, twoFingerStartCenterX, twoFingerStartCenterY)
+                    > touchSlop * touchSlop) twoFingerMoved = true;
+            if (!twoFingerMoved) return;
+            float[] start = twoFingerTextStartTransform;
+            float lineSpacing = start.length > 3 ? start[3] : 1.0f;
+            setTextTransform(state.transformTarget,
+                    start[0] + centerX - twoFingerStartCenterX,
+                    start[1] + centerY - twoFingerStartCenterY,
+                    start[2], lineSpacing);
+            refreshRenderers(state);
         }
 
         private void beginTwoFingerMove(MotionEvent event) {
@@ -1202,48 +1273,35 @@ public final class TranslationRegionEditor {
                     ? textTransformStart[3] : 1.0f;
             float nextLineSpacing = startLineSpacing;
 
-            if (dragMode == DragMode.NONE) {
-                nextX += dx;
-                nextY += dy;
+            // One finger changes typography only. Text translation is two-finger.
+            float directionGate = Math.max(dp(getContext(), 16.0f), touchSlop * 1.5f);
+            if (textGestureMode == 0
+                    && Math.max(Math.abs(dx), Math.abs(dy)) >= directionGate) {
+                if (Math.abs(dx) >= Math.abs(dy) * 1.25f) textGestureMode = 1;
+                else if (Math.abs(dy) >= Math.abs(dx) * 1.25f) textGestureMode = 2;
+                else textGestureMode = 3;
+            }
+            if (textGestureMode == 3 || textGestureMode == 0) return;
+            if (textGestureMode == 2) {
+                final float minLineSpacing = 0.85f;
+                final float maxLineSpacing = 3.0f;
+                float availableRange = dy >= 0f
+                        ? maxLineSpacing - startLineSpacing
+                        : startLineSpacing - minLineSpacing;
+                float sensitivity = Math.max(dp(getContext(), 72.0f),
+                        Math.min(dp(getContext(), 120.0f), dragStart.height() * 0.80f));
+                nextLineSpacing = Math.max(minLineSpacing, Math.min(maxLineSpacing,
+                        startLineSpacing + (dy / sensitivity) * availableRange));
             } else {
-                // Only clearly horizontal or vertical movement selects an action.
-                // Diagonal movement is ignored instead of changing font size.
-                float directionGate = Math.max(dp(getContext(), 16.0f), touchSlop * 1.5f);
-                if (textGestureMode == 0
-                        && Math.max(Math.abs(dx), Math.abs(dy)) >= directionGate) {
-                    if (Math.abs(dx) >= Math.abs(dy) * 1.25f) textGestureMode = 1;
-                    else if (Math.abs(dy) >= Math.abs(dx) * 1.25f) textGestureMode = 2;
-                    else textGestureMode = 3;
-                }
-                if (textGestureMode == 3) return;
-                if (textGestureMode == 0) return;
-
-                if (textGestureMode == 2) {
-                    final float minLineSpacing = 0.85f;
-                    final float maxLineSpacing = 1.50f;
-                    float availableRange = dy >= 0f
-                            ? maxLineSpacing - startLineSpacing
-                            : startLineSpacing - minLineSpacing;
-                    float sensitivity = Math.max(dp(getContext(), 72.0f),
-                            Math.min(dp(getContext(), 120.0f), dragStart.height() * 0.80f));
-                    nextLineSpacing = Math.max(minLineSpacing, Math.min(maxLineSpacing,
-                            startLineSpacing + (dy / sensitivity) * availableRange));
-                } else {
-                    // Font size is controlled only by horizontal travel.
-                    float outward = (dragMode == DragMode.NW || dragMode == DragMode.SW)
-                            ? -dx : dx;
-                    final float minScale = 0.25f;
-                    final float maxScale = 2.50f;
-                    float availableRange = outward >= 0f
-                            ? maxScale - textTransformStart[2]
-                            : textTransformStart[2] - minScale;
-                    // About 25% more travel is required for the same font-size change.
-                    float sensitivity = Math.max(dp(getContext(), 80.0f),
-                            Math.min(dp(getContext(), 160.0f),
-                                    dragStart.width() * 0.80f));
-                    nextScale = Math.max(minScale, Math.min(maxScale,
-                            textTransformStart[2] + (outward / sensitivity) * availableRange));
-                }
+                final float minScale = 0.25f;
+                final float maxScale = 2.50f;
+                float availableRange = dx >= 0f
+                        ? maxScale - textTransformStart[2]
+                        : textTransformStart[2] - minScale;
+                float sensitivity = Math.max(dp(getContext(), 80.0f),
+                        Math.min(dp(getContext(), 160.0f), dragStart.width() * 0.80f));
+                nextScale = Math.max(minScale, Math.min(maxScale,
+                        textTransformStart[2] + (dx / sensitivity) * availableRange));
             }
             setTextTransform(state.transformTarget, nextX, nextY, nextScale, nextLineSpacing);
             refreshRenderers(state);
