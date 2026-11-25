@@ -326,18 +326,20 @@ public final class TranslationRegionEditor {
         boolean oneRegion = state.editing && count == 1;
         boolean bubbleRegion = oneRegion
                 && hasBubbleMask(state.selected.keySet().iterator().next());
+        boolean freeTextRegion = oneRegion
+                && isFreeTextOverlay(state.selected.keySet().iterator().next());
         if (state.editTextButton != null) {
             state.editTextButton.setVisibility(oneRegion ? View.VISIBLE : View.GONE);
             state.editTextButton.setEnabled(oneRegion);
             state.editTextButton.setContentDescription("Редактировать текст перевода");
         }
         if (state.textPlacementButton != null) {
-            state.textPlacementButton.setVisibility(bubbleRegion ? View.VISIBLE : View.GONE);
-            state.textPlacementButton.setEnabled(bubbleRegion);
+            boolean textEditable = bubbleRegion || freeTextRegion;
+            state.textPlacementButton.setVisibility(textEditable ? View.VISIBLE : View.GONE);
+            state.textPlacementButton.setEnabled(textEditable);
             state.textPlacementButton.setAlpha(state.textTransformMode ? 1.0f : 0.55f);
+            state.textPlacementButton.setContentDescription("Размер и межстрочный интервал текста");
         }
-        boolean freeTextRegion = oneRegion
-                && isFreeTextOverlay(state.selected.keySet().iterator().next());
         if (state.opacityButton != null) {
             state.opacityButton.setVisibility(freeTextRegion ? View.VISIBLE : View.GONE);
             state.opacityButton.setEnabled(freeTextRegion);
@@ -394,7 +396,7 @@ public final class TranslationRegionEditor {
         state.overlay.clearDrag();
         updateSelectionButtons(state);
         state.overlay.invalidate();
-        toast(state.root, "Перетаскивание — сдвиг текста; углы: по диагонали — размер, вверх/вниз — межстрочный интервал");
+        toast(state.root, "Перетаскивание — сдвиг текста; горизонтально — размер, вертикально — межстрочный интервал");
     }
 
     private static float[] getTextTransform(Object item) {
@@ -1204,13 +1206,16 @@ public final class TranslationRegionEditor {
                 nextX += dx;
                 nextY += dy;
             } else {
-                // Lock the gesture direction to one control after a short initial move.
-                // Mostly vertical movement adjusts line spacing; other directions resize.
+                // Only clearly horizontal or vertical movement selects an action.
+                // Diagonal movement is ignored instead of changing font size.
                 float directionGate = Math.max(dp(getContext(), 16.0f), touchSlop * 1.5f);
                 if (textGestureMode == 0
                         && Math.max(Math.abs(dx), Math.abs(dy)) >= directionGate) {
-                    textGestureMode = Math.abs(dy) >= Math.abs(dx) * 1.25f ? 2 : 1;
+                    if (Math.abs(dx) >= Math.abs(dy) * 1.25f) textGestureMode = 1;
+                    else if (Math.abs(dy) >= Math.abs(dx) * 1.25f) textGestureMode = 2;
+                    else textGestureMode = 3;
                 }
+                if (textGestureMode == 3) return;
                 if (textGestureMode == 0) return;
 
                 if (textGestureMode == 2) {
@@ -1224,15 +1229,9 @@ public final class TranslationRegionEditor {
                     nextLineSpacing = Math.max(minLineSpacing, Math.min(maxLineSpacing,
                             startLineSpacing + (dy / sensitivity) * availableRange));
                 } else {
-                    // Measure font-size gesture from ACTION_DOWN to avoid accumulation.
-                    float outward;
-                    switch (dragMode) {
-                        case NW: outward = -dx - dy; break;
-                        case NE: outward = dx - dy; break;
-                        case SE: outward = dx + dy; break;
-                        case SW: outward = -dx + dy; break;
-                        default: outward = 0f;
-                    }
+                    // Font size is controlled only by horizontal travel.
+                    float outward = (dragMode == DragMode.NW || dragMode == DragMode.SW)
+                            ? -dx : dx;
                     final float minScale = 0.25f;
                     final float maxScale = 2.50f;
                     float availableRange = outward >= 0f
@@ -1241,7 +1240,7 @@ public final class TranslationRegionEditor {
                     // About 25% more travel is required for the same font-size change.
                     float sensitivity = Math.max(dp(getContext(), 80.0f),
                             Math.min(dp(getContext(), 160.0f),
-                                    (dragStart.width() + dragStart.height()) * 0.625f));
+                                    dragStart.width() * 0.80f));
                     nextScale = Math.max(minScale, Math.min(maxScale,
                             textTransformStart[2] + (outward / sensitivity) * availableRange));
                 }
