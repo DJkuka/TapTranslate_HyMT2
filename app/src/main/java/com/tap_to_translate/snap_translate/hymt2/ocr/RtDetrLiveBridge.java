@@ -740,6 +740,53 @@ public final class RtDetrLiveBridge {
     }
 
 
+    /** Re-associate a live editor panel with the current OCR frame on every render. */
+    public static void refreshOverlayAssociation(Object overlay) {
+        if (overlay == null) return;
+        Rect bounds = readOverlayBounds(overlay);
+        if (bounds == null) return;
+        List<DetectedRegion> best = null;
+        double bestScore = 0d;
+        synchronized (LOCK) {
+            for (List<DetectedRegion> candidate : ACTIVE_REGIONS.values()) {
+                if (candidate == null || candidate.isEmpty()) continue;
+                double bubbleScore = bestTextRegionScore(bounds, candidate, OcrRegionKind.SPEECH_BUBBLE);
+                double freeScore = bestTextRegionScore(bounds, candidate, OcrRegionKind.FREE_TEXT);
+                double score = Math.max(bubbleScore, freeScore);
+                if (freeScore == 0d && findBubbleContainer(bounds, candidate) >= 0) score = Math.max(score, 0.18d);
+                if (score > bestScore) { bestScore = score; best = candidate; }
+            }
+        }
+        if (best == null) {
+            OVERLAY_BUBBLE_MASKS.remove(overlay);
+            OVERLAY_IS_BUBBLE.remove(overlay);
+            OVERLAY_IS_FREE_TEXT.remove(overlay);
+            OVERLAY_FREE_EXCLUSION_MASKS.remove(overlay);
+            return;
+        }
+        double bubbleScore = bestTextRegionScore(bounds, best, OcrRegionKind.SPEECH_BUBBLE);
+        double freeScore = bestTextRegionScore(bounds, best, OcrRegionKind.FREE_TEXT);
+        boolean isBubble = bubbleScore > 0d ? bubbleScore >= freeScore
+                : freeScore == 0d && findBubbleContainer(bounds, best) >= 0;
+        OVERLAY_IS_BUBBLE.put(overlay, Boolean.valueOf(isBubble));
+        OVERLAY_IS_FREE_TEXT.put(overlay, Boolean.valueOf(!isBubble && freeScore > 0d));
+        if (isBubble) {
+            OVERLAY_FREE_EXCLUSION_MASKS.remove(overlay);
+            DetectedRegion local = createOverlayBubbleMask(bounds, best);
+            if (local != null) OVERLAY_BUBBLE_MASKS.put(overlay, local);
+            else OVERLAY_BUBBLE_MASKS.remove(overlay);
+        } else {
+            OVERLAY_BUBBLE_MASKS.remove(overlay);
+            DetectedRegion pageMask = null;
+            for (DetectedRegion candidate : best) {
+                if (candidate != null && candidate.getKind() == OcrRegionKind.PAGE_BUBBLE_MASK
+                        && candidate.maskDataView() != null) { pageMask = candidate; break; }
+            }
+            if (pageMask != null) OVERLAY_FREE_EXCLUSION_MASKS.put(overlay, pageMask);
+            else OVERLAY_FREE_EXCLUSION_MASKS.remove(overlay);
+        }
+    }
+
     /**
      * Applies a separate background fill alpha only to a detector-classified free-text overlay.
      * Unknown and bubble overlays preserve the exact host alpha.
@@ -938,6 +985,7 @@ public final class RtDetrLiveBridge {
             android.text.TextPaint paint, float minTextSize, float maxTextSize, int padding) {
         if (canvas == null || overlay == null || text == null || paint == null) return false;
         try {
+            refreshOverlayAssociation(overlay);
             DetectedRegion region = OVERLAY_BUBBLE_MASKS.get(overlay);
             if (region == null || region.maskDataView() == null) return false;
             Rect overlayBounds = readOverlayBounds(overlay);
@@ -962,9 +1010,10 @@ public final class RtDetrLiveBridge {
     public static boolean drawFreeText(android.graphics.Canvas canvas, Object overlay,
             CharSequence text, android.text.TextPaint paint,
             float minTextSize, float maxTextSize, int padding) {
-        if (canvas == null || overlay == null || text == null || paint == null
-                || text.length() == 0 || !isFreeTextOverlay(overlay)) return false;
+        if (canvas == null || overlay == null || text == null || paint == null || text.length() == 0) return false;
         try {
+            refreshOverlayAssociation(overlay);
+            if (!isFreeTextOverlay(overlay)) return false;
             Rect bounds = readOverlayBounds(overlay);
             if (bounds == null) return false;
             float[] transform = BUBBLE_TEXT_TRANSFORMS.get(overlay);
