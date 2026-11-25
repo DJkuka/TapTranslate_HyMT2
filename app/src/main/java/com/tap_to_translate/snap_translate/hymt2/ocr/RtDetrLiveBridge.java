@@ -994,11 +994,14 @@ public final class RtDetrLiveBridge {
             Context context = resolveContextFromOverlay(overlay);
             boolean autoWrap = context == null || context.getSharedPreferences(
                     OCR_PREFS, Context.MODE_PRIVATE).getBoolean(BUBBLE_AUTO_WRAP, true);
+            // Overflow beyond the detected speech balloon is a BubblePop-only
+            // behavior. The ordinary renderer keeps the historical mask boundary.
+            boolean allowOverflow = context != null && isBubblePopPageMaskEnabled(context);
             return BubbleTextLayout.draw(canvas, region.maskDataView(),
                     region.getMaskWidth(), region.getMaskHeight(), region.getBounds(),
                     overlayBounds, text, paint, minTextSize, maxTextSize, padding,
                     autoWrap, transform[0], transform[1], transform[2],
-                    transform.length > 3 ? transform[3] : 1.0f);
+                    transform.length > 3 ? transform[3] : 1.0f, allowOverflow);
         } catch (Throwable error) {
             Log.w(TAG, "BubblePop text layout failed; rectangular host layout retained", error);
             return false;
@@ -1011,15 +1014,18 @@ public final class RtDetrLiveBridge {
             float minTextSize, float maxTextSize, int padding) {
         if (canvas == null || overlay == null || text == null || paint == null || text.length() == 0) return false;
         try {
-            refreshOverlayAssociation(overlay);
-            if (!isFreeTextOverlay(overlay)) return false;
+            // Free-text blocks are independent rectangles. Do not associate them
+            // with BubblePop masks or speech-balloon contours during drawing.
+            Boolean bubble = OVERLAY_IS_BUBBLE.get(overlay);
+            if (Boolean.TRUE.equals(bubble)) return false;
             Rect bounds = readOverlayBounds(overlay);
             if (bounds == null) return false;
             float[] transform = BUBBLE_TEXT_TRANSFORMS.get(overlay);
-            if (transform == null) transform = new float[] {0f, 0f, 1f, 1f};
+            if (transform == null) transform = new float[] {0f, 0f, 1f, 1f, 0f};
             return FreeTextLayout.draw(canvas, bounds, text, paint, minTextSize, maxTextSize,
                     padding, transform[0], transform[1], transform[2],
-                    transform.length > 3 ? transform[3] : 1.0f);
+                    transform.length > 3 ? transform[3] : 1.0f,
+                    transform.length > 4 ? transform[4] : 0f);
         } catch (Throwable error) {
             Log.w(TAG, "Free-text layout failed; rectangular host layout retained", error);
             return false;
@@ -1119,16 +1125,25 @@ public final class RtDetrLiveBridge {
 
     public static void setBubbleTextTransform(
             Object overlay, float dx, float dy, float scale, float lineSpacing) {
+        float rotation = 0f;
+        float[] current = overlay == null ? null : BUBBLE_TEXT_TRANSFORMS.get(overlay);
+        if (current != null && current.length > 4) rotation = current[4];
+        setBubbleTextTransform(overlay, dx, dy, scale, lineSpacing, rotation);
+    }
+
+    public static void setBubbleTextTransform(
+            Object overlay, float dx, float dy, float scale, float lineSpacing, float rotation) {
         if (overlay == null) return;
         BUBBLE_TEXT_TRANSFORMS.put(overlay, new float[] {
                 dx, dy,
                 Math.max(0.25f, Math.min(2.50f, scale)),
-                Math.max(0.85f, Math.min(3.0f, lineSpacing))});
+                Math.max(0.85f, Math.min(3.0f, lineSpacing)),
+                Math.max(-180f, Math.min(180f, rotation))});
     }
 
     public static float[] getBubbleTextTransform(Object overlay) {
         float[] value = BUBBLE_TEXT_TRANSFORMS.get(overlay);
-        return value == null ? new float[] {0f, 0f, 1f, 1f} : value.clone();
+        return value == null ? new float[] {0f, 0f, 1f, 1f, 0f} : value.clone();
     }
 
     private static Context resolveContextFromOverlay(Object overlay) {
