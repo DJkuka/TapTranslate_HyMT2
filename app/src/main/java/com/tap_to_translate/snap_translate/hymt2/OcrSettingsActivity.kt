@@ -26,7 +26,7 @@ import android.widget.Toast
 import java.util.Locale
 import kotlin.math.roundToInt
 
-/** Comic OCR display and detector preprocessing settings. */
+/** APK219 PP-OCR controls, with the newer diagnostics and BubblePop options retained. */
 class OcrSettingsActivity : Activity() {
     private lateinit var alphaSwitch: Switch
     private lateinit var alphaSeek: SeekBar
