@@ -75,58 +75,68 @@ public final class BubbleTextLayout {
 
         float originalSize = paint.getTextSize();
         float safeScale = Math.max(0.25f, Math.min(2.50f, fontScale));
-        float upper = Math.max(minTextSize, maxTextSize) * safeScale;
-        float lower = Math.max(4.0f, Math.min(minTextSize * safeScale, upper));
+        // Fit the natural text size first. Apply the user's scale to that real
+        // fitted size, not to maxTextSize (which made large maxima appear stuck).
+        float upper = Math.max(minTextSize, maxTextSize);
+        float lower = Math.max(4.0f, Math.min(minTextSize, upper));
         try {
+            String layoutText = source.toString();
+            if (!autoWrap) layoutText = layoutText.replace('\n', ' ').replace('\r', ' ');
+            float baseSize = 0f;
+            List<Line> baseLines = null;
+            boolean wrapFallback = false;
             for (float size = upper; size >= lower - 0.01f; size -= 0.5f) {
                 paint.setTextSize(size);
-                String layoutText = source.toString();
-                if (!autoWrap) layoutText = layoutText.replace('\n', ' ').replace('\r', ' ');
-                List<Line> lines = layout(mask, maskWidth, maskHeight, maskBounds,
+                List<Line> candidate = layout(mask, maskWidth, maskHeight, maskBounds,
                         area, layoutText, paint, horizontalPadding, autoWrap, lineSpacing);
-                if (lines != null && !lines.isEmpty()) {
-                    android.graphics.Paint.FontMetrics fm = paint.getFontMetrics();
-                    float usedTop = lines.get(0).baseline + fm.ascent;
-                    float usedBottom = lines.get(lines.size() - 1).baseline + fm.descent;
-                    float verticalShift = (area.top + area.bottom - usedTop - usedBottom) / 2f;
-                    android.graphics.Paint.Align oldAlign = paint.getTextAlign();
-                    paint.setTextAlign(android.graphics.Paint.Align.LEFT);
-                    for (Line line : lines) {
-                        canvas.drawText(line.text, line.x, line.baseline + verticalShift, paint);
-                    }
-                    paint.setTextAlign(oldAlign);
-                    Log.i(TAG, "shape_layout=fit lines=" + lines.size()
-                            + " font=" + size + " area=" + area.flattenToString());
-                    return true;
+                if (candidate != null && !candidate.isEmpty()) {
+                    baseSize = size; baseLines = candidate; break;
                 }
             }
-            if (!autoWrap) {
-                // Keep the text inside the mask if a one-line layout cannot fit
-                // even at the minimum font size. This is the safe last resort.
+            if (baseLines == null && !autoWrap) {
                 for (float size = upper; size >= lower - 0.01f; size -= 0.5f) {
                     paint.setTextSize(size);
-                    List<Line> lines = layout(mask, maskWidth, maskHeight, maskBounds,
+                    List<Line> candidate = layout(mask, maskWidth, maskHeight, maskBounds,
                             area, source.toString(), paint, horizontalPadding, true, lineSpacing);
-                    if (lines == null || lines.isEmpty()) continue;
-                    android.graphics.Paint.FontMetrics fm = paint.getFontMetrics();
-                    float usedTop = lines.get(0).baseline + fm.ascent;
-                    float usedBottom = lines.get(lines.size() - 1).baseline + fm.descent;
-                    float verticalShift = (area.top + area.bottom - usedTop - usedBottom) / 2f;
-                    android.graphics.Paint.Align oldAlign = paint.getTextAlign();
-                    paint.setTextAlign(android.graphics.Paint.Align.LEFT);
-                    for (Line line : lines) {
-                        canvas.drawText(line.text, line.x, line.baseline + verticalShift, paint);
+                    if (candidate != null && !candidate.isEmpty()) {
+                        baseSize = size; baseLines = candidate; wrapFallback = true; break;
                     }
-                    paint.setTextAlign(oldAlign);
-                    Log.i(TAG, "shape_layout=wrap_fallback lines=" + lines.size()
-                            + " font=" + size);
-                    return true;
                 }
             }
-            Log.i(TAG, "shape_layout=not_fit text_length=" + source.length()
-                    + " mask=" + maskWidth + "x" + maskHeight
-                    + " overlay=" + overlayBounds.flattenToString());
-            return false;
+            if (baseLines == null) return false;
+            float wantedSize = Math.max(lower, baseSize * safeScale);
+            boolean wrap = wrapFallback || autoWrap;
+            paint.setTextSize(wantedSize);
+            List<Line> finalLines = layout(mask, maskWidth, maskHeight, maskBounds,
+                    area, source.toString(), paint, horizontalPadding, wrap, lineSpacing);
+            float low = lower, high = wantedSize;
+            if (finalLines == null || finalLines.isEmpty()) {
+                if (wantedSize >= baseSize) low = baseSize;
+                else high = wantedSize;
+                for (int i = 0; i < 16; i++) {
+                    float mid = (low + high) * 0.5f;
+                    paint.setTextSize(mid);
+                    List<Line> candidate = layout(mask, maskWidth, maskHeight, maskBounds,
+                            area, source.toString(), paint, horizontalPadding, wrap, lineSpacing);
+                    if (candidate != null && !candidate.isEmpty()) {
+                        low = mid; finalLines = candidate;
+                    } else high = mid;
+                }
+            }
+            if (finalLines == null || finalLines.isEmpty()) return false;
+            float finalSize = paint.getTextSize();
+            android.graphics.Paint.FontMetrics fm = paint.getFontMetrics();
+            float usedTop = finalLines.get(0).baseline + fm.ascent;
+            float usedBottom = finalLines.get(finalLines.size() - 1).baseline + fm.descent;
+            float verticalShift = (area.top + area.bottom - usedTop - usedBottom) / 2f;
+            android.graphics.Paint.Align oldAlign = paint.getTextAlign();
+            paint.setTextAlign(android.graphics.Paint.Align.LEFT);
+            for (Line line : finalLines) canvas.drawText(line.text, line.x,
+                    line.baseline + verticalShift, paint);
+            paint.setTextAlign(oldAlign);
+            Log.i(TAG, "shape_layout=fit lines=" + finalLines.size()
+                    + " font=" + finalSize + " base=" + baseSize + " scale=" + safeScale);
+            return true;
         } finally {
             paint.setTextSize(originalSize);
         }
