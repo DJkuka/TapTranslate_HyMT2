@@ -497,7 +497,8 @@ public final class TranslationRegionEditor {
                 save.setOnClickListener(v -> {
                     String updated = editor.getText() == null ? "" : editor.getText().toString();
                     if (writeStringField(item, "b", updated)) {
-                        refreshOverlayAssociation(item);
+                        // Text edits do not change the panel's independent rectangle
+                        // or attach a manually created block to a nearby speech balloon.
                         refreshRenderers(state);
                         toast(state.root, "Текст области обновлён");
                         dialog.dismiss();
