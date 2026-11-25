@@ -197,6 +197,11 @@ class OcrSettingsActivity : Activity() {
             (1..8).map { it.toString() },
             (1..8).map { "$it" },
             "2")
+        addSpinnerControl(root, prefs, KEY_REC_PREPROCESS_SCALE, "Масштабирование фрагмента перед Recognition",
+            "Экспериментальная предобработка строки: увеличение INTER_CUBIC и лёгкое повышение резкости перед приведением к фиксированной высоте модели 48 px. Сам вход ONNX остаётся 48 px по высоте. 1.0x — исходный режим без изменений; 1.5x и 2.0x проверяют, помогает ли предварительное увеличение и повышение резкости тонким стилизованным буквам. Может усиливать ореолы и шум.",
+            listOf("1.0", "1.5", "2.0"),
+            listOf("1.0x · исходный режим", "1.5x · мягкое увеличение", "2.0x · сильнее"),
+            "1.0")
 
         val presets = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val comicsPreset = Button(this).apply {
@@ -344,6 +349,7 @@ class OcrSettingsActivity : Activity() {
                     ", detScoreMode=" + currentString(KEY_DET_SCORE_MODE, "fast") +
                     ", recBatchSize=" + currentString(KEY_REC_BATCH_SIZE, "1") +
                     ", ortThreads=" + currentString(KEY_ORT_THREADS, "2") +
+                    ", recPreprocessScale=" + currentString(KEY_REC_PREPROCESS_SCALE, "1.0") +
                     ". PP-OCRv6 применит их после полного перезапуска. Формат скриншотов: " +
                     screenshotFormatLabel + "."
                 Toast.makeText(this@OcrSettingsActivity,
@@ -703,6 +709,7 @@ class OcrSettingsActivity : Activity() {
         private const val KEY_DET_SCORE_MODE = "ocr_det_score_mode"
         private const val KEY_REC_BATCH_SIZE = "ocr_rec_batch_size"
         private const val KEY_ORT_THREADS = "ocr_ort_threads"
+        private const val KEY_REC_PREPROCESS_SCALE = "ocr_rec_preprocess_scale"
         private const val SCREENSHOT_PREFS = "taptranslate_screenshot_settings"
         private const val KEY_SCREENSHOT_TREE_URI = "screenshot_tree_uri"
         private const val KEY_SCREENSHOT_FORMAT = "screenshot_format"
