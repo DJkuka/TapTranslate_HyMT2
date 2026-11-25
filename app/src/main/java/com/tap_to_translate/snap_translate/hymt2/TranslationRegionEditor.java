@@ -1291,13 +1291,15 @@ public final class TranslationRegionEditor {
             } else {
                 final float minScale = 0.25f;
                 final float maxScale = 2.50f;
-                float availableRange = dx >= 0f
+                float outward = (dragMode == DragMode.NW || dragMode == DragMode.SW)
+                        ? -dx : dx;
+                float availableRange = outward >= 0f
                         ? maxScale - textTransformStart[2]
                         : textTransformStart[2] - minScale;
                 float sensitivity = Math.max(dp(getContext(), 80.0f),
                         Math.min(dp(getContext(), 160.0f), dragStart.width() * 0.80f));
                 nextScale = Math.max(minScale, Math.min(maxScale,
-                        textTransformStart[2] + (dx / sensitivity) * availableRange));
+                        textTransformStart[2] + (outward / sensitivity) * availableRange));
             }
             setTextTransform(state.transformTarget, nextX, nextY, nextScale, nextLineSpacing);
             refreshRenderers(state);
