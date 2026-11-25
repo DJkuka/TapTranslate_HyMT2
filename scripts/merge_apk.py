@@ -2129,6 +2129,9 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
                     "com/tap_to_translate/snap_translate/hymt2/ocr/DetectedRegion",
                     "com/tap_to_translate/snap_translate/hymt2/ocr/OcrRegionKind",
                     "com/tap_to_translate/snap_translate/hymt2/ocr/RtDetrLiveBridge",
+                    # Replace APK219's older config class: the bridge invokes the
+                    # newer constructor carrying recPreprocessScale.
+                    "com/paddle/ocr/PaddleOCRConfig",
                 )
                 class_name = rel[:-6] if rel.endswith(".smali") else rel
                 if not any(class_name == item or class_name.startswith(item + "$")
@@ -2284,6 +2287,15 @@ def main() -> int:
     preserved_ocr = snapshot_preserved_ocr(base)
 
     copy_helper_payload(helper, base)
+    # Fail the merge if the helper's PaddleOCRConfig was not ported over the APK219 copy.
+    config_classes = list(base.glob("smali*/com/paddle/ocr/PaddleOCRConfig.smali"))
+    expected_ctor = ".method public constructor <init>(Ljava/lang/String;ILjava/lang/String;IFFFIZLjava/lang/String;Ljava/lang/String;FIF)V"
+    if len(config_classes) != 1:
+        raise RuntimeError(f"Expected exactly one merged PaddleOCRConfig class, found {len(config_classes)}")
+    config_smali = config_classes[0].read_text(encoding="utf-8")
+    if expected_ctor not in config_smali:
+        raise RuntimeError("Merged PaddleOCRConfig is stale: constructor with recPreprocessScale is missing")
+    print(f"Verified updated PaddleOCRConfig constructor in {config_classes[0].parent.parent.name}")
     patch_atomic_backport_shims(base)
     patch_engine_list(base)
     patch_ocr_engine_picker(base)
