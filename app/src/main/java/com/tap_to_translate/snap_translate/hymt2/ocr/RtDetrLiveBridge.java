@@ -714,7 +714,6 @@ public final class RtDetrLiveBridge {
                     OVERLAY_FREE_EXCLUSION_MASKS.remove(group);
                 }
                 if (isBubbleText) {
-                    FREE_TEXT_ALPHA_OVERRIDES.remove(group);
                     DetectedRegion localMask = createOverlayBubbleMask(bounds, regions);
                     if (localMask != null) OVERLAY_BUBBLE_MASKS.put(group, localMask);
                     else OVERLAY_BUBBLE_MASKS.remove(group);
