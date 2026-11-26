@@ -1374,7 +1374,7 @@ def patch_floating_screenshot_button(base: Path) -> None:
     if start < 0 or end < 0:
         raise RuntimeError("Could not locate FloatingIconWidget service constructor")
     body = text[start:end]
-    hook = "    invoke-static {p0, p1}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->attach(Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;Ljava/lang/Object;)V"
+    hook = "    invoke-static {p0, p1}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->attach(Landroid/view/View;Ljava/lang/Object;)V"
     if hook not in body:
         anchor = "    invoke-direct {p0}, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->getAndUpdateUI()V"
         if body.count(anchor) != 1:
@@ -1405,7 +1405,7 @@ def patch_floating_screenshot_button(base: Path) -> None:
 
     iget-object v0, v0, Lsh/b;->c:Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;
 
-    invoke-static {v0}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->showToggleMenu(Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;)V
+    invoke-static {v0}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->showToggleMenu(Landroid/view/View;)V
 
     return-void
 
