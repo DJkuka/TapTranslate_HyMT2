@@ -15,7 +15,6 @@ import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.Toast;
 
-import com.tap_to_translate.snap_translate.domain.main.widgets.FloatingIconWidget;
 
 /**
  * Adds an optional screenshot control to the host floating-icon window.
@@ -32,7 +31,7 @@ public final class FloatingScreenshotButton {
 
     private FloatingScreenshotButton() { }
 
-    public static void attach(FloatingIconWidget widget, Object service) {
+    public static void attach(View widget, Object service) {
         if (widget == null || service == null) return;
         try {
             View iconContainer = widget.findViewById(ICON_CONTAINER_ID);
@@ -85,7 +84,7 @@ public final class FloatingScreenshotButton {
     }
 
     /** Opens from a long press on the main floating icon. */
-    public static void showToggleMenu(FloatingIconWidget widget) {
+    public static void showToggleMenu(View widget) {
         if (widget == null) return;
         try {
             Context context = widget.getContext();
@@ -116,7 +115,7 @@ public final class FloatingScreenshotButton {
         }
     }
 
-    private static View findButton(FloatingIconWidget widget) {
+    private static View findButton(View widget) {
         View iconContainer = widget.findViewById(ICON_CONTAINER_ID);
         if (iconContainer == null || !(iconContainer.getParent() instanceof ViewGroup)) return null;
         return ((ViewGroup) iconContainer.getParent()).findViewWithTag(BUTTON_TAG);
