@@ -406,6 +406,12 @@ jobs:
           }
           test -s "$(find_one_smali com/paddle/ocr/PaddleOCR.smali)"
           test -s "$(find_one_smali com/paddle/ocr/engine/OCREngine.smali)"
+          det_engine="$(find_one_smali com/paddle/ocr/engine/DetectionEngine.smali)"
+          ort_manager="$(find_one_smali com/paddle/ocr/engine/ORTSessionManager.smali)"
+          test -s "$(find_one_smali com/paddle/ocr/preprocess/DetPreprocessor.smali)"
+          test -s "$(find_one_smali com/paddle/ocr/util/ImageUtils.smali)"
+          grep -q 'detection input shape=' "$det_engine"
+          grep -q 'OnnxTensor;->createTensor' "$ort_manager"
           test -s "$(find_one_smali com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrLiveBridge.smali)"
           test -s "$(find_one_smali com/tap_to_translate/snap_translate/hymt2/ocr/PaddleOcrTextLine.smali)"
           test -s "$(find_one_smali org/opencv/android/Utils.smali)"
