@@ -17,7 +17,9 @@ package com.paddle.ocr.engine
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
+import ai.onnxruntime.TensorInfo
 import android.content.Context
+import android.util.Log
 import com.paddle.ocr.EngineConfig
 import com.paddle.ocr.model.OCRError
 import java.nio.FloatBuffer
@@ -32,6 +34,8 @@ class ORTSessionManager(
     private var detInputName: String = "x"
     private var recInputName: String = "x"
     var coldLoadTimeMs: Long = 0
+        private set
+    var maxRecognitionBatchSize: Int = 1
         private set
 
     fun loadModels(detAssetPath: String, recAssetPath: String) {
@@ -68,6 +72,21 @@ class ORTSessionManager(
             } catch (t: Throwable) {
                 throw OCRError.ModelLoadFailed("recognition", t)
             }
+            val recShape = try {
+                (recSession!!.inputInfo[recInputName]?.info as? TensorInfo)?.shape
+            } catch (_: Throwable) {
+                null
+            }
+            val fixedBatch = recShape?.firstOrNull() ?: 1L
+            maxRecognitionBatchSize = if (fixedBatch > 0L) {
+                fixedBatch.toInt().coerceIn(1, 8)
+            } else {
+                8
+            }
+            Log.i("TapTranslatePaddle", "PP-OCRv6 recognition ONNX inputShape=" +
+                (recShape?.contentToString() ?: "unknown") +
+                " maxBatchSupported=" + maxRecognitionBatchSize +
+                " intraOpThreads=" + config.numThreads)
             coldLoadTimeMs = System.currentTimeMillis() - loadStart
         } finally {
             opts.close()
