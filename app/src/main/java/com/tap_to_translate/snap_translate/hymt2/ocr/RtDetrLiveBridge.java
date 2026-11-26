@@ -49,6 +49,10 @@ public final class RtDetrLiveBridge {
             Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
     private static final Map<Object, Boolean> OVERLAY_IS_FREE_TEXT =
             Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
+    // Explicit editor override: true means this overlay must stay free text,
+    // regardless of later detector-to-panel association refreshes.
+    private static final Map<Object, Boolean> FORCED_FREE_TEXT =
+            Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
     private static final Map<Object, DetectedRegion> OVERLAY_BUBBLE_MASKS =
             Collections.synchronizedMap(new WeakHashMap<Object, DetectedRegion>());
     private static final Map<Object, DetectedRegion> OVERLAY_FREE_EXCLUSION_MASKS =
@@ -679,8 +683,9 @@ public final class RtDetrLiveBridge {
                 Rect bounds = readOverlayBounds(group);
                 if (bounds == null) {
                     unreadable++;
+                    boolean forcedFreeText = Boolean.TRUE.equals(FORCED_FREE_TEXT.get(group));
                     OVERLAY_IS_BUBBLE.put(group, Boolean.FALSE);
-                    OVERLAY_IS_FREE_TEXT.put(group, Boolean.FALSE);
+                    OVERLAY_IS_FREE_TEXT.put(group, Boolean.valueOf(forcedFreeText));
                     underlays.add(group);
                     continue;
                 }
@@ -692,11 +697,12 @@ public final class RtDetrLiveBridge {
 
                 // Direct class-1 evidence wins ties. If neither text class matched,
                 // use the class-0 bubble container as a conservative fallback.
-                boolean isBubbleText = bubbleTextScore > 0d
+                boolean forcedFreeText = Boolean.TRUE.equals(FORCED_FREE_TEXT.get(group));
+                boolean isBubbleText = !forcedFreeText && (bubbleTextScore > 0d
                         ? bubbleTextScore >= freeTextScore
-                        : freeTextScore == 0d && findBubbleContainer(bounds, regions) >= 0;
+                        : freeTextScore == 0d && findBubbleContainer(bounds, regions) >= 0);
 
-                boolean isFreeText = !isBubbleText && freeTextScore > 0d;
+                boolean isFreeText = forcedFreeText || (!isBubbleText && freeTextScore > 0d);
                 OVERLAY_IS_BUBBLE.put(group, Boolean.valueOf(isBubbleText));
                 OVERLAY_IS_FREE_TEXT.put(group, Boolean.valueOf(isFreeText));
                 if (!isBubbleText) {
@@ -758,17 +764,24 @@ public final class RtDetrLiveBridge {
         }
         if (best == null) {
             OVERLAY_BUBBLE_MASKS.remove(overlay);
-            OVERLAY_IS_BUBBLE.remove(overlay);
-            OVERLAY_IS_FREE_TEXT.remove(overlay);
             OVERLAY_FREE_EXCLUSION_MASKS.remove(overlay);
+            boolean forcedFreeText = Boolean.TRUE.equals(FORCED_FREE_TEXT.get(overlay));
+            if (forcedFreeText) {
+                OVERLAY_IS_BUBBLE.put(overlay, Boolean.FALSE);
+                OVERLAY_IS_FREE_TEXT.put(overlay, Boolean.TRUE);
+            } else {
+                OVERLAY_IS_BUBBLE.remove(overlay);
+                OVERLAY_IS_FREE_TEXT.remove(overlay);
+            }
             return;
         }
         double bubbleScore = bestTextRegionScore(bounds, best, OcrRegionKind.SPEECH_BUBBLE);
         double freeScore = bestTextRegionScore(bounds, best, OcrRegionKind.FREE_TEXT);
-        boolean isBubble = bubbleScore > 0d ? bubbleScore >= freeScore
-                : freeScore == 0d && findBubbleContainer(bounds, best) >= 0;
+        boolean forcedFreeText = Boolean.TRUE.equals(FORCED_FREE_TEXT.get(overlay));
+        boolean isBubble = !forcedFreeText && (bubbleScore > 0d ? bubbleScore >= freeScore
+                : freeScore == 0d && findBubbleContainer(bounds, best) >= 0);
         OVERLAY_IS_BUBBLE.put(overlay, Boolean.valueOf(isBubble));
-        OVERLAY_IS_FREE_TEXT.put(overlay, Boolean.valueOf(!isBubble && freeScore > 0d));
+        OVERLAY_IS_FREE_TEXT.put(overlay, Boolean.valueOf(forcedFreeText || (!isBubble && freeScore > 0d)));
         if (isBubble) {
             OVERLAY_FREE_EXCLUSION_MASKS.remove(overlay);
             DetectedRegion local = createOverlayBubbleMask(bounds, best);
@@ -784,6 +797,19 @@ public final class RtDetrLiveBridge {
             if (pageMask != null) OVERLAY_FREE_EXCLUSION_MASKS.put(overlay, pageMask);
             else OVERLAY_FREE_EXCLUSION_MASKS.remove(overlay);
         }
+    }
+
+    /** Returns whether the editor explicitly fixed this panel as free text. */
+    public static boolean isForcedFreeTextOverlay(Object overlay) {
+        return overlay != null && Boolean.TRUE.equals(FORCED_FREE_TEXT.get(overlay));
+    }
+
+    /** Enables the manual free-text override; false restores detector auto-classification. */
+    public static void setForceFreeTextOverlay(Object overlay, boolean enabled) {
+        if (overlay == null) return;
+        if (enabled) FORCED_FREE_TEXT.put(overlay, Boolean.TRUE);
+        else FORCED_FREE_TEXT.remove(overlay);
+        refreshOverlayAssociation(overlay);
     }
 
     /**
