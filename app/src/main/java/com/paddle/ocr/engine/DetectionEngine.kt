@@ -15,6 +15,7 @@
 package com.paddle.ocr.engine
 
 import android.graphics.Bitmap
+import android.util.Log
 import com.paddle.ocr.PaddleOCRConfig
 import com.paddle.ocr.model.OCRBox
 import com.paddle.ocr.postprocess.DBPostProcessor
@@ -63,6 +64,10 @@ class DetectionEngine(
         val preStart = System.currentTimeMillis()
         val preResult = preprocessor()
         val preprocessMs = System.currentTimeMillis() - preStart
+        val tensorBytes = preResult.tensorData.size.toLong() * java.lang.Float.BYTES
+        Log.i("TapTranslatePaddle", "detection input shape=" + preResult.shape.contentToString()
+            + " tensor_bytes=" + tensorBytes
+            + " original=" + preResult.originalW + "x" + preResult.originalH)
 
         val infStart = System.currentTimeMillis()
         val (outputData, outputShape) = ortManager.runDetection(preResult.tensorData, preResult.shape)
