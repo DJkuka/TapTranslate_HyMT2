@@ -217,7 +217,9 @@ jobs:
             for rel in \
               "com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali" \
               "ca/c2.smali" "u3/u.smali" "bo/t5.smali" \
-              "la/s.smali" "la/v.smali"; do
+              "la/s.smali" "la/v.smali" \
+              "lb/b.smali" "jd/i.smali" "me/c.smali" \
+              "androidx/appcompat/app/b.smali"; do
               if [ -f "$root/$rel" ]; then
                 mkdir -p "$trace/smali/$(basename "$root")/$(dirname "$rel")"
                 cp "$root/$rel" "$trace/smali/$(basename "$root")/$rel"
@@ -242,6 +244,7 @@ jobs:
             done
           done
           mkdir -p "$trace/res/layout" "$trace/res/values"
+          if [ -d "$decoded/res/menu" ]; then cp -R "$decoded/res/menu" "$trace/res/"; fi
           for rel in fragment_home.xml fragment_settings.xml fragment_translate.xml; do
             [ -f "$decoded/res/layout/$rel" ] && cp "$decoded/res/layout/$rel" "$trace/res/layout/$rel"
           done
