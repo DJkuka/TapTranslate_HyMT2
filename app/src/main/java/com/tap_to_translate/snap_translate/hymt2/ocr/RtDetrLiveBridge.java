@@ -771,9 +771,28 @@ public final class RtDetrLiveBridge {
     }
 
 
-    /** Re-associate a live editor panel with the current OCR frame on every render. */
+    /**
+     * Applies the checkbox as an authoritative rendering mode, not as an OCR
+     * classification hint. Once forced, this panel must not be passed through
+     * BubblePop association, bubble-mask clipping or bubble text layout again.
+     */
+    private static boolean enforceForcedFreeText(Object overlay) {
+        if (overlay == null || !Boolean.TRUE.equals(FORCED_FREE_TEXT.get(overlay))) {
+            return false;
+        }
+        OVERLAY_IS_BUBBLE.put(overlay, Boolean.FALSE);
+        OVERLAY_IS_FREE_TEXT.put(overlay, Boolean.TRUE);
+        OVERLAY_BUBBLE_MASKS.remove(overlay);
+        OVERLAY_MASK_SOURCES.remove(overlay);
+        OVERLAY_MASK_KEYS.remove(overlay);
+        OVERLAY_FREE_EXCLUSION_MASKS.remove(overlay);
+        return true;
+    }
+
+    /** Re-associate an automatic panel with the current OCR frame on every render. */
     public static void refreshOverlayAssociation(Object overlay) {
         if (overlay == null) return;
+        if (enforceForcedFreeText(overlay)) return;
         Rect bounds = readOverlayBounds(overlay);
         if (bounds == null) return;
         List<DetectedRegion> best = null;
@@ -850,9 +869,15 @@ public final class RtDetrLiveBridge {
     /** Enables the manual free-text override; false restores detector auto-classification. */
     public static void setForceFreeTextOverlay(Object overlay, boolean enabled) {
         if (overlay == null) return;
-        if (enabled) FORCED_FREE_TEXT.put(overlay, Boolean.TRUE);
-        else FORCED_FREE_TEXT.remove(overlay);
-        refreshOverlayAssociation(overlay);
+        if (enabled) {
+            FORCED_FREE_TEXT.put(overlay, Boolean.TRUE);
+            enforceForcedFreeText(overlay);
+            Log.i(TAG, "Panel forced to independent free-text rendering; BubblePop association disabled");
+        } else {
+            FORCED_FREE_TEXT.remove(overlay);
+            refreshOverlayAssociation(overlay);
+            Log.i(TAG, "Panel returned to automatic OCR/BubblePop classification");
+        }
     }
 
     /**
@@ -866,6 +891,7 @@ public final class RtDetrLiveBridge {
         // score for its bounds. Requiring a positive score here made all such
         // backgrounds revert to the host's fully opaque alpha.
         try {
+            boolean forcedFreeText = enforceForcedFreeText(overlay);
             Integer override = FREE_TEXT_ALPHA_OVERRIDES.get(overlay);
             int percent;
             if (override != null) {
@@ -875,7 +901,7 @@ public final class RtDetrLiveBridge {
                 // Match the editor's contract: unknown classification is treated
                 // as non-bubble for free-text opacity. Explicit bubble evidence
                 // always preserves the host's original fill alpha.
-                if (Boolean.TRUE.equals(isBubble)) return originalAlpha;
+                if (!forcedFreeText && Boolean.TRUE.equals(isBubble)) return originalAlpha;
                 if (context == null) return originalAlpha;
                 android.content.SharedPreferences prefs =
                         context.getSharedPreferences(OCR_PREFS, Context.MODE_PRIVATE);
@@ -893,7 +919,8 @@ public final class RtDetrLiveBridge {
 
     /** The editor uses the same non-bubble classification as APK219's alpha path. */
     public static boolean isFreeTextOverlay(Object overlay) {
-        return overlay != null && !Boolean.TRUE.equals(OVERLAY_IS_BUBBLE.get(overlay));
+        return overlay != null && (Boolean.TRUE.equals(FORCED_FREE_TEXT.get(overlay))
+                || !Boolean.TRUE.equals(OVERLAY_IS_BUBBLE.get(overlay)));
     }
 
     /** Sets a per-overlay fill opacity override without changing other free-text rectangles. */
@@ -1100,7 +1127,7 @@ public final class RtDetrLiveBridge {
             android.text.TextPaint paint, float minTextSize, float maxTextSize, int padding) {
         if (canvas == null || overlay == null || text == null || paint == null) return false;
         try {
-            if (Boolean.TRUE.equals(FORCED_FREE_TEXT.get(overlay))) return false;
+            if (enforceForcedFreeText(overlay)) return false;
             refreshOverlayAssociation(overlay);
             DetectedRegion region = OVERLAY_BUBBLE_MASKS.get(overlay);
             if (region == null || region.maskDataView() == null) return false;
@@ -1131,6 +1158,11 @@ public final class RtDetrLiveBridge {
             float minTextSize, float maxTextSize, int padding) {
         if (canvas == null || overlay == null || text == null || paint == null || text.length() == 0) return false;
         try {
+            // The checkbox wins over detector output on every draw, including
+            // after the panel has been moved over or across a speech balloon.
+            // Do not let a stale bubble classification route it back to BubbleTextLayout.
+            boolean forcedFreeText = enforceForcedFreeText(overlay);
+            if (!forcedFreeText) refreshOverlayAssociation(overlay);
             // Free-text blocks are independent rectangles. Do not associate them
             // with BubblePop masks or speech-balloon contours during drawing.
             Boolean bubble = OVERLAY_IS_BUBBLE.get(overlay);
@@ -1154,10 +1186,10 @@ public final class RtDetrLiveBridge {
         try {
             // The host paints the fill before drawing text. Refresh the shape here,
             // not later in drawBubbleText(), so the fill gets the same contour.
+            // Forced free text is a strict rectangular-background mode. Return
+            // to the host's normal rounded rectangle before any BubblePop clipping.
+            if (enforceForcedFreeText(overlay)) return false;
             refreshOverlayAssociation(overlay);
-            // The forced-free-text checkbox changes the panel contract: allow
-            // the host to draw a full rectangular background at its alpha.
-            if (Boolean.TRUE.equals(FORCED_FREE_TEXT.get(overlay))) return false;
             Rect bounds = readOverlayBounds(overlay);
             if (bounds == null) return false;
             Boolean isBubble = OVERLAY_IS_BUBBLE.get(overlay);
