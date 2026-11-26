@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// PP-OCR runtime restored from verified APK219 implementation.
 package com.paddle.ocr.engine
 
 import ai.onnxruntime.OnnxTensor
