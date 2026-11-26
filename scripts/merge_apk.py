@@ -1364,6 +1364,85 @@ def patch_floating_icon_z_order(base: Path) -> None:
         service.write_text(source, encoding="utf-8")
     print("Added floating icon re-stack after translation window creation")
 
+def patch_floating_screenshot_button(base: Path) -> None:
+    """Install the optional sibling screenshot control and its long-press toggle."""
+    widget = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget.smali"
+    text = widget.read_text(encoding="utf-8")
+    method = ".method public constructor <init>(Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;Lme/c;)V"
+    start = text.find(method)
+    end = text.find(".end method", start)
+    if start < 0 or end < 0:
+        raise RuntimeError("Could not locate FloatingIconWidget service constructor")
+    body = text[start:end]
+    hook = "    invoke-static {p0, p1}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->attach(Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;Ljava/lang/Object;)V"
+    if hook not in body:
+        anchor = "    invoke-direct {p0}, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->getAndUpdateUI()V"
+        if body.count(anchor) != 1:
+            raise RuntimeError("Could not find floating widget initialization point")
+        body = body.replace(anchor, anchor + "\n\n" + hook, 1)
+        text = text[:start] + body + text[end:]
+        widget.write_text(text, encoding="utf-8")
+
+    # The GestureDetector listener uses lb/b(this, 1). Route only that long press
+    # to the new menu; retain all other gesture-listener branches unchanged.
+    gesture = base / "smali_classes2/lb/b.smali"
+    gtext = gesture.read_text(encoding="utf-8")
+    lp = ".method public onLongPress(Landroid/view/MotionEvent;)V"
+    gs = gtext.find(lp)
+    ge = gtext.find(".end method", gs)
+    if gs < 0 or ge < 0:
+        raise RuntimeError("Could not locate GestureDetector long-press callback")
+    gbody = gtext[gs:ge]
+    menu_hook = """    iget v0, p0, Llb/b;->b:I
+
+    const/4 v1, 0x1
+
+    if-ne v0, v1, :hymt2_original_long_press
+
+    iget-object v0, p0, Llb/b;->c:Ljava/lang/Object;
+
+    check-cast v0, Lsh/b;
+
+    iget-object v0, v0, Lsh/b;->c:Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;
+
+    invoke-static {v0}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->showToggleMenu(Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;)V
+
+    return-void
+
+    :hymt2_original_long_press
+"""
+    if "showToggleMenu" not in gbody:
+        anchor = "    .locals 2\n"
+        if gbody.count(anchor) != 1:
+            raise RuntimeError("Unexpected long-press register layout")
+        gbody = gbody.replace(anchor, anchor + "\n" + menu_hook, 1)
+        gtext = gtext[:gs] + gbody + gtext[ge:]
+        gesture.write_text(gtext, encoding="utf-8")
+
+    print("Installed floating screenshot control and long-press visibility menu")
+
+
+def patch_per_panel_fonts(base: Path) -> None:
+    """Apply transient per-region typefaces before the existing auto-fit layout."""
+    for rel, owner in (
+        ("smali_classes3/rh/f.smali", "Lrh/f;"),
+        ("smali_classes3/rh/g.smali", "Lrh/g;"),
+    ):
+        path = base / rel
+        text = path.read_text(encoding="utf-8")
+        hook = (
+            f"    iget-object v2, v0, {owner}->g:Landroid/text/TextPaint;\n"
+            "    invoke-static {v2, v11}, Lcom/tap_to_translate/snap_translate/hymt2/PanelFontStore;->apply(Landroid/text/TextPaint;Ljava/lang/Object;)V\n"
+        )
+        if "PanelFontStore;->apply" not in text:
+            anchor = "    iget v2, v11, Loh/m;->d:I\n"
+            if text.count(anchor) != 1:
+                raise RuntimeError(f"Could not locate per-region layout point in {rel}")
+            text = text.replace(anchor, hook + anchor, 1)
+            path.write_text(text, encoding="utf-8")
+    print("Installed per-panel font hooks in both APK219 text renderers")
+
+
 def patch_screenshot_button(base: Path) -> None:
     """Add a screenshot button to the result toolbar and wire it to the helper saver."""
     layout = base / "res/layout/container_widget.xml"
@@ -2341,6 +2420,8 @@ def main() -> int:
     patch_resources(base)
     patch_ocr_resources(base)
     patch_screenshot_button(base)
+    patch_floating_screenshot_button(base)
+    patch_per_panel_fonts(base)
     patch_translation_region_editor(base)
     patch_floating_icon_z_order(base)
     patch_display_profiles(base)
