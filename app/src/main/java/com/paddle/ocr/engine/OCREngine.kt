@@ -48,7 +48,7 @@ class OCREngine(
             throw t
         }
         detectionEngine = DetectionEngine(ortManager, config)
-        recognitionEngine = RecognitionEngine(ortManager, configured.characterList, config.recPreprocessScale)
+        recognitionEngine = RecognitionEngine(ortManager, configured.characterList)
     }
 
     fun run(bitmap: Bitmap): OCREngineResult {
@@ -105,7 +105,7 @@ class OCREngine(
         val allResults = mutableListOf<OCRResult>()
         val recInputShapes = mutableListOf<List<Int>>()
         val perLineRecMs = mutableListOf<Long>()
-        val batchSize = config.recBatchSize.coerceAtLeast(1)
+        val batchSize = config.recBatchSize.coerceIn(1, ortManager.maxRecognitionBatchSize)
 
         var i = 0
         while (i < sortedBoxes.size) {
