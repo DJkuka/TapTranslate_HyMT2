@@ -632,7 +632,7 @@ object DisplayProfilesStore {
             } else {
                 "setCustomTextColor"
             }
-            owner.getMethod(methodName, Int::class.javaPrimitiveType).invoke(null, value)
+            owner.getMethod(methodName, Int::class.javaPrimitiveType!!).invoke(null, value)
         } catch (t: Throwable) {
             // Older app builds may persist the same value through the common
             // preference layer; keep that fallback instead of aborting profile apply.
