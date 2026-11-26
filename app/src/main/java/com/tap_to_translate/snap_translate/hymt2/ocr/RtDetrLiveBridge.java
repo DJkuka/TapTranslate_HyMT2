@@ -808,7 +808,8 @@ public final class RtDetrLiveBridge {
         // A forced free-text panel still needs the bubble's clipped fill mask.
         // Otherwise the exclusion mask deliberately leaves the original bubble
         // lettering untouched, which makes the panel opacity appear broken.
-        boolean keepBubbleFillMask = detectedBubble;
+        boolean keepBubbleFillMask = detectedBubble
+                || (forcedFreeText && findBubbleContainer(bounds, best) >= 0);
         if (keepBubbleFillMask) {
             OVERLAY_FREE_EXCLUSION_MASKS.remove(overlay);
             String maskKey = findOverlayBubbleMaskId(bounds, best);
