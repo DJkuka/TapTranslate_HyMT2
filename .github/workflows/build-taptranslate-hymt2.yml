@@ -506,6 +506,40 @@ jobs:
           grep -q 'Math.round(dp(context, 32))' app/src/main/java/com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor.java
           echo "Verified reduced opacity dialog height; width unchanged."
 
+      - name: Verify floating screenshot and per-panel font wiring in final APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          decoded="build/ocr-final-check"
+          find_one_smali() {
+            local rel="$1"
+            local -a matches
+            mapfile -t matches < <(find "$decoded" -type f -path "*/$rel" -print)
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "Expected exactly one DEX definition for $rel; found ${#matches[@]}" >&2
+              printf '%s\\n' "${matches[@]}" >&2
+              exit 1
+            fi
+            printf '%s' "${matches[0]}"
+          }
+          floating="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton.smali)"
+          fonts="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/PanelFontStore.smali)"
+          editor="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor.smali)"
+          manager="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager.smali)"
+          widget="$(find_one_smali com/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget.smali)"
+          renderer_f="$(find_one_smali rh/f.smali)"
+          renderer_g="$(find_one_smali rh/g.smali)"
+          grep -q 'FloatingScreenshotButton;->attach' "$widget"
+          grep -q 'setOnLongClickListener' "$floating"
+          grep -q 'showToggleMenu' "$floating"
+          grep -q 'captureFromService' "$floating"
+          grep -q 'floating_screenshot_button_enabled' "$floating"
+          grep -q 'PanelFontStore;->setFont' "$editor"
+          grep -q 'choosePanelFont' "$editor"
+          grep -q 'PanelFontStore;->apply' "$renderer_f"
+          grep -q 'PanelFontStore;->apply' "$renderer_g"
+          grep -q 'captureFromService' "$manager"
+          echo "Verified floating screenshot button, persisted toggle, save entry point and per-panel font hooks."
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
