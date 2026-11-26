@@ -7,6 +7,7 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.graphics.Typeface;
 import android.os.SystemClock;
 import android.text.InputType;
 import android.util.Log;
@@ -18,6 +19,7 @@ import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -69,27 +71,40 @@ public final class TranslationRegionEditor {
             View addRegion = root.findViewById(ADD_REGION_BUTTON_ID);
             View textPlacement = root.findViewById(TEXT_PLACEMENT_BUTTON_ID);
             View opacity = root.findViewById(FREE_TEXT_OPACITY_BUTTON_ID);
+            Button fontButton = new Button(root.getContext());
+            fontButton.setText("Шрифт");
+            fontButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+            fontButton.setAllCaps(false);
+            fontButton.setMinWidth(0);
+            fontButton.setMinimumWidth(0);
+            fontButton.setPadding(Math.round(dp(root.getContext(), 5)), 0,
+                    Math.round(dp(root.getContext(), 5)), 0);
             CheckBox forceFreeText = new CheckBox(root.getContext());
-            forceFreeText.setText("Свободный текст");
+            forceFreeText.setText("");
             forceFreeText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
             forceFreeText.setPadding(Math.round(dp(root.getContext(), 4)), 0,
                     Math.round(dp(root.getContext(), 4)), 0);
             if (editText != null && editText.getParent() instanceof ViewGroup) {
                 ViewGroup toolbar = (ViewGroup) editText.getParent();
                 int insertAt = toolbar.indexOfChild(editText) + 1;
+                ViewGroup.LayoutParams fontParams = new ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+                toolbar.addView(fontButton, Math.max(0, insertAt), fontParams);
                 ViewGroup.LayoutParams checkboxParams = new ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.WRAP_CONTENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT);
                 toolbar.addView(forceFreeText, Math.max(0, insertAt), checkboxParams);
             } else {
                 forceFreeText.setVisibility(View.GONE);
+                fontButton.setVisibility(View.GONE);
             }
             if (!(content instanceof ViewGroup) || edit == null || delete == null) {
                 Log.w(TAG, "Cannot bind region editor: toolbar or content view is missing");
                 return;
             }
 
-            State state = new State(root, (ViewGroup) content, edit, delete, editText, opacity, forceFreeText);
+            State state = new State(root, (ViewGroup) content, edit, delete, editText, opacity, forceFreeText, fontButton);
             SelectionOverlay overlay = new SelectionOverlay(root.getContext(), state);
             state.overlay = overlay;
             overlay.setVisibility(View.GONE);
@@ -120,6 +135,7 @@ public final class TranslationRegionEditor {
             }
             state.addRegionButton = addRegion;
             state.textPlacementButton = textPlacement;
+            fontButton.setOnClickListener(v -> choosePanelFont(state));
         state.forceFreeTextCheckBox = forceFreeText;
         forceFreeText.setVisibility(View.GONE);
         forceFreeText.setOnCheckedChangeListener((button, checked) -> {
@@ -350,6 +366,47 @@ public final class TranslationRegionEditor {
         }
     }
 
+    private static void choosePanelFont(State state) {
+        if (!state.editing || state.selected.isEmpty()) return;
+        final String[] labels = {
+                "По умолчанию", "Sans Serif", "Serif", "Monospace",
+                "Casual", "Cursive", "Fantasy"
+        };
+        final String[] families = { null, "sans-serif", "serif", "monospace",
+                "casual", "cursive", "fantasy" };
+        ArrayAdapter<String> adapter = new ArrayAdapter<String>(
+                state.root.getContext(), android.R.layout.simple_list_item_1, labels) {
+            @Override public View getView(int position, View convertView, ViewGroup parent) {
+                TextView view = (TextView) super.getView(position, convertView, parent);
+                view.setTypeface(families[position] == null
+                        ? Typeface.DEFAULT : Typeface.create(families[position], Typeface.NORMAL));
+                view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+                view.setPadding(Math.round(dp(state.root.getContext(), 18)),
+                        Math.round(dp(state.root.getContext(), 10)),
+                        Math.round(dp(state.root.getContext(), 18)),
+                        Math.round(dp(state.root.getContext(), 10)));
+                return view;
+            }
+        };
+        AlertDialog dialog = new AlertDialog.Builder(state.root.getContext())
+                .setTitle("Шрифт выбранных панелей")
+                .setAdapter(adapter, (d, which) -> {
+                    String family = families[which];
+                    for (Object region : new ArrayList<Object>(state.selected.keySet())) {
+                        PanelFontStore.setFont(region, family);
+                    }
+                    refreshRenderers(state);
+                    toast(state.root, state.selected.size() == 1
+                            ? "Шрифт панели изменён" : "Шрифт выбранных панелей изменён");
+                })
+                .setNegativeButton("Отмена", null)
+                .create();
+        if (dialog.getWindow() != null && android.os.Build.VERSION.SDK_INT >= 26) {
+            dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
+        }
+        dialog.show();
+    }
+
     private static void updateSelectionButtons(State state) {
         int count = state.selected.size();
         state.deleteButton.setVisibility(state.editing ? View.VISIBLE : View.GONE);
@@ -380,6 +437,10 @@ public final class TranslationRegionEditor {
             state.opacityButton.setEnabled(oneRegion);
             state.opacityButton.setAlpha(oneRegion ? 1.0f : 0.35f);
             state.opacityButton.setContentDescription("Непрозрачность заливки панели");
+        }
+        if (state.fontButton != null) {
+            state.fontButton.setVisibility(state.editing && count > 0 ? View.VISIBLE : View.GONE);
+            state.fontButton.setEnabled(state.editing && count > 0);
         }
         if (state.forceFreeTextCheckBox != null) {
             state.forceFreeTextCheckBox.setVisibility(oneRegion ? View.VISIBLE : View.GONE);
@@ -913,6 +974,7 @@ public final class TranslationRegionEditor {
         View textPlacementButton;
         final View opacityButton;
         CheckBox forceFreeTextCheckBox;
+        final Button fontButton;
         boolean syncingFreeTextCheckBox;
         final IdentityHashMap<Object, Boolean> selected = new IdentityHashMap<>();
         final IdentityHashMap<Object, String> originalTexts = new IdentityHashMap<>();
@@ -924,7 +986,8 @@ public final class TranslationRegionEditor {
         Object transformTarget;
 
         State(View root, ViewGroup content, View editButton, View deleteButton,
-                View editTextButton, View opacityButton, CheckBox forceFreeTextCheckBox) {
+                View editTextButton, View opacityButton, CheckBox forceFreeTextCheckBox,
+                Button fontButton) {
             this.root = root;
             this.content = content;
             this.editButton = editButton;
@@ -932,6 +995,7 @@ public final class TranslationRegionEditor {
             this.editTextButton = editTextButton;
             this.opacityButton = opacityButton;
             this.forceFreeTextCheckBox = forceFreeTextCheckBox;
+            this.fontButton = fontButton;
         }
     }
 
