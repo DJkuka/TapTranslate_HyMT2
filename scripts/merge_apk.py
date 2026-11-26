@@ -1383,43 +1383,7 @@ def patch_floating_screenshot_button(base: Path) -> None:
         text = text[:start] + body + text[end:]
         widget.write_text(text, encoding="utf-8")
 
-    # The GestureDetector listener uses lb/b(this, 1). Route only that long press
-    # to the new menu; retain all other gesture-listener branches unchanged.
-    gesture = base / "smali_classes2/lb/b.smali"
-    gtext = gesture.read_text(encoding="utf-8")
-    lp = ".method public onLongPress(Landroid/view/MotionEvent;)V"
-    gs = gtext.find(lp)
-    ge = gtext.find(".end method", gs)
-    if gs < 0 or ge < 0:
-        raise RuntimeError("Could not locate GestureDetector long-press callback")
-    gbody = gtext[gs:ge]
-    menu_hook = """    iget v0, p0, Llb/b;->b:I
-
-    const/4 v1, 0x1
-
-    if-ne v0, v1, :hymt2_original_long_press
-
-    iget-object v0, p0, Llb/b;->c:Ljava/lang/Object;
-
-    check-cast v0, Lsh/b;
-
-    iget-object v0, v0, Lsh/b;->c:Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;
-
-    invoke-static {v0}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->showToggleMenu(Landroid/view/View;)V
-
-    return-void
-
-    :hymt2_original_long_press
-"""
-    if "showToggleMenu" not in gbody:
-        anchor = "    .locals 2\n"
-        if gbody.count(anchor) != 1:
-            raise RuntimeError("Unexpected long-press register layout")
-        gbody = gbody.replace(anchor, anchor + "\n" + menu_hook, 1)
-        gtext = gtext[:gs] + gbody + gtext[ge:]
-        gesture.write_text(gtext, encoding="utf-8")
-
-    print("Installed floating screenshot control and long-press visibility menu")
+    print("Installed floating screenshot control and main-icon long-press visibility menu")
 
 
 def patch_per_panel_fonts(base: Path) -> None:
