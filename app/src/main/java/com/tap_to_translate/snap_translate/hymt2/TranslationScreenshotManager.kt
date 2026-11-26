@@ -86,6 +86,55 @@ object TranslationScreenshotManager {
         }
     }
 
+
+    /**
+     * Entry point for the independent floating screenshot button. Unlike the
+     * result-toolbar action this does not require a result overlay to exist:
+     * without a translated layer it saves the cropped source frame only.
+     */
+    @JvmStatic
+    fun captureFromService(service: Any) {
+        val context = service as? Context
+        if (context == null) {
+            toast(null, "Не удалось получить службу перевода")
+            return
+        }
+
+        try {
+            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val treeValue = prefs.getString(KEY_TREE_URI, null)
+            if (treeValue.isNullOrBlank()) {
+                toast(context, "Сначала выберите папку для скриншотов в настройках")
+                return
+            }
+
+            val capture = readField(service, "c")
+            val source = readField(capture, "j") as? Bitmap
+            if (source == null || source.isRecycled) {
+                toast(context, "Исходный кадр ещё не готов. Повторите снимок")
+                return
+            }
+
+            // k is null until the host has created its result overlay. This is
+            // a normal state: save the original frame without requiring OCR.
+            val resultOverlay = readField(service, "k") as? View
+            val candidateLayer = resultOverlay?.let { readField(it, "n") as? View }
+            val textLayer = candidateLayer?.takeIf {
+                it.visibility == View.VISIBLE && it.width > 0 && it.height > 0
+            }
+
+            val output = composeFrame(source, textLayer)
+            val format = prefs.getString(KEY_FORMAT, FORMAT_PNG) ?: FORMAT_PNG
+            val treeUri = Uri.parse(treeValue)
+            ioExecutor.execute {
+                saveToTree(context.applicationContext, output, treeUri, format)
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Floating screenshot capture failed", t)
+            toast(context, "Не удалось подготовить скриншот: " + (t.message ?: "ошибка"))
+        }
+    }
+
     private fun findScreenTranslateService(root: Any): Any? {
         val visited = java.util.Collections.newSetFromMap(
             java.util.IdentityHashMap<Any, Boolean>()
@@ -135,7 +184,7 @@ object TranslationScreenshotManager {
         }
     }
 
-    private fun composeFrame(source: Bitmap, textLayer: View): Bitmap {
+    private fun composeFrame(source: Bitmap, textLayer: View?): Bitmap {
         // ImageReader may reuse the host bitmap while the next frame is arriving.
         // Work from an immutable snapshot to avoid a partially updated screenshot.
         val sourceCopy = source.copy(Bitmap.Config.ARGB_8888, false)
@@ -154,25 +203,26 @@ object TranslationScreenshotManager {
                 bitmapPaint
             )
 
-            // Render the transparent translation layer separately. BubblePop masks
-            // are applied to this layer only, never to the original comic frame.
-            val overlay = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            try {
-                val overlayCanvas = Canvas(overlay)
-                val position = IntArray(2)
-                textLayer.getLocationOnScreen(position)
-                overlayCanvas.save()
-                overlayCanvas.translate(position[0].toFloat(), position[1].toFloat())
-                textLayer.draw(overlayCanvas)
-                overlayCanvas.restore()
+            // Draw the translated text only when the host currently has a
+            // visible, measured translation layer. Otherwise keep the source
+            // image untouched (the floating button also works before OCR).
+            if (textLayer != null) {
+                val overlay = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                try {
+                    val overlayCanvas = Canvas(overlay)
+                    val position = IntArray(2)
+                    textLayer.getLocationOnScreen(position)
+                    overlayCanvas.save()
+                    overlayCanvas.translate(position[0].toFloat(), position[1].toFloat())
+                    textLayer.draw(overlayCanvas)
+                    overlayCanvas.restore()
 
-                // An off-screen View draw can take a different Canvas path from the
-                // live window. Re-apply the exact masks to the transparent overlay.
-                val clipped = RtDetrLiveBridge.clipBubbleOverlay(overlay, 0, 0)
-                Log.i(TAG, "Screenshot translation layer rendered; BubblePop masks applied=$clipped")
-                canvas.drawBitmap(overlay, 0f, 0f, bitmapPaint)
-            } finally {
-                if (!overlay.isRecycled) overlay.recycle()
+                    val clipped = RtDetrLiveBridge.clipBubbleOverlay(overlay, 0, 0)
+                    Log.i(TAG, "Screenshot translation layer rendered; BubblePop masks applied=$clipped")
+                    canvas.drawBitmap(overlay, 0f, 0f, bitmapPaint)
+                } finally {
+                    if (!overlay.isRecycled) overlay.recycle()
+                }
             }
 
             return output
