@@ -17,11 +17,8 @@ package com.paddle.ocr.util
 import org.opencv.core.Mat
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
-import kotlin.math.sqrt
 
 object ImageUtils {
-    // Keep the detector tensor within a practical memory budget on 256 MB Android heaps.
-    private const val MAX_DET_INPUT_PIXELS = 700_000L
 
     fun resizeToMultipleOf32(
         src: Mat,
@@ -46,23 +43,8 @@ object ImageUtils {
             newW = (newW * ratio).toInt()
         }
 
-        // A side-length limit alone does not protect square/portrait screenshots.
-        // Cap total detector pixels as well, before allocating the FloatArray tensor.
-        val pixels = newH.toLong() * newW.toLong()
-        if (pixels > MAX_DET_INPUT_PIXELS) {
-            val pixelScale = sqrt(MAX_DET_INPUT_PIXELS.toDouble() / pixels.toDouble())
-            newH = (newH * pixelScale).toInt()
-            newW = (newW * pixelScale).toInt()
-        }
-
         newH = maxOf(MathUtils.roundHalfToEven(newH / 32.0) * 32, 32)
         newW = maxOf(MathUtils.roundHalfToEven(newW / 32.0) * 32, 32)
-        // Rounding to multiples of 32 can slightly exceed the budget; trim down if needed.
-        if (newH.toLong() * newW.toLong() > MAX_DET_INPUT_PIXELS) {
-            val safeScale = sqrt(MAX_DET_INPUT_PIXELS.toDouble() / (newH.toLong() * newW.toLong()).toDouble())
-            newH = maxOf((newH * safeScale / 32.0).toInt() * 32, 32)
-            newW = maxOf((newW * safeScale / 32.0).toInt() * 32, 32)
-        }
         val dst = Mat()
         Imgproc.resize(src, dst, Size(newW.toDouble(), newH.toDouble()), 0.0, 0.0, Imgproc.INTER_LINEAR)
         return dst
