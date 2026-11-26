@@ -5,7 +5,7 @@ name: Build Tap Translate 1.131 BubblePop Alpha Capture Fix + Hy-MT2 Vulkan
 on:
   workflow_dispatch:
   push:
-    branches: [ main, vulkan-v12-integration, ocr-hybrid-prototype, ocr-paddle-prototype, ocr-region-editing, ocr-region-geometry, ocr-region-gesture-presets, bubblepop-text-regions-apk219, apk219-bubblepop-preserve-hymt, taptranslate-1.125-smooth-font-resize, taptranslate-1.126-line-spacing-mask-inset, taptranslate-1.127-ppocr-settings-diagnostics, taptranslate-1.128-ppocr-219-rec-upscale, taptranslate-1.129-font-scaling-free-text, taptranslate-1.131-bubblepop-alpha-capture-fix ]
+    branches: [ main, vulkan-v12-integration, ocr-hybrid-prototype, ocr-paddle-prototype, ocr-region-editing, ocr-region-geometry, ocr-region-gesture-presets, bubblepop-text-regions-apk219, apk219-bubblepop-preserve-hymt, taptranslate-1.125-smooth-font-resize, taptranslate-1.126-line-spacing-mask-inset, taptranslate-1.127-ppocr-settings-diagnostics, taptranslate-1.128-ppocr-219-rec-upscale, taptranslate-1.129-font-scaling-free-text, taptranslate-1.131-bubblepop-alpha-capture-fix, taptranslate-1.131-free-text-checkbox-fix ]
 
 permissions:
   contents: write
