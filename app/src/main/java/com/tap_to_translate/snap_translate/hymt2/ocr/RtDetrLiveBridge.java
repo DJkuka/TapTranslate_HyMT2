@@ -840,7 +840,10 @@ public final class RtDetrLiveBridge {
                 percent = override.intValue();
             } else {
                 Boolean isBubble = OVERLAY_IS_BUBBLE.get(overlay);
-                if (isBubble == null || isBubble.booleanValue()) return originalAlpha;
+                // Match the editor's contract: unknown classification is treated
+                // as non-bubble for free-text opacity. Explicit bubble evidence
+                // always preserves the host's original fill alpha.
+                if (Boolean.TRUE.equals(isBubble)) return originalAlpha;
                 if (context == null) return originalAlpha;
                 android.content.SharedPreferences prefs =
                         context.getSharedPreferences(OCR_PREFS, Context.MODE_PRIVATE);
