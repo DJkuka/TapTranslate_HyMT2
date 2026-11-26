@@ -27,6 +27,7 @@ object DisplayProfilesStore {
     private const val KEY_FIXED_FONT_MIGRATED = "fixed_font_size_migrated"
     private const val KEY_FIXED_FONT_SIZE = "HAWK_FIXED_FONT_SIZE"
     private const val KEY_COMICS_PRESET_MIGRATED = "comics_preset_user_json_v1_migrated"
+    private const val KEY_DISPLAY_FIELDS_MIGRATED = "display_profile_fields_v2_migrated"
 
     private const val OCR_PREFS = "taptranslate_ocr_settings"
     private const val KEY_FREE_ALPHA_ENABLED = "ocr_free_text_alpha_enabled"
@@ -61,6 +62,7 @@ object DisplayProfilesStore {
         if (prefs.contains(KEY_PROFILES) && prefs.contains(KEY_BUILTIN_DEFAULTS)) {
             migrateFixedFontFlag(context, prefs)
             migrateComicsPreset(context, prefs)
+            migrateDisplayFields(context, prefs)
             return
         }
 
@@ -81,7 +83,64 @@ object DisplayProfilesStore {
         prefs.edit()
             .putBoolean(KEY_FIXED_FONT_MIGRATED, true)
             .putBoolean(KEY_COMICS_PRESET_MIGRATED, true)
+            .putBoolean(KEY_DISPLAY_FIELDS_MIGRATED, true)
             .apply()
+    }
+
+    /**
+     * Older profile files may contain only the small subset of fields known to
+     * their original editor. Backfill missing appearance fields without
+     * overwriting values already saved by the user. This covers font family,
+     * manga switches, background outline and text-style colours as well as the
+     * existing size/opacity settings.
+     */
+    private fun migrateDisplayFields(context: Context, prefs: android.content.SharedPreferences) {
+        if (prefs.getBoolean(KEY_DISPLAY_FIELDS_MIGRATED, false)) return
+
+        fun complete(source: JSONArray): JSONArray {
+            val updated = JSONArray()
+            for (i in 0 until source.length()) {
+                val original = source.optJSONObject(i) ?: continue
+                val profile = JSONObject(original.toString())
+                val values = JSONObject(profile.optJSONObject("values")?.toString() ?: "{}")
+                val host = JSONObject(values.optJSONObject("host")?.toString() ?: "{}")
+                for ((key, defaultValue) in hawkDefaults) {
+                    if (!host.has(key)) {
+                        val currentValue = if (key == "text_style_custom_bg_color" ||
+                            key == "text_style_custom_text_color"
+                        ) readStyleColor(key, defaultValue) else readHawk(key, defaultValue)
+                        host.put(key, currentValue)
+                    }
+                }
+                values.put("host", host)
+                val ocr = JSONObject(values.optJSONObject("ocr")?.toString() ?: "{}")
+                val currentOcr = context.getSharedPreferences(OCR_PREFS, Context.MODE_PRIVATE)
+                if (!ocr.has(KEY_FREE_ALPHA_ENABLED)) {
+                    ocr.put(KEY_FREE_ALPHA_ENABLED,
+                        currentOcr.getBoolean(KEY_FREE_ALPHA_ENABLED, false))
+                }
+                if (!ocr.has(KEY_FREE_ALPHA_PERCENT)) {
+                    val bg = (host.opt("HAWK_BG_TRANS") as? Number)?.toInt() ?: 236
+                    ocr.put(KEY_FREE_ALPHA_PERCENT, currentOcr.getInt(
+                        KEY_FREE_ALPHA_PERCENT, ((bg * 100 + 127) / 255).coerceIn(0, 100)))
+                }
+                values.put("ocr", ocr)
+                profile.put("values", values)
+                updated.put(profile)
+            }
+            return updated
+        }
+
+        val profiles = complete(readProfiles(context))
+        val defaults = complete(JSONArray(
+            prefs.getString(KEY_BUILTIN_DEFAULTS, "[]") ?: "[]"
+        ))
+        prefs.edit()
+            .putString(KEY_PROFILES, profiles.toString())
+            .putString(KEY_BUILTIN_DEFAULTS, defaults.toString())
+            .putBoolean(KEY_DISPLAY_FIELDS_MIGRATED, true)
+            .apply()
+        Log.i(TAG, "Migrated missing font, manga, background and text-style profile fields")
     }
 
     /**
@@ -301,8 +360,9 @@ object DisplayProfilesStore {
             require(originalName.isNotEmpty() && originalName.length <= 40) {
                 "Некорректное название профиля №" + (index + 1)
             }
-            val values = item.optJSONObject("values")
+            val rawValues = item.optJSONObject("values")
                 ?: throw IllegalArgumentException("У профиля «" + originalName + "» нет настроек")
+            val values = completePortableValues(context, rawValues)
             validatePortableValues(values, originalName)
 
             var name = originalName
@@ -318,6 +378,32 @@ object DisplayProfilesStore {
         }
         writeProfiles(context, existing)
         return importedIds
+    }
+
+    private fun completePortableValues(context: Context, source: JSONObject): JSONObject {
+        val values = JSONObject(source.toString())
+        val host = JSONObject(values.optJSONObject("host")?.toString() ?: "{}")
+        for ((key, defaultValue) in hawkDefaults) {
+            if (!host.has(key)) {
+                val currentValue = if (key == "text_style_custom_bg_color" ||
+                    key == "text_style_custom_text_color"
+                ) readStyleColor(key, defaultValue) else readHawk(key, defaultValue)
+                host.put(key, currentValue)
+            }
+        }
+        values.put("host", host)
+        val ocr = JSONObject(values.optJSONObject("ocr")?.toString() ?: "{}")
+        val prefs = context.getSharedPreferences(OCR_PREFS, Context.MODE_PRIVATE)
+        if (!ocr.has(KEY_FREE_ALPHA_ENABLED)) {
+            ocr.put(KEY_FREE_ALPHA_ENABLED, prefs.getBoolean(KEY_FREE_ALPHA_ENABLED, false))
+        }
+        if (!ocr.has(KEY_FREE_ALPHA_PERCENT)) {
+            val bg = (host.opt("HAWK_BG_TRANS") as? Number)?.toInt() ?: 236
+            ocr.put(KEY_FREE_ALPHA_PERCENT, prefs.getInt(
+                KEY_FREE_ALPHA_PERCENT, ((bg * 100 + 127) / 255).coerceIn(0, 100)))
+        }
+        values.put("ocr", ocr)
+        return values
     }
 
     private fun validatePortableValues(values: JSONObject, profileName: String) {
@@ -536,6 +622,28 @@ object DisplayProfilesStore {
         return JSONObject().put("host", host).put("ocr", ocr)
     }
 
+    private fun writeStyleColor(key: String, value: Int) {
+        try {
+            val owner = Class.forName(
+                "com.tap_to_translate.snap_translate.domain.main.widgets.custom.WidgetChooseStyleNew"
+            )
+            val methodName = if (key == "text_style_custom_bg_color") {
+                "setCustomBackgroundColor"
+            } else {
+                "setCustomTextColor"
+            }
+            owner.getMethod(methodName, Int::class.javaPrimitiveType).invoke(null, value)
+        } catch (t: Throwable) {
+            // Older app builds may persist the same value through the common
+            // preference layer; keep that fallback instead of aborting profile apply.
+            try {
+                writeHawk(key, value)
+            } catch (fallback: Throwable) {
+                Log.w(TAG, "Could not restore custom style colour " + key, fallback)
+            }
+        }
+    }
+
     private fun readStyleColor(key: String, defaultValue: Any): Any {
         return try {
             val owner = Class.forName(
@@ -581,6 +689,13 @@ object DisplayProfilesStore {
             }
             writeHawk(key, value)
         }
+        // The style picker keeps its custom colours behind dedicated accessors.
+        // Restore those through the same API used by the picker, not only through
+        // the generic preference helper.
+        writeStyleColor("text_style_custom_bg_color",
+            (host.opt("text_style_custom_bg_color") as? Number)?.toInt() ?: 0xFFFFF3B0.toInt())
+        writeStyleColor("text_style_custom_text_color",
+            (host.opt("text_style_custom_text_color") as? Number)?.toInt() ?: 0xFF3D3200.toInt())
 
         // The host manga dialog performs a one-time migration of these flags.
         // Mark it complete after the profile's explicit values have been written,
