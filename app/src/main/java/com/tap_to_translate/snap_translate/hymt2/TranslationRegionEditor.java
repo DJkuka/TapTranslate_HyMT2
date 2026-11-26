@@ -19,6 +19,7 @@ import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -68,12 +69,26 @@ public final class TranslationRegionEditor {
             View addRegion = root.findViewById(ADD_REGION_BUTTON_ID);
             View textPlacement = root.findViewById(TEXT_PLACEMENT_BUTTON_ID);
             View opacity = root.findViewById(FREE_TEXT_OPACITY_BUTTON_ID);
+            CheckBox forceFreeText = new CheckBox(root.getContext());
+            forceFreeText.setText("Свободный текст");
+            forceFreeText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            forceFreeText.setPadding(Math.round(dp(root.getContext(), 4)), 0,
+                    Math.round(dp(root.getContext(), 4)), 0);
+            if (editText != null && editText.getParent() instanceof ViewGroup) {
+                ViewGroup toolbar = (ViewGroup) editText.getParent();
+                int insertAt = toolbar.indexOfChild(editText) + 1;
+                ViewGroup.LayoutParams checkboxParams = new ViewGroup.LayoutParams(editText.getLayoutParams());
+                checkboxParams.width = ViewGroup.LayoutParams.WRAP_CONTENT;
+                toolbar.addView(forceFreeText, Math.max(0, insertAt), checkboxParams);
+            } else {
+                forceFreeText.setVisibility(View.GONE);
+            }
             if (!(content instanceof ViewGroup) || edit == null || delete == null) {
                 Log.w(TAG, "Cannot bind region editor: toolbar or content view is missing");
                 return;
             }
 
-            State state = new State(root, (ViewGroup) content, edit, delete, editText, opacity);
+            State state = new State(root, (ViewGroup) content, edit, delete, editText, opacity, forceFreeText);
             SelectionOverlay overlay = new SelectionOverlay(root.getContext(), state);
             state.overlay = overlay;
             overlay.setVisibility(View.GONE);
@@ -104,6 +119,19 @@ public final class TranslationRegionEditor {
             }
             state.addRegionButton = addRegion;
             state.textPlacementButton = textPlacement;
+            state.forceFreeTextCheckBox = forceFreeText;
+            forceFreeText.setVisibility(View.GONE);
+            forceFreeText.setOnCheckedChangeListener((button, checked) -> {
+                if (state.syncingFreeTextCheckBox || state.selected.size() != 1) return;
+                Object selectedItem = state.selected.keySet().iterator().next();
+                setForceFreeTextOverlay(selectedItem, checked);
+                refreshOverlayAssociation(selectedItem);
+                refreshRenderers(state);
+                updateSelectionButtons(state);
+                toast(state.root, checked
+                        ? "Панель закреплена как свободный текст"
+                        : "Для панели снова включено автоматическое определение");
+            });
             if (opacity != null) {
                 opacity.setOnClickListener(v -> editFreeTextOpacity(state));
                 opacity.setVisibility(View.GONE);
@@ -167,6 +195,7 @@ public final class TranslationRegionEditor {
         if (state.addRegionButton != null) state.addRegionButton.setVisibility(View.GONE);
         if (state.textPlacementButton != null) state.textPlacementButton.setVisibility(View.GONE);
         if (state.opacityButton != null) state.opacityButton.setVisibility(View.GONE);
+        if (state.forceFreeTextCheckBox != null) state.forceFreeTextCheckBox.setVisibility(View.GONE);
         state.editButton.setAlpha(0.55f);
         state.overlay.invalidate();
         Log.i(TAG, "Edit mode exited");
@@ -348,6 +377,16 @@ public final class TranslationRegionEditor {
             state.opacityButton.setAlpha(oneRegion ? 1.0f : 0.35f);
             state.opacityButton.setContentDescription("Непрозрачность заливки панели");
         }
+        if (state.forceFreeTextCheckBox != null) {
+            state.forceFreeTextCheckBox.setVisibility(oneRegion ? View.VISIBLE : View.GONE);
+            state.forceFreeTextCheckBox.setEnabled(oneRegion);
+            state.syncingFreeTextCheckBox = true;
+            state.forceFreeTextCheckBox.setChecked(oneRegion
+                    && isForcedFreeTextOverlay(state.selected.keySet().iterator().next()));
+            state.syncingFreeTextCheckBox = false;
+            state.forceFreeTextCheckBox.setContentDescription(
+                    "Закрепить выбранную панель как свободный текст; отключение возвращает автоматическое определение");
+        }
     }
 
     private static boolean isFreeTextOverlay(Object item) {
@@ -375,6 +414,25 @@ public final class TranslationRegionEditor {
                     .getMethod("hasBubbleMask", Object.class).invoke(null, item));
         } catch (Throwable error) {
             return false;
+        }
+    }
+
+    private static boolean isForcedFreeTextOverlay(Object item) {
+        try {
+            return Boolean.TRUE.equals(Class.forName(BRIDGE)
+                    .getMethod("isForcedFreeTextOverlay", Object.class).invoke(null, item));
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not read forced free-text state", error);
+            return false;
+        }
+    }
+
+    private static void setForceFreeTextOverlay(Object item, boolean enabled) {
+        try {
+            Class.forName(BRIDGE).getMethod("setForceFreeTextOverlay", Object.class, Boolean.TYPE)
+                    .invoke(null, item, enabled);
+        } catch (Throwable error) {
+            Log.w(TAG, "Could not update forced free-text state", error);
         }
     }
 
@@ -850,6 +908,8 @@ public final class TranslationRegionEditor {
         View addRegionButton;
         View textPlacementButton;
         final View opacityButton;
+        CheckBox forceFreeTextCheckBox;
+        boolean syncingFreeTextCheckBox;
         final IdentityHashMap<Object, Boolean> selected = new IdentityHashMap<>();
         final IdentityHashMap<Object, String> originalTexts = new IdentityHashMap<>();
         final IdentityHashMap<Object, int[]> minimumResizeSizes = new IdentityHashMap<>();
@@ -860,13 +920,14 @@ public final class TranslationRegionEditor {
         Object transformTarget;
 
         State(View root, ViewGroup content, View editButton, View deleteButton,
-                View editTextButton, View opacityButton) {
+                View editTextButton, View opacityButton, CheckBox forceFreeTextCheckBox) {
             this.root = root;
             this.content = content;
             this.editButton = editButton;
             this.deleteButton = deleteButton;
             this.editTextButton = editTextButton;
             this.opacityButton = opacityButton;
+            this.forceFreeTextCheckBox = forceFreeTextCheckBox;
         }
     }
 
