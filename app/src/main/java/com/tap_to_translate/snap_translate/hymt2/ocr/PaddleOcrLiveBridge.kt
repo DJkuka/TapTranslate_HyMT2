@@ -107,35 +107,37 @@ object PaddleOcrLiveBridge {
             check(OpenCVUtils.init(context)) { "OpenCV initialization failed" }
             Log.i(TAG, "OpenCV initialization confirmed; abi=${Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"}")
             val ocrPrefs = context.getSharedPreferences("taptranslate_ocr_settings", Context.MODE_PRIVATE)
-            // Keep the established 4000 px default and the full user-configurable
-            // range. Do not silently clamp saved values: the user explicitly relies
-            // on the larger detector input for detailed comic lettering.
             val maxSideLimit = ocrPrefs.getInt("ocr_det_max_side_limit", 4000).coerceIn(256, 8192)
             val detThresh = ocrPrefs.getFloat("ocr_det_thresh", 0.20f).coerceIn(0.00f, 1.00f)
             val detBoxThresh = ocrPrefs.getFloat("ocr_det_box_thresh", 0.45f).coerceIn(0.00f, 1.00f)
             val detUnclipRatio = ocrPrefs.getFloat("ocr_det_unclip_ratio", 1.40f).coerceIn(0.10f, 10.00f)
             val recScoreThresh = ocrPrefs.getFloat("ocr_rec_score_thresh", 0.00f).coerceIn(0.00f, 1.00f)
-            val detImgMode = (ocrPrefs.getString("ocr_det_img_mode", "BGR") ?: "BGR")
-                .uppercase(Locale.ROOT).let { if (it == "RGB" || it == "BGR") it else "BGR" }
             val detLimitSideLen = ocrPrefs.getInt("ocr_det_limit_side_len", 64).coerceIn(32, 4096)
             val detLimitType = (ocrPrefs.getString("ocr_det_limit_type", "min") ?: "min")
-                .lowercase(Locale.ROOT).let { if (it in setOf("min", "max", "resize_long")) it else "min" }
+                .takeIf { it in setOf("min", "max", "resize_long") } ?: "min"
+            val detImgMode = (ocrPrefs.getString("ocr_det_img_mode", "BGR") ?: "BGR")
+                .takeIf { it == "BGR" || it == "RGB" } ?: "BGR"
             val detMaxCandidates = ocrPrefs.getInt("ocr_det_max_candidates", 3000).coerceIn(100, 20000)
             val detUseDilation = ocrPrefs.getBoolean("ocr_det_use_dilation", false)
             val detScoreMode = (ocrPrefs.getString("ocr_det_score_mode", "fast") ?: "fast")
-                .lowercase(Locale.ROOT).let { if (it == "fast" || it == "slow") it else "fast" }
-            val recBatchSize = (ocrPrefs.getString("ocr_rec_batch_size", "1") ?: "1").toIntOrNull()?.coerceIn(1, 8) ?: 1
-            val ortThreads = (ocrPrefs.getString("ocr_ort_threads", "2") ?: "2").toIntOrNull()?.coerceIn(1, 8) ?: 2
-            val recPreprocessScale = (ocrPrefs.getString("ocr_rec_preprocess_scale", "1.0") ?: "1.0")
-                .toFloatOrNull()?.let { if (it == 1.0f || it == 1.5f || it == 2.0f) it else 1.0f } ?: 1.0f
-            Log.i(TAG, "PP-OCRv6 config detImgMode=" + detImgMode +
-                " detLimitSideLen=" + detLimitSideLen + " detLimitType=" + detLimitType +
-                " detThresh=" + detThresh + " detBoxThresh=" + detBoxThresh +
-                " detUnclipRatio=" + detUnclipRatio + " detMaxCandidates=" + detMaxCandidates +
-                " detUseDilation=" + detUseDilation + " detScoreMode=" + detScoreMode +
-                " recScoreThresh=" + recScoreThresh + " recBatchSize=" + recBatchSize +
-                " recPreprocessScale=" + recPreprocessScale + " ortThreads=" + ortThreads +
-                " detMaxSideLimit=" + maxSideLimit)
+                .takeIf { it == "fast" || it == "slow" } ?: "fast"
+            val recBatchSize = (ocrPrefs.getString("ocr_rec_batch_size", "1") ?: "1")
+                .toIntOrNull()?.coerceIn(1, 8) ?: 1
+            val ortThreads = (ocrPrefs.getString("ocr_ort_threads", "2") ?: "2")
+                .toIntOrNull()?.coerceIn(1, 8) ?: 2
+            Log.i(TAG, "PP-OCRv6 config detThresh=" + detThresh +
+                " detBoxThresh=" + detBoxThresh +
+                " detUnclipRatio=" + detUnclipRatio +
+                " recScoreThresh=" + recScoreThresh +
+                " detLimitSideLen=" + detLimitSideLen +
+                " detLimitType=" + detLimitType +
+                " detImgMode=" + detImgMode +
+                " detMaxSideLimit=" + maxSideLimit +
+                " detMaxCandidates=" + detMaxCandidates +
+                " detUseDilation=" + detUseDilation +
+                " detScoreMode=" + detScoreMode +
+                " recBatchSizeRequested=" + recBatchSize +
+                " ortThreads=" + ortThreads)
             val created = runBlocking {
                 PaddleOCR.create(
                     context = context,
@@ -151,9 +153,7 @@ object PaddleOcrLiveBridge {
                         detUseDilation = detUseDilation,
                         detScoreMode = detScoreMode,
                         recScoreThresh = recScoreThresh,
-                        recBatchSize = recBatchSize,
-                        recPreprocessScale = recPreprocessScale,
-                        detBoxType = "quad"
+                        recBatchSize = recBatchSize
                     ),
                     engineConfig = EngineConfig(numThreads = ortThreads),
                     detModelAssetPath = "models/det/inference.onnx",
@@ -162,7 +162,10 @@ object PaddleOcrLiveBridge {
                 )
             }
             engine = created
-            Log.i(TAG, "PP-OCRv6 initialized; detMaxSideLimit=" + maxSideLimit + " cold_load_ms=" + created.coldLoadTimeMs)
+            Log.i(TAG, "PP-OCRv6 initialized; detMaxSideLimit=" + maxSideLimit +
+                " recBatchSizeRequested=" + recBatchSize +
+                " ortThreads=" + ortThreads +
+                " cold_load_ms=" + created.coldLoadTimeMs)
             return created
         }
     }
