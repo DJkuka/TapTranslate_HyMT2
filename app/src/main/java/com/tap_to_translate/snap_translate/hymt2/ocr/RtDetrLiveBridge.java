@@ -52,13 +52,6 @@ public final class RtDetrLiveBridge {
     // Manual editor override. Weak keys avoid retaining deleted overlay models.
     private static final Map<Object, Boolean> FORCED_FREE_TEXT =
             Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
-    // A manually forced free-text panel can be dragged beyond the original
-    // speech-balloon bounds. Keep its original balloon association instead of
-    // re-classifying it from the moving rectangle on every draw.
-    private static final Map<Object, String> FORCED_FREE_TEXT_BUBBLE_IDS =
-            Collections.synchronizedMap(new WeakHashMap<Object, String>());
-    private static final Map<Object, DetectedRegion> FORCED_FREE_TEXT_BUBBLE_MASKS =
-            Collections.synchronizedMap(new WeakHashMap<Object, DetectedRegion>());
     private static final Map<Object, DetectedRegion> OVERLAY_BUBBLE_MASKS =
             Collections.synchronizedMap(new WeakHashMap<Object, DetectedRegion>());
     // Reuse one cropped mask while the overlay remains attached to the same OCR frame/bubble.
@@ -706,31 +699,6 @@ public final class RtDetrLiveBridge {
                     continue;
                 }
 
-                boolean forcedFreeText = Boolean.TRUE.equals(FORCED_FREE_TEXT.get(group));
-                if (forcedFreeText) {
-                    DetectedRegion forcedMask = FORCED_FREE_TEXT_BUBBLE_MASKS.get(group);
-                    if (forcedMask == null) {
-                        String forcedBubbleId = FORCED_FREE_TEXT_BUBBLE_IDS.get(group);
-                        if (forcedBubbleId != null) {
-                            forcedMask = createOverlayBubbleMaskForContainerId(forcedBubbleId, regions);
-                            if (forcedMask != null) {
-                                FORCED_FREE_TEXT_BUBBLE_MASKS.put(group, forcedMask);
-                            }
-                        }
-                    }
-                    if (forcedMask != null && forcedMask.maskDataView() != null) {
-                        OVERLAY_IS_BUBBLE.put(group, Boolean.FALSE);
-                        OVERLAY_IS_FREE_TEXT.put(group, Boolean.TRUE);
-                        OVERLAY_BUBBLE_MASKS.put(group, forcedMask);
-                        OVERLAY_FREE_EXCLUSION_MASKS.remove(group);
-                        OVERLAY_MASK_SOURCES.remove(group);
-                        OVERLAY_MASK_KEYS.remove(group);
-                        bubbleMasksReady++;
-                        underlays.add(group);
-                        continue;
-                    }
-                }
-
                 double bubbleTextScore = bestTextRegionScore(
                         bounds, regions, OcrRegionKind.SPEECH_BUBBLE);
                 double freeTextScore = bestTextRegionScore(
@@ -738,6 +706,7 @@ public final class RtDetrLiveBridge {
 
                 // Direct class-1 evidence wins ties. If neither text class matched,
                 // use the class-0 bubble container as a conservative fallback.
+                boolean forcedFreeText = Boolean.TRUE.equals(FORCED_FREE_TEXT.get(group));
                 boolean isBubbleText = !forcedFreeText && (bubbleTextScore > 0d
                         ? bubbleTextScore >= freeTextScore
                         : freeTextScore == 0d && findBubbleContainer(bounds, regions) >= 0);
@@ -759,8 +728,10 @@ public final class RtDetrLiveBridge {
                 } else {
                     OVERLAY_FREE_EXCLUSION_MASKS.remove(group);
                 }
-                boolean keepBubbleFillMask = isBubbleText || (forcedFreeText
-                        && findBubbleContainer(bounds, regions) >= 0);
+                // Forced free-text panels use the host's rectangular fill and
+                // FreeTextLayout. A speech-balloon mask clipped this rectangle
+                // at the balloon edge, leaving the old lettering visible there.
+                boolean keepBubbleFillMask = isBubbleText;
                 if (keepBubbleFillMask) {
                     String maskKey = findOverlayBubbleMaskId(bounds, regions);
                     DetectedRegion localMask = createOverlayBubbleMask(bounds, regions);
@@ -768,11 +739,6 @@ public final class RtDetrLiveBridge {
                     OVERLAY_MASK_KEYS.put(group, maskKey == null ? "" : maskKey);
                     if (localMask != null) {
                         OVERLAY_BUBBLE_MASKS.put(group, localMask);
-                        if (forcedFreeText) {
-                            String bubbleId = findBubbleContainerId(bounds, regions);
-                            if (bubbleId != null) FORCED_FREE_TEXT_BUBBLE_IDS.put(group, bubbleId);
-                            FORCED_FREE_TEXT_BUBBLE_MASKS.put(group, localMask);
-                        }
                         bubbleMasksReady++;
                     } else {
                         OVERLAY_BUBBLE_MASKS.remove(group);
@@ -810,32 +776,6 @@ public final class RtDetrLiveBridge {
         if (overlay == null) return;
         Rect bounds = readOverlayBounds(overlay);
         if (bounds == null) return;
-        boolean forcedFreeText = Boolean.TRUE.equals(FORCED_FREE_TEXT.get(overlay));
-        if (forcedFreeText) {
-            DetectedRegion pinnedMask = FORCED_FREE_TEXT_BUBBLE_MASKS.get(overlay);
-            if (pinnedMask == null) {
-                String pinnedBubbleId = FORCED_FREE_TEXT_BUBBLE_IDS.get(overlay);
-                if (pinnedBubbleId != null) {
-                    synchronized (LOCK) {
-                        for (List<DetectedRegion> candidate : ACTIVE_REGIONS.values()) {
-                            if (candidate == null || candidate.isEmpty()) continue;
-                            pinnedMask = createOverlayBubbleMaskForContainerId(pinnedBubbleId, candidate);
-                            if (pinnedMask != null) break;
-                        }
-                    }
-                    if (pinnedMask != null) {
-                        FORCED_FREE_TEXT_BUBBLE_MASKS.put(overlay, pinnedMask);
-                    }
-                }
-            }
-            if (pinnedMask != null && pinnedMask.maskDataView() != null) {
-                OVERLAY_IS_BUBBLE.put(overlay, Boolean.FALSE);
-                OVERLAY_IS_FREE_TEXT.put(overlay, Boolean.TRUE);
-                OVERLAY_BUBBLE_MASKS.put(overlay, pinnedMask);
-                OVERLAY_FREE_EXCLUSION_MASKS.remove(overlay);
-                return;
-            }
-        }
         List<DetectedRegion> best = null;
         double bestScore = 0d;
         synchronized (LOCK) {
@@ -848,6 +788,7 @@ public final class RtDetrLiveBridge {
                 if (score > bestScore) { bestScore = score; best = candidate; }
             }
         }
+        boolean forcedFreeText = Boolean.TRUE.equals(FORCED_FREE_TEXT.get(overlay));
         if (best == null) {
             OVERLAY_BUBBLE_MASKS.remove(overlay);
             OVERLAY_MASK_SOURCES.remove(overlay);
@@ -869,8 +810,9 @@ public final class RtDetrLiveBridge {
         // A forced free-text panel still needs the bubble's clipped fill mask.
         // Otherwise the exclusion mask deliberately leaves the original bubble
         // lettering untouched, which makes the panel opacity appear broken.
-        boolean keepBubbleFillMask = detectedBubble
-                || (forcedFreeText && findBubbleContainer(bounds, best) >= 0);
+        // A manually forced free-text overlay uses a rectangular fill and
+        // normal free-text layout, not the clipped speech-balloon renderer.
+        boolean keepBubbleFillMask = !forcedFreeText && detectedBubble;
         if (keepBubbleFillMask) {
             OVERLAY_FREE_EXCLUSION_MASKS.remove(overlay);
             String maskKey = findOverlayBubbleMaskId(bounds, best);
@@ -884,14 +826,8 @@ public final class RtDetrLiveBridge {
             DetectedRegion local = createOverlayBubbleMask(bounds, best);
             OVERLAY_MASK_SOURCES.put(overlay, best);
             OVERLAY_MASK_KEYS.put(overlay, maskKey == null ? "" : maskKey);
-            if (local != null) {
-                OVERLAY_BUBBLE_MASKS.put(overlay, local);
-                if (forcedFreeText) {
-                    String bubbleId = findBubbleContainerId(bounds, best);
-                    if (bubbleId != null) FORCED_FREE_TEXT_BUBBLE_IDS.put(overlay, bubbleId);
-                    FORCED_FREE_TEXT_BUBBLE_MASKS.put(overlay, local);
-                }
-            } else OVERLAY_BUBBLE_MASKS.remove(overlay);
+            if (local != null) OVERLAY_BUBBLE_MASKS.put(overlay, local);
+            else OVERLAY_BUBBLE_MASKS.remove(overlay);
         } else {
             OVERLAY_BUBBLE_MASKS.remove(overlay);
             OVERLAY_MASK_SOURCES.remove(overlay);
@@ -914,36 +850,8 @@ public final class RtDetrLiveBridge {
     /** Enables the manual free-text override; false restores detector auto-classification. */
     public static void setForceFreeTextOverlay(Object overlay, boolean enabled) {
         if (overlay == null) return;
-        if (enabled) {
-            // Capture the automatic bubble association before changing its
-            // classification. The association must survive later panel movement
-            // across the balloon outline.
-            if (!Boolean.TRUE.equals(FORCED_FREE_TEXT.get(overlay))) {
-                refreshOverlayAssociation(overlay);
-                DetectedRegion currentMask = OVERLAY_BUBBLE_MASKS.get(overlay);
-                if (currentMask != null && currentMask.maskDataView() != null) {
-                    FORCED_FREE_TEXT_BUBBLE_MASKS.put(overlay, currentMask);
-                }
-                Rect bounds = readOverlayBounds(overlay);
-                if (bounds != null) {
-                    synchronized (LOCK) {
-                        for (List<DetectedRegion> candidate : ACTIVE_REGIONS.values()) {
-                            if (candidate == null || candidate.isEmpty()) continue;
-                            String bubbleId = findBubbleContainerId(bounds, candidate);
-                            if (bubbleId != null) {
-                                FORCED_FREE_TEXT_BUBBLE_IDS.put(overlay, bubbleId);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            FORCED_FREE_TEXT.put(overlay, Boolean.TRUE);
-        } else {
-            FORCED_FREE_TEXT.remove(overlay);
-            FORCED_FREE_TEXT_BUBBLE_IDS.remove(overlay);
-            FORCED_FREE_TEXT_BUBBLE_MASKS.remove(overlay);
-        }
+        if (enabled) FORCED_FREE_TEXT.put(overlay, Boolean.TRUE);
+        else FORCED_FREE_TEXT.remove(overlay);
         refreshOverlayAssociation(overlay);
     }
 
@@ -1112,36 +1020,6 @@ public final class RtDetrLiveBridge {
 
     private static DetectedRegion createOverlayBubbleMask(
             Rect overlayBounds, List<DetectedRegion> regions) {
-        int containerIndex = findBubbleContainer(overlayBounds, regions);
-        if (containerIndex < 0) {
-            Log.d(TAG, "BubblePop mask unavailable: overlay did not match a BUBBLE_CONTAINER; bounds="
-                    + (overlayBounds == null ? "null" : overlayBounds.flattenToString()));
-            return null;
-        }
-        int current = 0;
-        for (DetectedRegion region : regions) {
-            if (region.getKind() != OcrRegionKind.BUBBLE_CONTAINER) continue;
-            if (current++ == containerIndex) return createOverlayBubbleMaskForContainer(region, regions);
-        }
-        Log.d(TAG, "BubblePop mask unavailable: matched container index was not resolved");
-        return null;
-    }
-
-    private static DetectedRegion createOverlayBubbleMaskForContainerId(
-            String containerId, List<DetectedRegion> regions) {
-        if (containerId == null || regions == null) return null;
-        for (DetectedRegion region : regions) {
-            if (region != null && region.getKind() == OcrRegionKind.BUBBLE_CONTAINER
-                    && containerId.equals(region.getId())) {
-                return createOverlayBubbleMaskForContainer(region, regions);
-            }
-        }
-        return null;
-    }
-
-    private static DetectedRegion createOverlayBubbleMaskForContainer(
-            DetectedRegion container, List<DetectedRegion> regions) {
-        if (container == null || regions == null) return null;
         DetectedRegion pageMask = null;
         for (DetectedRegion region : regions) {
             if (region.getKind() == OcrRegionKind.PAGE_BUBBLE_MASK
@@ -1154,6 +1032,23 @@ public final class RtDetrLiveBridge {
             Log.d(TAG, "BubblePop mask unavailable: page mask missing");
             return null;
         }
+        int containerIndex = findBubbleContainer(overlayBounds, regions);
+        if (containerIndex < 0) {
+            Log.d(TAG, "BubblePop mask unavailable: overlay did not match a BUBBLE_CONTAINER; bounds="
+                    + overlayBounds.flattenToString());
+            return null;
+        }
+        DetectedRegion container = null;
+        int current = 0;
+        for (DetectedRegion region : regions) {
+            if (region.getKind() != OcrRegionKind.BUBBLE_CONTAINER) continue;
+            if (current++ == containerIndex) { container = region; break; }
+        }
+        if (container == null) {
+            Log.d(TAG, "BubblePop mask unavailable: matched container index was not resolved");
+            return null;
+        }
+
         Rect pageBounds = pageMask.getBounds();
         Rect crop = container.getBounds();
         if (!crop.intersect(pageBounds)) {
@@ -1205,6 +1100,7 @@ public final class RtDetrLiveBridge {
             android.text.TextPaint paint, float minTextSize, float maxTextSize, int padding) {
         if (canvas == null || overlay == null || text == null || paint == null) return false;
         try {
+            if (Boolean.TRUE.equals(FORCED_FREE_TEXT.get(overlay))) return false;
             refreshOverlayAssociation(overlay);
             DetectedRegion region = OVERLAY_BUBBLE_MASKS.get(overlay);
             if (region == null || region.maskDataView() == null) return false;
@@ -1259,6 +1155,9 @@ public final class RtDetrLiveBridge {
             // The host paints the fill before drawing text. Refresh the shape here,
             // not later in drawBubbleText(), so the fill gets the same contour.
             refreshOverlayAssociation(overlay);
+            // The forced-free-text checkbox changes the panel contract: allow
+            // the host to draw a full rectangular background at its alpha.
+            if (Boolean.TRUE.equals(FORCED_FREE_TEXT.get(overlay))) return false;
             Rect bounds = readOverlayBounds(overlay);
             if (bounds == null) return false;
             Boolean isBubble = OVERLAY_IS_BUBBLE.get(overlay);
