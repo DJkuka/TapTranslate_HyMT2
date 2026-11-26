@@ -199,6 +199,15 @@ jobs:
               mkdir -p "$trace/smali/$(basename "$root")/com/tap_to_translate/snap_translate/domain/main"
               cp -R "$widget_package" "$trace/smali/$(basename "$root")/com/tap_to_translate/snap_translate/domain/main/"
             fi
+            # Export the floating-icon touch/menu implementation and all layouts.
+            if [ -d "$root/sh" ]; then
+              mkdir -p "$trace/smali/$(basename "$root")"
+              cp -R "$root/sh" "$trace/smali/$(basename "$root")/"
+            fi
+            if [ -d "$decoded"/res/layout ]; then
+              mkdir -p "$trace/res"
+              cp -R "$decoded"/res/layout "$trace/res/"
+            fi
             for package in vh xh loh Loh rh nf gi gf mh qh; do
               if [ -d "$root/$package" ]; then
                 mkdir -p "$trace/smali/$(basename "$root")"
