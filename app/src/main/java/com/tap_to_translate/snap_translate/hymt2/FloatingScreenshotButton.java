@@ -91,13 +91,6 @@ public final class FloatingScreenshotButton {
 
             // Keep the original click listener attached, but let pointer events
             // bubble to FloatingIconWidget so dragging also works from the icon.
-            View mainIcon = widget.findViewById(MAIN_ICON_ID);
-            if (mainIcon != null) {
-                mainIcon.setClickable(false);
-                mainIcon.setLongClickable(false);
-                mainIcon.setFocusable(false);
-                mainIcon.setOnLongClickListener(null);
-            }
         } catch (Throwable error) {
             Log.e(TAG, "Could not attach floating screenshot button", error);
         }
@@ -119,27 +112,15 @@ public final class FloatingScreenshotButton {
             if (action == MotionEvent.ACTION_DOWN) {
                 View camera = findButton(widget);
                 View mainIcon = widget.findViewById(MAIN_ICON_ID);
-                View target = isInside(camera, event) ? camera
-                        : (isInside(mainIcon, event) ? mainIcon : null);
+                View target = isInside(camera, event) ? camera : null;
                 if (target == null) {
                     TOUCHES.remove(touchListener);
                     return false;
                 }
-                int kind = target == camera ? TouchState.CAMERA : TouchState.MAIN_ICON;
+                int kind = TouchState.CAMERA;
                 state = new TouchState(widget, target, kind,
                         event.getRawX(), event.getRawY());
                 TOUCHES.put(touchListener, state);
-                if (kind == TouchState.MAIN_ICON) {
-                    state.longPress = () -> {
-                        TouchState current = TOUCHES.get(touchListener);
-                        if (current == state && !state.moved) {
-                            state.longPressed = true;
-                            showToggleMenu(widget);
-                        }
-                    };
-                    MAIN.postDelayed(state.longPress,
-                            ViewConfiguration.getLongPressTimeout());
-                }
                 return true;
             }
 
@@ -170,9 +151,6 @@ public final class FloatingScreenshotButton {
                                     "Не удалось получить службу перевода",
                                     Toast.LENGTH_SHORT).show();
                         }
-                    } else {
-                        // Preserve the host's original icon click behavior.
-                        state.target.performClick();
                     }
                 }
                 return true;
