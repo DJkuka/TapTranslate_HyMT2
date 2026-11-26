@@ -28,4 +28,6 @@ data class PaddleOCRConfig(
     val detBoxType: String = "quad",
     val recScoreThresh: Float = 0.0f,
     val recBatchSize: Int = 1,
+    /** Recognition crop scale expected by the current bridge; 1.0 preserves APK219 preprocessing. */
+    val recPreprocessScale: Float = 1.0f,
 )
