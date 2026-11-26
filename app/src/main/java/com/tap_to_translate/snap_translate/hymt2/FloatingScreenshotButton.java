@@ -77,6 +77,16 @@ public final class FloatingScreenshotButton {
 
             button.setOnClickListener(view ->
                     TranslationScreenshotManager.captureFromService(service));
+            // The primary ImageView already owns the short-tap action. Attach
+            // the toggle to that same view so a long press cannot be lost to
+            // child-touch dispatch on the floating widget's root layout.
+            View mainIcon = widget.findViewById(MAIN_ICON_ID);
+            if (mainIcon != null) {
+                mainIcon.setOnLongClickListener(view -> {
+                    showToggleMenu(widget);
+                    return true;
+                });
+            }
             button.setVisibility(isEnabled(context) ? View.VISIBLE : View.GONE);
         } catch (Throwable error) {
             Log.e(TAG, "Could not attach floating screenshot button", error);
