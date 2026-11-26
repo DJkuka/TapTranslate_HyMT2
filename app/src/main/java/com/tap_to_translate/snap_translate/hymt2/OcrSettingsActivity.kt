@@ -168,8 +168,8 @@ class OcrSettingsActivity : Activity() {
             listOf("min · короткая сторона не меньше", "max · длинная сторона не больше", "resize_long · задать длинную сторону"),
             "min")
         addIntControl(root, prefs, KEY_MAX_SIDE, "detMaxSideLimit",
-            "Жёсткий верхний предел длинной стороны после масштабирования. 4000 px — прежнее значение по умолчанию; при необходимости можно увеличить до 8192 px.",
-            256, 8192, 32, 4000, " px")
+            "Жёсткий верхний предел длинной стороны. На этом устройстве PP-OCR ограничивает его 1600 px из-за лимита памяти процесса; большие значения не увеличат вход детектора.",
+            256, 1600, 32, 1600, " px")
         addSpinnerControl(root, prefs, KEY_DET_IMG_MODE, "detImgMode",
             "Порядок цветовых каналов на входе детектора. BGR — текущий и рекомендуемый режим для встроенной модели. RGB оставлен для экспериментов с совместимыми моделями.",
             listOf("BGR", "RGB"),
@@ -319,7 +319,7 @@ class OcrSettingsActivity : Activity() {
         val save = Button(this).apply {
             text = "Сохранить настройки OCR и скриншотов"
             setOnClickListener {
-                val selectedLimit = currentInt(KEY_MAX_SIDE, 4000)
+                val selectedLimit = currentInt(KEY_MAX_SIDE, 1600)
                 val editor = prefs.edit()
                     .putBoolean(KEY_ALPHA_ENABLED, alphaSwitch.isChecked)
                     .putInt(KEY_ALPHA_PERCENT, alphaSeek.progress.coerceIn(0, 100))
