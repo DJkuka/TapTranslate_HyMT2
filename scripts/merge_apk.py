@@ -2135,15 +2135,8 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
                     "com/paddle/ocr/PaddleOCRConfig",
                 )
                 class_name = rel[:-6] if rel.endswith(".smali") else rel
-                # The PP-OCR engine is a complete helper-owned package. Copy every
-                # class under com/paddle/ocr into the final APK, not only PaddleOCRConfig;
-                # otherwise APK219's stale DetectionEngine/ORTSessionManager remain active
-                # and diagnostics or engine fixes compiled by Gradle never reach the device.
-                is_paddle_engine_class = class_name.startswith("com/paddle/ocr/")
-                if not is_paddle_engine_class and not any(
-                    class_name == item or class_name.startswith(item + "$")
-                    for item in allowed_classes
-                ):
+                if not any(class_name == item or class_name.startswith(item + "$")
+                           for item in allowed_classes):
                     continue
                 destination = target_root / rel
                 if rel in existing:
