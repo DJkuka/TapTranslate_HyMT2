@@ -2159,6 +2159,8 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
                     "com/tap_to_translate/snap_translate/hymt2/OcrSettingsActivity",
                     "com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor",
                     "com/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager",
+                    "com/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton",
+                    "com/tap_to_translate/snap_translate/hymt2/PanelFontStore",
                     "com/tap_to_translate/snap_translate/hymt2/FloatingIconZOrderFix",
                     "com/tap_to_translate/snap_translate/hymt2/DisplayProfilesActivity",
                     "com/tap_to_translate/snap_translate/hymt2/DisplayProfilesStore",
