@@ -126,11 +126,11 @@ public final class TranslationRegionEditor {
             if (state.syncingFreeTextCheckBox || state.selected.size() != 1) return;
             Object selectedItem = state.selected.keySet().iterator().next();
             setForceFreeTextOverlay(selectedItem, checked);
+            // The renderer owns a cached list and may keep its current drawing
+            // mode until its own view is invalidated. Refresh both host renderers
+            // so the checkbox takes effect immediately in normal and alternate modes.
+            refreshRenderers(state);
             updateSelectionButtons(state);
-            // Do not call refreshRenderers()/setList(): that rebuilds renderer state
-            // on a simple checkbox toggle and causes visible pauses while editing.
-            state.root.invalidate();
-            state.content.invalidate();
             state.overlay.invalidate();
             toast(state.root, checked
                     ? "Панель закреплена как свободный текст"
