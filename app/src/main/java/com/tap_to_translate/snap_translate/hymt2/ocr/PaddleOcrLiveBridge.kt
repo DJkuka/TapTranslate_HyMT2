@@ -107,10 +107,7 @@ object PaddleOcrLiveBridge {
             check(OpenCVUtils.init(context)) { "OpenCV initialization failed" }
             Log.i(TAG, "OpenCV initialization confirmed; abi=${Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"}")
             val ocrPrefs = context.getSharedPreferences("taptranslate_ocr_settings", Context.MODE_PRIVATE)
-            val requestedMaxSideLimit = ocrPrefs.getInt("ocr_det_max_side_limit", 1600).coerceIn(256, 8192)
-            // This app runs beside the translation model with a 256 MB Android heap.
-            // The OCR detector is hard-capped to avoid 100+ MB direct tensor allocations.
-            val maxSideLimit = requestedMaxSideLimit.coerceAtMost(1600)
+            val maxSideLimit = ocrPrefs.getInt("ocr_det_max_side_limit", 4000).coerceIn(256, 8192)
             val detThresh = ocrPrefs.getFloat("ocr_det_thresh", 0.20f).coerceIn(0.00f, 1.00f)
             val detBoxThresh = ocrPrefs.getFloat("ocr_det_box_thresh", 0.45f).coerceIn(0.00f, 1.00f)
             val detUnclipRatio = ocrPrefs.getFloat("ocr_det_unclip_ratio", 1.40f).coerceIn(0.10f, 10.00f)
@@ -135,8 +132,7 @@ object PaddleOcrLiveBridge {
                 " detLimitSideLen=" + detLimitSideLen +
                 " detLimitType=" + detLimitType +
                 " detImgMode=" + detImgMode +
-                " detMaxSideRequested=" + requestedMaxSideLimit +
-                " detMaxSideEffective=" + maxSideLimit +
+                " detMaxSideLimit=" + maxSideLimit +
                 " detMaxCandidates=" + detMaxCandidates +
                 " detUseDilation=" + detUseDilation +
                 " detScoreMode=" + detScoreMode +
