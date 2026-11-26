@@ -193,6 +193,12 @@ jobs:
           test -d "$decoded"
           for root in "$decoded"/smali*; do
             [ -d "$root" ] || continue
+            # Include the original floating-icon implementation and popup/menu classes.
+            widget_package="$root/com/tap_to_translate/snap_translate/domain/main/widgets"
+            if [ -d "$widget_package" ]; then
+              mkdir -p "$trace/smali/$(basename "$root")/com/tap_to_translate/snap_translate/domain/main"
+              cp -R "$widget_package" "$trace/smali/$(basename "$root")/com/tap_to_translate/snap_translate/domain/main/"
+            fi
             for package in vh xh loh Loh rh nf gi gf mh qh; do
               if [ -d "$root/$package" ]; then
                 mkdir -p "$trace/smali/$(basename "$root")"
