@@ -21,7 +21,7 @@ import kotlin.math.sqrt
 
 object ImageUtils {
     // Keep the detector tensor within a practical memory budget on 256 MB Android heaps.
-    private const val MAX_DET_INPUT_PIXELS = 1_350_000L
+    private const val MAX_DET_INPUT_PIXELS = 700_000L
 
     fun resizeToMultipleOf32(
         src: Mat,
