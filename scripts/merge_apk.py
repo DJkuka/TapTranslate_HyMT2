@@ -1383,7 +1383,46 @@ def patch_floating_screenshot_button(base: Path) -> None:
         text = text[:start] + body + text[end:]
         widget.write_text(text, encoding="utf-8")
 
-    print("Installed floating screenshot control and main-icon long-press visibility menu")
+    print("Installed floating screenshot control with host touch routing")
+
+    # Route the same touch stream through the original listener after native
+    # drag/snap processing; do not install competing child click listeners.
+    touch = base / "smali_classes3/sh/b.smali"
+    t = touch.read_text(encoding="utf-8")
+    method = ".method public final onTouch(Landroid/view/View;Landroid/view/MotionEvent;)Z"
+    ts = t.find(method)
+    te = t.find(".end method", ts)
+    if ts < 0 or te < 0:
+        raise RuntimeError("Could not locate floating icon touch listener")
+    body = t[ts:te]
+    hook = """    invoke-static {p0, p2}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->handleTouch(Ljava/lang/Object;Landroid/view/MotionEvent;)Z
+    move-result v0
+
+    if-eqz v0, :hymt2_original_touch_result
+
+    const/4 p1, 0x1
+
+    return p1
+
+    :hymt2_original_touch_result
+"""
+    if "FloatingScreenshotButton;->handleTouch" not in body:
+        end_anchor = "    invoke-virtual {p1, p2}, Landroid/view/GestureDetector;->onTouchEvent(Landroid/view/MotionEvent;)Z\\n\\n    move-result p1\\n"
+        if body.count(end_anchor) != 1:
+            raise RuntimeError("Could not find end of original floating touch processing")
+        body = body.replace(end_anchor, hook + end_anchor, 1)
+        t = t[:ts] + body + t[te:]
+        touch.write_text(t, encoding="utf-8")
+
+    # Child views must not consume the floating window touch stream.
+    widget = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget.smali"
+    wt = widget.read_text(encoding="utf-8")
+    wt = wt.replace(
+        "    invoke-static {p0, p1}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->attach(Landroid/view/View;Ljava/lang/Object;)V",
+        "    invoke-static {p0, p1}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->attach(Landroid/view/View;Ljava/lang/Object;)V"
+    )
+    widget.write_text(wt, encoding="utf-8")
+
 
 
 def patch_per_panel_fonts(base: Path) -> None:
