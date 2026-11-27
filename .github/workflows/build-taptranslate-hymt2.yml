@@ -531,7 +531,7 @@ jobs:
           grep -q 'Math.round(dp(context, 32))' app/src/main/java/com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor.java
           echo "Verified reduced opacity dialog height; width unchanged."
 
-      - name: Verify floating screenshot and per-panel font wiring in final APK
+      - name: Verify restored floating icon and per-panel font wiring in final APK
         shell: bash
         run: |
           set -euo pipefail
@@ -548,37 +548,25 @@ jobs:
             fi
             printf '%s' "${matches[0]}"
           }
-          floating="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton.smali)"
           fonts="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/PanelFontStore.smali)"
           editor="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor.smali)"
-          manager="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager.smali)"
-          settings="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/OcrSettingsActivity.smali)"
           widget="$(find_one_smali com/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget.smali)"
+          touch="$(find_one_smali sh/b.smali)"
           renderer_f="$(find_one_smali rh/f.smali)"
           renderer_g="$(find_one_smali rh/g.smali)"
-          grep -q 'FloatingScreenshotButton;->attach' "$widget"
-          if grep -q 'setOnLongClickListener' "$floating"; then
-            echo "Floating screenshot helper must preserve the host long-press gesture" >&2
+          if grep -R -q 'FloatingScreenshotButton\\|TranslationScreenshotManager\\|container_widget_iv_screenshot\\|floating_screenshot_button_enabled\\|screenshot_jpeg_quality' "$decoded"; then
+            echo "Screenshot/camera additions unexpectedly remain in the final APK" >&2
             exit 1
           fi
-          grep -q 'updateEnabled' "$floating"
-          grep -q 'captureFromService' "$floating"
-          grep -q 'floating_screenshot_button_enabled' "$floating"
-          grep -q 'floating_screenshot_button_enabled' "$settings"
-          grep -q 'screenshot_jpeg_quality' "$settings"
-          grep -q 'screenshot_jpeg_quality' "$manager"
+          if grep -q 'FloatingScreenshotButton' "$widget" || grep -q 'FloatingScreenshotButton' "$touch"; then
+            echo "Floating icon still has camera-specific touch hooks" >&2
+            exit 1
+          fi
           grep -q 'PanelFontStore;->setFont' "$editor"
           grep -q 'choosePanelFont' "$editor"
           grep -q 'PanelFontStore;->apply' "$renderer_f"
           grep -q 'PanelFontStore;->apply' "$renderer_g"
-          grep -q 'captureFromService' "$manager"
-          capture_callback="$(find_one_smali xh/a.smali)"
-          service="$(find_one_smali com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali)"
-          grep -q 'consumePendingFrame' "$capture_callback"
-          grep -q 'onProjectionPermissionReady' "$service"
-          grep -q 'consumePendingFrame' "$manager"
-          grep -q 'onProjectionPermissionReady' "$manager"
-          echo "Verified source-only MediaProjection capture before OCR, permission resume, floating screenshot button and per-panel font hooks."
+          echo "Verified original floating icon touch path, no camera/screenshot additions, and per-panel font hooks."
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
