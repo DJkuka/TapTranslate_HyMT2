@@ -1292,7 +1292,7 @@ public final class RtDetrLiveBridge {
         if (overlay == null) return;
         BUBBLE_TEXT_TRANSFORMS.put(overlay, new float[] {
                 dx, dy,
-                Math.max(0.25f, Math.min(2.50f, scale)),
+                Math.max(0.25f, Math.min(5.00f, scale)),
                 Math.max(0.85f, Math.min(3.0f, lineSpacing)),
                 Math.max(-180f, Math.min(180f, rotation))});
     }
