@@ -72,6 +72,7 @@ public final class TranslationRegionEditor {
             View textPlacement = root.findViewById(TEXT_PLACEMENT_BUTTON_ID);
             View opacity = root.findViewById(FREE_TEXT_OPACITY_BUTTON_ID);
             Button fontButton = new Button(root.getContext());
+            fontButton.setVisibility(View.GONE);
             fontButton.setText("Шрифт");
             fontButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
             fontButton.setAllCaps(false);
@@ -80,6 +81,7 @@ public final class TranslationRegionEditor {
             fontButton.setPadding(Math.round(dp(root.getContext(), 5)), 0,
                     Math.round(dp(root.getContext(), 5)), 0);
             CheckBox forceFreeText = new CheckBox(root.getContext());
+            forceFreeText.setVisibility(View.GONE);
             forceFreeText.setText("");
             forceFreeText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
             forceFreeText.setPadding(Math.round(dp(root.getContext(), 4)), 0,
