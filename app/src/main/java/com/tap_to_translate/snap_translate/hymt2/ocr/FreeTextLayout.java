@@ -29,7 +29,7 @@ public final class FreeTextLayout {
         float min = Math.max(4f, Math.min(minTextSize, maxTextSize));
         float max = Math.max(minTextSize, maxTextSize);
         float spacing = Math.max(0.85f, Math.min(3.0f, lineSpacing));
-        float scale = Math.max(0.25f, Math.min(5.00f, fontScale));
+        float scale = Math.max(0.25f, Float.isNaN(fontScale) || Float.isInfinite(fontScale) ? 1.0f : fontScale);
         try {
             float base = 0f;
             StaticLayout baseLayout = null;
