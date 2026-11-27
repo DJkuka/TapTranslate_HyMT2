@@ -127,6 +127,12 @@ public final class TranslationRegionEditor {
 
             edit.setOnClickListener(v -> toggleEditing(state));
             delete.setOnClickListener(v -> deleteSelected(state));
+            // Route the native screenshot action through the BubblePop-aware compositor.
+            View screenshot = root.findViewById(0x7f0a04f3);
+            if (screenshot != null) {
+                screenshot.setOnClickListener(v ->
+                        TranslationScreenshotManager.captureFromOverlay(root));
+            }
             if (editText != null) {
                 editText.setOnClickListener(v -> editSelectedText(state));
                 editText.setVisibility(View.GONE);
