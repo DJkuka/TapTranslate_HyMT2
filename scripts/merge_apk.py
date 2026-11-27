@@ -1364,6 +1364,62 @@ def patch_floating_icon_z_order(base: Path) -> None:
         service.write_text(source, encoding="utf-8")
     print("Added floating icon re-stack after translation window creation")
 
+def patch_standalone_screenshot_capture(base: Path) -> None:
+    """Consume a fresh MediaProjection frame for camera-only captures before OCR."""
+    capture_callback = base / "smali_classes3/xh/a.smali"
+    callback_text = capture_callback.read_text(encoding="utf-8")
+    callback_method = ".method public final run()V"
+    method_start = callback_text.find(callback_method)
+    method_end = callback_text.find(".end method", method_start)
+    if method_start < 0 or method_end < 0:
+        raise RuntimeError("Could not locate xh/a capture callback")
+    method = callback_text[method_start:method_end]
+    anchor = "    iget-boolean v2, v1, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->s:Z"
+    hook = """    invoke-static {v1, v0}, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager;->consumePendingFrame(Ljava/lang/Object;Landroid/graphics/Bitmap;)Z
+
+    move-result v2
+
+    if-eqz v2, :hymt2_continue_capture_to_ocr
+
+    return-void
+
+    :hymt2_continue_capture_to_ocr
+
+"""
+    if "TranslationScreenshotManager;->consumePendingFrame" not in method:
+        if method.count(anchor) != 1:
+            raise RuntimeError("Could not locate xh/a pre-OCR service-enabled guard")
+        method = method.replace(anchor, hook + anchor, 1)
+        callback_text = callback_text[:method_start] + method + callback_text[method_end:]
+        capture_callback.write_text(callback_text, encoding="utf-8")
+
+    # If Android had to show the MediaProjection permission activity, the original
+    # host ignores its callback while translation is disabled. Resume only our
+    # pending source-only capture; do not change the normal OCR/translation path.
+    service = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali"
+    service_text = service.read_text(encoding="utf-8")
+    permission_method = ".method public onPermission(Loh/i;)V"
+    ps = service_text.find(permission_method)
+    pe = service_text.find(".end method", ps)
+    if ps < 0 or pe < 0:
+        raise RuntimeError("Could not locate ScreenTranslateService.onPermission")
+    body = service_text[ps:pe]
+    permission_anchor = "    iget-boolean p1, p0, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->s:Z"
+    permission_hook = "    invoke-static {p0}, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager;->onProjectionPermissionReady(Ljava/lang/Object;)V\n\n"
+    if "TranslationScreenshotManager;->onProjectionPermissionReady" not in body:
+        if body.count(permission_anchor) != 1:
+            raise RuntimeError("Could not locate projection-permission callback guard")
+        body = body.replace(permission_anchor, permission_hook + permission_anchor, 1)
+        service_text = service_text[:ps] + body + service_text[pe:]
+        service.write_text(service_text, encoding="utf-8")
+
+    if "TranslationScreenshotManager;->consumePendingFrame" not in capture_callback.read_text(encoding="utf-8"):
+        raise RuntimeError("Standalone screenshot frame-consumption hook was not installed")
+    if "TranslationScreenshotManager;->onProjectionPermissionReady" not in service.read_text(encoding="utf-8"):
+        raise RuntimeError("Standalone screenshot permission-resume hook was not installed")
+    print("Installed standalone MediaProjection screenshot capture before OCR dispatch")
+
+
 def patch_floating_screenshot_button(base: Path) -> None:
     """Add a passive camera button while preserving the host floating touch listener."""
     widget = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget.smali"
@@ -2442,6 +2498,7 @@ def main() -> int:
     patch_ocr_resources(base)
     patch_screenshot_button(base)
     patch_floating_screenshot_button(base)
+    patch_standalone_screenshot_capture(base)
     patch_per_panel_fonts(base)
     patch_translation_region_editor(base)
     patch_floating_icon_z_order(base)
