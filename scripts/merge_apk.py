@@ -1786,8 +1786,8 @@ def patch_font_display_names(base: Path) -> None:
     append_display = (
         "    invoke-static {v6}, "
         "Lcom/tap_to_translate/snap_translate/hymt2/FontDisplayNames;"
-        "->displayName(Ljava/lang/String;)Ljava/lang/String;\\n"
-        "    move-result-object v12\\n"
+        "->displayName(Ljava/lang/String;)Ljava/lang/String;\n"
+        "    move-result-object v12\n"
         "    invoke-virtual {v11, v12}, "
         "Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;"
     )
