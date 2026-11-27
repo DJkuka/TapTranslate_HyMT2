@@ -1842,20 +1842,6 @@ def patch_font_display_names(base: Path) -> None:
             raise RuntimeError("Could not locate the font-picker row label")
         adapter_text = adapter_text.replace(row_anchor, row_display, 1)
 
-    manga_anchor = """    move-result-object v3
-
-    invoke-virtual {v2, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;"""
-    manga_display = """    move-result-object v3
-
-    invoke-static {v3}, Lcom/tap_to_translate/snap_translate/hymt2/FontDisplayNames;->displayName(Ljava/lang/String;)Ljava/lang/String;
-
-    move-result-object v3
-
-    invoke-virtual {v2, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;"""
-    if manga_anchor in adapter_text:
-        adapter_text = adapter_text.replace(manga_anchor, manga_display, 1)
-    else:
-        raise RuntimeError("Could not locate the manga-font label in the font-picker adapter")
     adapter.write_text(adapter_text, encoding="utf-8")
     print("Font picker keeps all " + str(len(pairs)) + " original asset IDs; friendly labels are display-only")
 
