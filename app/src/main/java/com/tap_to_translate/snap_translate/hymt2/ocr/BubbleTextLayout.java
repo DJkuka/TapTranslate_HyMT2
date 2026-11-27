@@ -72,8 +72,8 @@ public final class BubbleTextLayout {
         // mode keep the complete text block inside that contour, as before.
         // BubblePop may opt into continuing the translated block beyond the contour.
         Rect area = new Rect(maskBounds);
-        int verticalInset = 2;
-        int horizontalPadding = Math.max(2, padding);
+        int verticalInset = 1;
+        int horizontalPadding = Math.max(1, padding / 4);
         area.inset(verticalInset, verticalInset);
         area.offset(Math.round(offsetX), Math.round(offsetY));
         if (!allowOverflow) {
@@ -384,7 +384,7 @@ public final class BubbleTextLayout {
         }
     }
 
-    private static Bitmap getMaskBitmap(DetectedRegion region) {
+    static Bitmap getMaskBitmap(DetectedRegion region) {
         synchronized (MASK_BITMAPS) {
             Bitmap cached = MASK_BITMAPS.get(region);
             if (cached != null && !cached.isRecycled()) return cached;
