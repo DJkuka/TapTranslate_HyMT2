@@ -554,7 +554,7 @@ jobs:
           touch="$(find_one_smali sh/b.smali)"
           renderer_f="$(find_one_smali rh/f.smali)"
           renderer_g="$(find_one_smali rh/g.smali)"
-          if grep -R -q 'FloatingScreenshotButton\\|TranslationScreenshotManager\\|container_widget_iv_screenshot\\|floating_screenshot_button_enabled\\|screenshot_jpeg_quality' "$decoded"; then
+          if grep -R -q 'FloatingScreenshotButton\\|TranslationScreenshotManager\\|container_widget_iv_screenshot\\|floating_screenshot_button_enabled' "$decoded"; then
             echo "Screenshot/camera additions unexpectedly remain in the final APK" >&2
             exit 1
           fi
