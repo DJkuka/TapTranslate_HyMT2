@@ -61,6 +61,9 @@ public final class RtDetrLiveBridge {
             Collections.synchronizedMap(new WeakHashMap<Object, String>());
     private static final Map<Object, DetectedRegion> OVERLAY_FREE_EXCLUSION_MASKS =
             Collections.synchronizedMap(new WeakHashMap<Object, DetectedRegion>());
+    // Full-page BubblePop mask used to hide free-text glyphs behind speech balloons.
+    private static final Map<Object, DetectedRegion> FORCED_FREE_TEXT_OCCLUSION_MASKS =
+            Collections.synchronizedMap(new WeakHashMap<Object, DetectedRegion>());
     private static final Map<Object, float[]> BUBBLE_TEXT_TRANSFORMS =
             Collections.synchronizedMap(new WeakHashMap<Object, float[]>());
     private static final Map<Object, Integer> FREE_TEXT_ALPHA_OVERRIDES =
@@ -695,6 +698,7 @@ public final class RtDetrLiveBridge {
                     OVERLAY_MASK_SOURCES.remove(group);
                     OVERLAY_MASK_KEYS.remove(group);
                     OVERLAY_FREE_EXCLUSION_MASKS.remove(group);
+                    FORCED_FREE_TEXT_OCCLUSION_MASKS.remove(group);
                     underlays.add(group);
                     continue;
                 }
@@ -707,6 +711,13 @@ public final class RtDetrLiveBridge {
                 // Direct class-1 evidence wins ties. If neither text class matched,
                 // use the class-0 bubble container as a conservative fallback.
                 boolean forcedFreeText = Boolean.TRUE.equals(FORCED_FREE_TEXT.get(group));
+                if (forcedFreeText) {
+                    DetectedRegion pageMask = findPageBubbleMask(regions);
+                    if (pageMask != null) FORCED_FREE_TEXT_OCCLUSION_MASKS.put(group, pageMask);
+                    else FORCED_FREE_TEXT_OCCLUSION_MASKS.remove(group);
+                } else {
+                    FORCED_FREE_TEXT_OCCLUSION_MASKS.remove(group);
+                }
                 boolean isBubbleText = !forcedFreeText && (bubbleTextScore > 0d
                         ? bubbleTextScore >= freeTextScore
                         : freeTextScore == 0d && findBubbleContainer(bounds, regions) >= 0);
@@ -872,12 +883,44 @@ public final class RtDetrLiveBridge {
         if (enabled) {
             FORCED_FREE_TEXT.put(overlay, Boolean.TRUE);
             enforceForcedFreeText(overlay);
-            Log.i(TAG, "Panel forced to independent free-text rendering; BubblePop association disabled");
+            DetectedRegion pageMask = findPageBubbleMaskForOverlay(overlay);
+            if (pageMask != null) FORCED_FREE_TEXT_OCCLUSION_MASKS.put(overlay, pageMask);
+            else FORCED_FREE_TEXT_OCCLUSION_MASKS.remove(overlay);
+            Log.i(TAG, "Panel forced to independent free-text rendering with BubblePop contour occlusion");
         } else {
             FORCED_FREE_TEXT.remove(overlay);
+            FORCED_FREE_TEXT_OCCLUSION_MASKS.remove(overlay);
             refreshOverlayAssociation(overlay);
             Log.i(TAG, "Panel returned to automatic OCR/BubblePop classification");
         }
+    }
+
+    private static DetectedRegion findPageBubbleMask(List<DetectedRegion> regions) {
+        if (regions == null) return null;
+        for (DetectedRegion region : regions) {
+            if (region != null && region.getKind() == OcrRegionKind.PAGE_BUBBLE_MASK
+                    && region.maskDataView() != null) return region;
+        }
+        return null;
+    }
+
+    private static DetectedRegion findPageBubbleMaskForOverlay(Object overlay) {
+        Rect bounds = readOverlayBounds(overlay);
+        List<DetectedRegion> selected = null;
+        double bestScore = -1d;
+        synchronized (LOCK) {
+            for (List<DetectedRegion> candidate : ACTIVE_REGIONS.values()) {
+                if (findPageBubbleMask(candidate) == null) continue;
+                double score = bounds == null ? 0d : Math.max(
+                        bestTextRegionScore(bounds, candidate, OcrRegionKind.SPEECH_BUBBLE),
+                        bestTextRegionScore(bounds, candidate, OcrRegionKind.FREE_TEXT));
+                if (selected == null || score > bestScore) {
+                    selected = candidate;
+                    bestScore = score;
+                }
+            }
+        }
+        return findPageBubbleMask(selected);
     }
 
     /**
@@ -1171,6 +1214,12 @@ public final class RtDetrLiveBridge {
             if (bounds == null) return false;
             float[] transform = BUBBLE_TEXT_TRANSFORMS.get(overlay);
             if (transform == null) transform = new float[] {0f, 0f, 1f, 1f, 0f};
+            if (forcedFreeText) {
+                return drawFreeTextWithBubbleOcclusion(canvas, overlay, bounds, text, paint,
+                        minTextSize, maxTextSize, padding, transform[0], transform[1],
+                        transform[2], transform.length > 3 ? transform[3] : 1.0f,
+                        transform.length > 4 ? transform[4] : 0f);
+            }
             return FreeTextLayout.draw(canvas, bounds, text, paint, minTextSize, maxTextSize,
                     padding, transform[0], transform[1], transform[2],
                     transform.length > 3 ? transform[3] : 1.0f,
@@ -1178,6 +1227,53 @@ public final class RtDetrLiveBridge {
         } catch (Throwable error) {
             Log.w(TAG, "Free-text layout failed; rectangular host layout retained", error);
             return false;
+        }
+    }
+
+    /**
+     * Draws a manually forced free-text panel into an isolated layer, then removes
+     * only the pixels covered by the exact BubblePop page mask. The panel remains
+     * transparent and the original balloon contour, not its bounding rectangle,
+     * defines the occlusion.
+     */
+    private static boolean drawFreeTextWithBubbleOcclusion(
+            android.graphics.Canvas canvas, Object overlay, Rect bounds, CharSequence text,
+            android.text.TextPaint paint, float minTextSize, float maxTextSize, int padding,
+            float offsetX, float offsetY, float fontScale, float lineSpacing,
+            float rotationDegrees) {
+        DetectedRegion region = FORCED_FREE_TEXT_OCCLUSION_MASKS.get(overlay);
+        if (region == null || region.maskDataView() == null) {
+            return FreeTextLayout.draw(canvas, bounds, text, paint, minTextSize, maxTextSize,
+                    padding, offsetX, offsetY, fontScale, lineSpacing, rotationDegrees);
+        }
+        Bitmap maskBitmap = BubbleTextLayout.getMaskBitmap(region);
+        if (maskBitmap == null || maskBitmap.isRecycled()) {
+            return FreeTextLayout.draw(canvas, bounds, text, paint, minTextSize, maxTextSize,
+                    padding, offsetX, offsetY, fontScale, lineSpacing, rotationDegrees);
+        }
+        Rect maskBounds = region.getBounds();
+        Rect overlap = new Rect(bounds);
+        if (!overlap.intersect(maskBounds)) {
+            return FreeTextLayout.draw(canvas, bounds, text, paint, minTextSize, maxTextSize,
+                    padding, offsetX, offsetY, fontScale, lineSpacing, rotationDegrees);
+        }
+
+        android.graphics.Paint erasePaint =
+                new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
+        erasePaint.setXfermode(new android.graphics.PorterDuffXfermode(
+                android.graphics.PorterDuff.Mode.DST_OUT));
+        int save = canvas.saveLayer(new android.graphics.RectF(bounds), null);
+        try {
+            boolean drawn = FreeTextLayout.draw(canvas, bounds, text, paint,
+                    minTextSize, maxTextSize, padding, offsetX, offsetY,
+                    fontScale, lineSpacing, rotationDegrees);
+            if (drawn) {
+                canvas.drawBitmap(maskBitmap, maskBounds.left, maskBounds.top, erasePaint);
+            }
+            return drawn;
+        } finally {
+            canvas.restoreToCount(save);
+            erasePaint.setXfermode(null);
         }
     }
 
