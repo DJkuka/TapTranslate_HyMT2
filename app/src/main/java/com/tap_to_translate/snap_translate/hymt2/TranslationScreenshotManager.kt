@@ -15,6 +15,8 @@ import android.widget.Toast
 import com.tap_to_translate.snap_translate.hymt2.ocr.RtDetrLiveBridge
 import java.io.IOException
 import java.util.Locale
+import java.util.Collections
+import java.util.WeakHashMap
 import java.util.concurrent.Executors
 
 /**
@@ -36,6 +38,19 @@ object TranslationScreenshotManager {
     private val ioExecutor = Executors.newSingleThreadExecutor { task ->
         Thread(task, "TapTranslateScreenshot").apply { isDaemon = true }
     }
+
+    private data class PendingCapture(
+        val context: Context,
+        val treeUri: Uri,
+        val format: String,
+        val jpegQuality: Int,
+        var timeout: Runnable? = null
+    )
+
+    // Weak service keys: a pending capture must not keep a stopped service alive.
+    private val pendingCaptures = Collections.synchronizedMap(
+        WeakHashMap<Any, PendingCapture>()
+    )
 
     /** Entry point used by the native result-overlay click listener. */
     @JvmStatic
@@ -90,9 +105,12 @@ object TranslationScreenshotManager {
 
 
     /**
-     * Entry point for the independent floating screenshot button. Unlike the
-     * result-toolbar action this does not require a result overlay to exist:
-     * without a translated layer it saves the cropped source frame only.
+     * Entry point for the independent floating screenshot button.
+     *
+     * The host keeps its latest ImageReader bitmap in xh.c.j, but that bitmap
+     * is only populated after a capture has been requested. Request a fresh
+     * MediaProjection frame here; the xh.a callback is patched to hand that
+     * frame to consumePendingFrame() before the host starts OCR.
      */
     @JvmStatic
     fun captureFromService(service: Any) {
@@ -103,39 +121,121 @@ object TranslationScreenshotManager {
         }
 
         try {
-            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val appContext = context.applicationContext
+            val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val treeValue = prefs.getString(KEY_TREE_URI, null)
             if (treeValue.isNullOrBlank()) {
                 toast(context, "Сначала выберите папку для скриншотов в настройках")
                 return
             }
 
-            val capture = readField(service, "c")
-            val source = readField(capture, "j") as? Bitmap
-            if (source == null || source.isRecycled) {
-                toast(context, "Исходный кадр ещё не готов. Повторите снимок")
-                return
+            val capture = resolveCaptureController(service)
+                ?: throw IllegalStateException("Не удалось получить контроллер захвата экрана")
+
+            synchronized(pendingCaptures) {
+                if (pendingCaptures.containsKey(service)) {
+                    toast(context, "Предыдущий снимок ещё готовится")
+                    return
+                }
             }
 
-            // k is null until the host has created its result overlay. This is
-            // a normal state: save the original frame without requiring OCR.
-            val resultOverlay = readField(service, "k") as? View
-            val candidateLayer = resultOverlay?.let { readField(it, "n") as? View }
-            val textLayer = candidateLayer?.takeIf {
-                it.visibility == View.VISIBLE && it.width > 0 && it.height > 0
+            val request = PendingCapture(
+                appContext,
+                Uri.parse(treeValue),
+                prefs.getString(KEY_FORMAT, FORMAT_PNG) ?: FORMAT_PNG,
+                prefs.getInt(KEY_JPEG_QUALITY, DEFAULT_JPEG_QUALITY).coerceIn(50, 100)
+            )
+            synchronized(pendingCaptures) {
+                pendingCaptures[service] = request
             }
 
-            val output = composeFrame(source, textLayer)
-            val format = prefs.getString(KEY_FORMAT, FORMAT_PNG) ?: FORMAT_PNG
-            val jpegQuality = prefs.getInt(KEY_JPEG_QUALITY, DEFAULT_JPEG_QUALITY).coerceIn(50, 100)
-            val treeUri = Uri.parse(treeValue)
-            ioExecutor.execute {
-                saveToTree(context.applicationContext, output, treeUri, format, jpegQuality)
+            val timeout = Runnable {
+                val stillPending = synchronized(pendingCaptures) {
+                    pendingCaptures[service] === request
+                }
+                if (stillPending) {
+                    Log.w(TAG, "Timed out waiting for the independent MediaProjection frame")
+                    toast(appContext, "Кадр экрана пока не получен. Повторите снимок")
+                }
+            }
+            request.timeout = timeout
+            mainHandler.postDelayed(timeout, 60_000L)
+
+            try {
+                requestFreshFrame(capture)
+                toast(context, "Создаю снимок экрана…")
+            } catch (t: Throwable) {
+                mainHandler.removeCallbacks(timeout)
+                synchronized(pendingCaptures) {
+                    if (pendingCaptures[service] === request) pendingCaptures.remove(service)
+                }
+                throw t
             }
         } catch (t: Throwable) {
-            Log.e(TAG, "Floating screenshot capture failed", t)
-            toast(context, "Не удалось подготовить скриншот: " + (t.message ?: "ошибка"))
+            Log.e(TAG, "Floating screenshot request failed", t)
+            toast(context, "Не удалось запросить снимок: " + (t.message ?: "ошибка"))
         }
+    }
+
+    /**
+     * Called by the host's ImageReader callback before it dispatches the frame
+     * to vh.j/OCR. Returning true consumes the frame as a source-only screenshot.
+     */
+    @JvmStatic
+    fun consumePendingFrame(service: Any?, source: Bitmap?): Boolean {
+        if (service == null || source == null || source.isRecycled) return false
+
+        val request = synchronized(pendingCaptures) {
+            pendingCaptures.remove(service)
+        } ?: return false
+        request.timeout?.let { mainHandler.removeCallbacks(it) }
+
+        try {
+            val output = composeFrame(source, null)
+            try {
+                ioExecutor.execute {
+                    saveToTree(
+                        request.context,
+                        output,
+                        request.treeUri,
+                        request.format,
+                        request.jpegQuality
+                    )
+                }
+            } catch (t: Throwable) {
+                if (!output.isRecycled) output.recycle()
+                throw t
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Could not prepare source-only screenshot", t)
+            toast(request.context, "Не удалось подготовить скриншот: " + (t.message ?: "ошибка"))
+        }
+        return true
+    }
+
+    private fun resolveCaptureController(service: Any): Any? {
+        readField(service, "c")?.let { return it }
+        return try {
+            val hostClass = Class.forName(
+                "com.tap_to_translate.snap_translate.domain.main.service.ScreenTranslateService"
+            )
+            val factory = hostClass.getDeclaredMethod("e", hostClass).apply {
+                isAccessible = true
+            }
+            factory.invoke(null, service)
+        } catch (t: Throwable) {
+            Log.e(TAG, "Could not initialize the host capture controller", t)
+            null
+        }
+    }
+
+    private fun requestFreshFrame(capture: Any) {
+        val cropRectClass = Class.forName("com.google.android.gms.internal.ads.mk0")
+        val method = capture.javaClass.getDeclaredMethod("d", cropRectClass).apply {
+            isAccessible = true
+        }
+        // null retains the host's current capture bounds; no new crop is applied.
+        method.invoke(capture, null)
     }
 
     private fun findScreenTranslateService(root: Any): Any? {
