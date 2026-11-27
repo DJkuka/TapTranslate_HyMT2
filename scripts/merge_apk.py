@@ -1365,99 +1365,80 @@ def patch_floating_icon_z_order(base: Path) -> None:
     print("Added floating icon re-stack after translation window creation")
 
 def patch_floating_screenshot_button(base: Path) -> None:
-    """Install the optional sibling screenshot control and its long-press toggle."""
+    """Add a passive camera button while preserving the host floating touch listener."""
     widget = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget.smali"
-    text = widget.read_text(encoding="utf-8")
-    method = ".method public constructor <init>(Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;Lme/c;)V"
-    start = text.find(method)
-    end = text.find(".end method", start)
-    if start < 0 or end < 0:
+    wt = widget.read_text(encoding="utf-8")
+    ctor = ".method public constructor <init>(Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;Lme/c;)V"
+    cs = wt.find(ctor)
+    ce = wt.find(".end method", cs)
+    if cs < 0 or ce < 0:
         raise RuntimeError("Could not locate FloatingIconWidget service constructor")
-    body = text[start:end]
-    hook = "    invoke-static {p0, p1}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->attach(Landroid/view/View;Ljava/lang/Object;)V"
-    if hook not in body:
+    body = wt[cs:ce]
+    attach_hook = "    invoke-static {p0, p1}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->attach(Landroid/view/View;Ljava/lang/Object;)V"
+    if attach_hook not in body:
         anchor = "    invoke-direct {p0}, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->getAndUpdateUI()V"
         if body.count(anchor) != 1:
             raise RuntimeError("Could not find floating widget initialization point")
-        body = body.replace(anchor, anchor + "\n\n" + hook, 1)
-        text = text[:start] + body + text[end:]
-        widget.write_text(text, encoding="utf-8")
+        body = body.replace(anchor, anchor + "\\n\\n" + attach_hook, 1)
 
-    # Reuse the original GestureDetector long-press callback (listener mode 1)
-    # for the visibility menu. Do not attach competing listeners to the icon.
-    gesture = base / "smali_classes2/lb/b.smali"
-    if not gesture.exists():
-        gesture = base / "smali_classes3/lb/b.smali"
-    gt = gesture.read_text(encoding="utf-8")
-    lp = ".method public onLongPress(Landroid/view/MotionEvent;)V"
-    gs = gt.find(lp)
-    ge = gt.find(".end method", gs)
-    if gs < 0 or ge < 0:
-        raise RuntimeError("Could not locate floating icon long-press callback")
-    gb = gt[gs:ge]
-    if "FloatingScreenshotButton;->showToggleMenu" not in gb:
-        old = "    iget v0, p0, Llb/b;->b:I\\n\\n    packed-switch v0, :pswitch_data_0"
-        hook = """    iget v0, p0, Llb/b;->b:I
+    # The very same listener instance must see touches that begin on the
+    # clickable main ImageView; otherwise its OnClickListener hides the root
+    # LinearLayout from Android's touch dispatcher and drag cannot start there.
+    root_listener = "    invoke-virtual {p0, p2}, Landroid/view/View;->setOnTouchListener(Landroid/view/View\\$OnTouchListener;)V"
+    icon_listener = """    invoke-virtual {p0, p2}, Landroid/view/View;->setOnTouchListener(Landroid/view/View\\$OnTouchListener;)V
 
-    const/4 v1, 0x1
+    iget-object v2, p0, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->j:Landroid/widget/ImageView;
 
-    if-ne v0, v1, :hymt2_keep_long_press
+    invoke-virtual {v2, p2}, Landroid/view/View;->setOnTouchListener(Landroid/view/View\\$OnTouchListener;)V"""
+    if "iget-object v2, p0, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->j:Landroid/widget/ImageView;" not in body:
+        if body.count(root_listener) != 1:
+            raise RuntimeError("Could not find original floating root OnTouchListener registration")
+        body = body.replace(root_listener, icon_listener, 1)
 
-    iget-object v0, p0, Llb/b;->c:Ljava/lang/Object;
+    wt = wt[:cs] + body + wt[ce:]
+    widget.write_text(wt, encoding="utf-8")
 
-    check-cast v0, Lsh/b;
-
-    iget-object v0, v0, Lsh/b;->c:Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;
-
-    invoke-static {v0}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->showToggleMenu(Landroid/view/View;)V
-
-    return-void
-
-    :hymt2_keep_long_press
-
-    packed-switch v0, :pswitch_data_0"""
-        if gb.count(old) != 1:
-            raise RuntimeError("Could not find original long-press dispatch")
-        gb = gb.replace(old, hook, 1)
-        gt = gt[:gs] + gb + gt[ge:]
-        gesture.write_text(gt, encoding="utf-8")
-    print("Installed passive floating screenshot control")
-
-    # Record icon touch before original listener handles it; never consume it.
+    # Keep the original sh/b algorithm intact: record camera touch before it
+    # runs and suppress GestureDetector only after native movement/snap handling.
     touch = base / "smali_classes3/sh/b.smali"
-    t = touch.read_text(encoding="utf-8")
+    tt = touch.read_text(encoding="utf-8")
     method = ".method public final onTouch(Landroid/view/View;Landroid/view/MotionEvent;)Z"
-    ts = t.find(method)
-    te = t.find(".end method", ts)
+    ts = tt.find(method)
+    te = tt.find(".end method", ts)
     if ts < 0 or te < 0:
-        raise RuntimeError("Could not locate floating icon touch listener")
-    body = t[ts:te]
-    pre_hook = "    invoke-static {p0, p2}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->onHostTouch(Ljava/lang/Object;Landroid/view/MotionEvent;)V"
-    if pre_hook not in body:
-        marker = "    invoke-virtual {p2}, Landroid/view/MotionEvent;->getAction()I\\n\\n    move-result p1\\n"
-        if body.count(marker) != 1:
-            raise RuntimeError("Could not find start of original floating touch method")
-        body = body.replace(marker, marker + "\\n" + pre_hook + "\\n", 1)
+        raise RuntimeError("Could not locate original sh/b.onTouch")
+    tb = tt[ts:te]
+    before = "    invoke-static {p0, p2}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->onHostTouch(Ljava/lang/Object;Landroid/view/MotionEvent;)V"
+    if before not in tb:
+        local_decl = "    .locals 11\\n"
+        if tb.count(local_decl) != 1:
+            raise RuntimeError("Could not identify sh/b.onTouch local register declaration")
+        tb = tb.replace(local_decl, local_decl + "\\n" + before + "\\n", 1)
 
-    # Native sh/b completes movement and edge snapping before camera taps are consumed.
-    detector = "    iget-object p1, p0, Lsh/b;->b:Landroid/view/GestureDetector;\\n\\n    invoke-virtual {p1, p2}, Landroid/view/GestureDetector;->onTouchEvent(Landroid/view/MotionEvent;)Z\\n\\n    move-result p1\\n\\n    return p1"
-    if detector not in body:
-        raise RuntimeError("Could not locate final GestureDetector dispatch")
-    replacement = """    invoke-static {p0, p2}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->consumeCameraGesture(Ljava/lang/Object;Landroid/view/MotionEvent;)Z
+    detector_anchor = "    iget-object p1, p0, Lsh/b;->b:Landroid/view/GestureDetector;"
+    if "FloatingScreenshotButton;->consumeCameraGesture" not in tb:
+        pos = tb.rfind(detector_anchor)
+        if pos < 0:
+            raise RuntimeError("Could not locate final GestureDetector call in sh/b.onTouch")
+        suppress = """    invoke-static {p0, p2}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->consumeCameraGesture(Ljava/lang/Object;Landroid/view/MotionEvent;)Z
 
     move-result v0
 
-    if-eqz v0, :hymt2_keep_gesture_detector
+    if-eqz v0, :hymt2_keep_native_gesture
 
-    const/4 p1, 0x1
+    const/4 v0, 0x1
 
-    return p1
+    return v0
 
-    :hymt2_keep_gesture_detector
-""" + detector
-    body = body.replace(detector, replacement, 1)
-    t = t[:ts] + body + t[te:]
-    touch.write_text(t, encoding="utf-8")
+    :hymt2_keep_native_gesture
+
+"""
+        tb = tb[:pos] + suppress + tb[pos:]
+
+    tt = tt[:ts] + tb + tt[te:]
+    touch.write_text(tt, encoding="utf-8")
+    print("Installed passive camera touch routing and preserved native floating drag logic")
+
 
 
 def patch_per_panel_fonts(base: Path) -> None:
