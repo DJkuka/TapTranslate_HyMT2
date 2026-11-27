@@ -44,7 +44,8 @@ object TranslationScreenshotManager {
         val treeUri: Uri,
         val format: String,
         val jpegQuality: Int,
-        var timeout: Runnable? = null
+        var timeout: Runnable? = null,
+        @Volatile var timedOut: Boolean = false
     )
 
     // Weak service keys: a pending capture must not keep a stopped service alive.
@@ -133,10 +134,13 @@ object TranslationScreenshotManager {
                 ?: throw IllegalStateException("Не удалось получить контроллер захвата экрана")
 
             synchronized(pendingCaptures) {
-                if (pendingCaptures.containsKey(service)) {
+                val previous = pendingCaptures[service]
+                if (previous != null && !previous.timedOut) {
                     toast(context, "Предыдущий снимок ещё готовится")
                     return
                 }
+                previous?.timeout?.let { mainHandler.removeCallbacks(it) }
+                if (previous != null) pendingCaptures.remove(service)
             }
 
             val request = PendingCapture(
@@ -154,6 +158,7 @@ object TranslationScreenshotManager {
                     pendingCaptures[service] === request
                 }
                 if (stillPending) {
+                    request.timedOut = true
                     Log.w(TAG, "Timed out waiting for the independent MediaProjection frame")
                     toast(appContext, "Кадр экрана пока не получен. Повторите снимок")
                 }
