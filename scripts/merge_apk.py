@@ -1859,7 +1859,8 @@ def patch_manual_selection_drag_release(base: Path) -> None:
         "invoke-virtual {v9, p1}, Landroid/view/View;->getLocationOnScreen([I)V",
         "iput p1, p0, Lsh/b;->f:F",
         ":hymt2_manual_selection_translate",
-        "if-ne p1, v5, :cond_10"
+        "invoke-virtual {p2}, Landroid/view/MotionEvent;->getAction()I",
+        "if-ne v5, v0, :cond_10"
     ]
     missing = [item for item in required if item not in touch_method]
     if missing:
