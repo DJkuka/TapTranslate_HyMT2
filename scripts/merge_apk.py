@@ -1753,6 +1753,64 @@ def patch_fixed_font_size_renderers(base: Path) -> None:
         print("Added fixed-size floor with adaptive overflow fallback where missing")
 
 
+def patch_font_display_names(base: Path) -> None:
+    """Show readable names in Settings while retaining loadable font aliases."""
+    helper_source = Path(__file__).resolve().parent / (
+        "app/src/main/java/com/tap_to_translate/snap_translate/hymt2/FontDisplayNames.java"
+    )
+    source_text = helper_source.read_text(encoding="utf-8")
+    pairs = re.findall(r'NAMES\\.put\\("([^"]+)", "([^"]+)"\\);', source_text)
+    if not pairs:
+        raise RuntimeError("FontDisplayNames.java has no readable-name mappings")
+    source_names = [source for source, _ in pairs]
+    display_names = [display for _, display in pairs]
+
+    settings_list = base / "smali_classes3/sh/d.smali"
+    smali = settings_list.read_text(encoding="utf-8")
+    source_list = ", ".join(source_names)
+    display_list = ", ".join(display_names)
+    if source_list in smali:
+        smali = smali.replace(source_list, display_list, 1)
+        settings_list.write_text(smali, encoding="utf-8")
+    elif display_list not in smali:
+        raise RuntimeError("Could not locate the original Settings font list")
+
+    # Keep existing HAWK_FONT_FULL values and Typeface lookup keys intact.
+    # Only the visible label is mapped to its friendly name.
+    fragment = base / "smali_classes3/mh/l.smali"
+    fragment_text = fragment.read_text(encoding="utf-8")
+    append_anchor = (
+        "    invoke-virtual {v11, v6}, Ljava/lang/StringBuilder;->append("
+        "Ljava/lang/String;)Ljava/lang/StringBuilder;"
+    )
+    append_display = (
+        "    invoke-static {v6}, "
+        "Lcom/tap_to_translate/snap_translate/hymt2/FontDisplayNames;"
+        "->displayName(Ljava/lang/String;)Ljava/lang/String;\\n"
+        "    move-result-object v12\\n"
+        "    invoke-virtual {v11, v12}, "
+        "Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;"
+    )
+    if "FontDisplayNames;->displayName" not in fragment_text:
+        if fragment_text.count(append_anchor) != 1:
+            raise RuntimeError("Could not locate the Settings selected-font label")
+        fragment_text = fragment_text.replace(append_anchor, append_display, 1)
+        fragment.write_text(fragment_text, encoding="utf-8")
+
+    font_dir = base / "assets/fonts"
+    for source_name, display_name in pairs:
+        source = font_dir / (source_name + ".ttf")
+        alias = font_dir / (display_name + ".ttf")
+        if not source.is_file():
+            raise RuntimeError("Missing source font asset: " + source.name)
+        if alias.exists():
+            if alias.read_bytes() != source.read_bytes():
+                raise RuntimeError("Font alias collision: " + alias.name)
+        else:
+            shutil.copy2(source, alias)
+    print("Settings font names normalized; verified " + str(len(pairs)) + " aliases")
+
+
 def patch_max_font_size(base: Path) -> None:
     """Raise the translated-font size selector maximum from 40dp to 72dp."""
     target = base / "smali_classes3/mh/l.smali"
@@ -1989,6 +2047,7 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
                     "com/tap_to_translate/snap_translate/hymt2/OcrSettingsActivity",
                     "com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor",
                     "com/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager",
+                    "com/tap_to_translate/snap_translate/hymt2/FontDisplayNames",
                     "com/tap_to_translate/snap_translate/hymt2/PanelFontStore",
                     "com/tap_to_translate/snap_translate/hymt2/FloatingIconZOrderFix",
                     "com/tap_to_translate/snap_translate/hymt2/DisplayProfilesActivity",
@@ -2204,6 +2263,7 @@ def main() -> int:
     patch_request_cancellation(base)
     patch_free_text_alpha_renderers(base)
     patch_fixed_font_size_renderers(base)
+    patch_font_display_names(base)
     patch_max_font_size(base)
     patch_home_ocr_quick_selector(base)
     patch_remove_nurik_attribution(base)
