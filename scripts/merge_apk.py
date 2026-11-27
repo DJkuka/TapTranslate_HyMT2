@@ -1383,6 +1383,44 @@ def patch_floating_screenshot_button(base: Path) -> None:
         text = text[:start] + body + text[end:]
         widget.write_text(text, encoding="utf-8")
 
+    # Reuse the original GestureDetector long-press callback (listener mode 1)
+    # for the visibility menu. Do not attach competing listeners to the icon.
+    gesture = base / "smali_classes2/lb/b.smali"
+    if not gesture.exists():
+        gesture = base / "smali_classes3/lb/b.smali"
+    gt = gesture.read_text(encoding="utf-8")
+    lp = ".method public onLongPress(Landroid/view/MotionEvent;)V"
+    gs = gt.find(lp)
+    ge = gt.find(".end method", gs)
+    if gs < 0 or ge < 0:
+        raise RuntimeError("Could not locate floating icon long-press callback")
+    gb = gt[gs:ge]
+    if "FloatingScreenshotButton;->showToggleMenu" not in gb:
+        old = "    iget v0, p0, Llb/b;->b:I\\n\\n    packed-switch v0, :pswitch_data_0"
+        hook = """    iget v0, p0, Llb/b;->b:I
+
+    const/4 v1, 0x1
+
+    if-ne v0, v1, :hymt2_keep_long_press
+
+    iget-object v0, p0, Llb/b;->c:Ljava/lang/Object;
+
+    check-cast v0, Lsh/b;
+
+    iget-object v0, v0, Lsh/b;->c:Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;
+
+    invoke-static {v0}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->showToggleMenu(Landroid/view/View;)V
+
+    return-void
+
+    :hymt2_keep_long_press
+
+    packed-switch v0, :pswitch_data_0"""
+        if gb.count(old) != 1:
+            raise RuntimeError("Could not find original long-press dispatch")
+        gb = gb.replace(old, hook, 1)
+        gt = gt[:gs] + gb + gt[ge:]
+        gesture.write_text(gt, encoding="utf-8")
     print("Installed passive floating screenshot control")
 
     # Record icon touch before original listener handles it; never consume it.
