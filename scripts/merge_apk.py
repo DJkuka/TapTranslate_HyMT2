@@ -1759,7 +1759,7 @@ def patch_font_display_names(base: Path) -> None:
         "app/src/main/java/com/tap_to_translate/snap_translate/hymt2/FontDisplayNames.java"
     )
     source_text = helper_source.read_text(encoding="utf-8")
-    pairs = re.findall(r'NAMES\\.put\\("([^"]+)", "([^"]+)"\\);', source_text)
+    pairs = re.findall(r'NAMES\.put\("([^"]+)", "([^"]+)"\);', source_text)
     if not pairs:
         raise RuntimeError("FontDisplayNames.java has no readable-name mappings")
     source_names = [source for source, _ in pairs]
