@@ -12,6 +12,7 @@ import android.widget.ImageView;
 import android.widget.Toast;
 
 import java.lang.reflect.Field;
+import java.lang.ref.WeakReference;
 import java.util.Collections;
 import java.util.Map;
 import java.util.WeakHashMap;
@@ -30,6 +31,8 @@ public final class FloatingScreenshotButton {
             Collections.synchronizedMap(new WeakHashMap<Object, TouchState>());
     private static final Map<View, Boolean> WIDGETS =
             Collections.synchronizedMap(new WeakHashMap<View, Boolean>());
+    private static final Map<View, android.view.ViewTreeObserver.OnPreDrawListener> SIZE_LISTENERS =
+            Collections.synchronizedMap(new WeakHashMap<View, android.view.ViewTreeObserver.OnPreDrawListener>());
 
     private FloatingScreenshotButton() { }
 
@@ -76,6 +79,33 @@ public final class FloatingScreenshotButton {
                 camera = image;
             }
             camera.setVisibility(isEnabled(widget.getContext()) ? View.VISIBLE : View.GONE);
+
+            // Keep the camera companion in lockstep with the host floating icon.
+            // The host size control may change the icon's layout size or scaleX/scaleY.
+            View mainIcon = (View) readField(widget, "j");
+            if (mainIcon != null) {
+                syncCameraSize(mainIcon, camera);
+                synchronized (SIZE_LISTENERS) {
+                    if (!SIZE_LISTENERS.containsKey(widget)) {
+                        WeakReference<View> widgetRef = new WeakReference<>(widget);
+                        WeakReference<View> iconRef = new WeakReference<>(mainIcon);
+                        android.view.ViewTreeObserver.OnPreDrawListener sizeListener = () -> {
+                            View currentWidget = widgetRef.get();
+                            View currentIcon = iconRef.get();
+                            if (currentWidget != null && currentIcon != null) {
+                                View currentCamera = findButton(currentWidget);
+                                if (currentCamera != null) syncCameraSize(currentIcon, currentCamera);
+                            }
+                            return true;
+                        };
+                        android.view.ViewTreeObserver observer = widget.getViewTreeObserver();
+                        if (observer.isAlive()) {
+                            observer.addOnPreDrawListener(sizeListener);
+                            SIZE_LISTENERS.put(widget, sizeListener);
+                        }
+                    }
+                }
+            }
         } catch (Throwable error) {
             Log.e(TAG, "Could not attach floating screenshot button", error);
         }
@@ -157,6 +187,31 @@ public final class FloatingScreenshotButton {
                 });
             }
         }
+    }
+
+    private static void syncCameraSize(View mainIcon, View camera) {
+        if (mainIcon == null || camera == null) return;
+        int width = Math.round(mainIcon.getWidth() * Math.abs(mainIcon.getScaleX()));
+        int height = Math.round(mainIcon.getHeight() * Math.abs(mainIcon.getScaleY()));
+        if (width <= 0 || height <= 0) {
+            ViewGroup.LayoutParams iconParams = mainIcon.getLayoutParams();
+            if (iconParams != null) {
+                if (width <= 0 && iconParams.width > 0) width = iconParams.width;
+                if (height <= 0 && iconParams.height > 0) height = iconParams.height;
+            }
+        }
+        if (width <= 0) width = dp(mainIcon.getContext(), 38);
+        if (height <= 0) height = dp(mainIcon.getContext(), 38);
+
+        ViewGroup.LayoutParams params = camera.getLayoutParams();
+        if (params == null) params = new ViewGroup.LayoutParams(width, height);
+        if (params.width != width || params.height != height) {
+            params.width = width;
+            params.height = height;
+            camera.setLayoutParams(params);
+        }
+        int inset = Math.max(1, Math.round(Math.min(width, height) * 8f / 38f));
+        camera.setPadding(inset, inset, inset, inset);
     }
 
     private static boolean isInside(View view, MotionEvent event) {
