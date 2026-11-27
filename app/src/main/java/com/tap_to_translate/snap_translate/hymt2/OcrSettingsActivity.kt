@@ -38,6 +38,9 @@ class OcrSettingsActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var screenshotFormatSpinner: Spinner
     private lateinit var screenshotFolderLabel: TextView
+    private lateinit var floatingScreenshotSwitch: Switch
+    private lateinit var screenshotJpegQualitySeek: SeekBar
+    private lateinit var screenshotJpegQualityLabel: TextView
     private val floatControls = LinkedHashMap<String, FloatControlSpec>()
     private val intControls = LinkedHashMap<String, IntControlSpec>()
     private val spinnerControls = LinkedHashMap<String, SpinnerControlSpec>()
@@ -274,6 +277,15 @@ class OcrSettingsActivity : Activity() {
             13f, false, dp(8))
 
         val screenshotPrefs = getSharedPreferences(SCREENSHOT_PREFS, MODE_PRIVATE)
+        floatingScreenshotSwitch = Switch(this).apply {
+            text = "Показывать плавающую кнопку камеры"
+            isChecked = screenshotPrefs.getBoolean(KEY_FLOATING_SCREENSHOT_ENABLED, false)
+        }
+        root.addView(floatingScreenshotSwitch, matchWrap(dp(6)))
+        addText(root,
+            "Кнопка камеры отображается рядом с плавающей иконкой. Долгое нажатие на основную иконку остаётся штатным жестом выбора режима перевода.",
+            12f, false, dp(10))
+
         val screenshotFormats = listOf("PNG · без потерь", "JPEG · компактнее")
         screenshotFormatSpinner = Spinner(this).apply {
             adapter = ArrayAdapter(
@@ -287,7 +299,28 @@ class OcrSettingsActivity : Activity() {
                 if (screenshotPrefs.getString(KEY_SCREENSHOT_FORMAT, "png") == "jpeg") 1 else 0
             )
         }
-        root.addView(screenshotFormatSpinner, matchWrap(dp(10)))
+        root.addView(screenshotFormatSpinner, matchWrap(dp(6)))
+
+        val savedJpegQuality = screenshotPrefs
+            .getInt(KEY_SCREENSHOT_JPEG_QUALITY, 92).coerceIn(50, 100)
+        screenshotJpegQualityLabel = addText(
+            root, "Качество JPEG: ${savedJpegQuality}%", 13f, false, dp(2)
+        )
+        screenshotJpegQualitySeek = SeekBar(this).apply {
+            max = 50
+            progress = savedJpegQuality - 50
+        }
+        root.addView(screenshotJpegQualitySeek, matchWrap(dp(4)))
+        addText(root,
+            "Диапазон 50–100%. Выше качество — больше файл. Ползунок применяется только к JPEG; PNG сохраняется без потерь.",
+            12f, false, dp(12))
+        screenshotJpegQualitySeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                screenshotJpegQualityLabel.text = "Качество JPEG: ${progress + 50}%"
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+        })
 
         screenshotFolderLabel = addText(root, "", 13f, false, dp(6))
         updateScreenshotFolderLabel()
@@ -340,7 +373,11 @@ class OcrSettingsActivity : Activity() {
                         KEY_SCREENSHOT_FORMAT,
                         if (screenshotFormatSpinner.selectedItemPosition == 1) "jpeg" else "png"
                     )
+                    .putInt(KEY_SCREENSHOT_JPEG_QUALITY, screenshotJpegQualitySeek.progress + 50)
                     .apply()
+                FloatingScreenshotButton.updateEnabled(
+                    this@OcrSettingsActivity, floatingScreenshotSwitch.isChecked
+                )
                 val screenshotFormatLabel =
                     if (screenshotFormatSpinner.selectedItemPosition == 1) "JPEG" else "PNG"
                 status.text = "Сохранено: detThresh=" + currentFloat(KEY_DET_THRESH, 0.20f) +
@@ -719,6 +756,8 @@ class OcrSettingsActivity : Activity() {
         private const val SCREENSHOT_PREFS = "taptranslate_screenshot_settings"
         private const val KEY_SCREENSHOT_TREE_URI = "screenshot_tree_uri"
         private const val KEY_SCREENSHOT_FORMAT = "screenshot_format"
+        private const val KEY_SCREENSHOT_JPEG_QUALITY = "screenshot_jpeg_quality"
+        private const val KEY_FLOATING_SCREENSHOT_ENABLED = "floating_screenshot_button_enabled"
         private const val REQUEST_SCREENSHOT_FOLDER = 4107
     }
 }

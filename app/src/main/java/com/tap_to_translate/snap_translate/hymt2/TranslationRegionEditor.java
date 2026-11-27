@@ -369,11 +369,25 @@ public final class TranslationRegionEditor {
     private static void choosePanelFont(State state) {
         if (!state.editing || state.selected.isEmpty()) return;
         final String[] labels = {
-                "По умолчанию", "Sans Serif", "Serif", "Monospace",
+                "По умолчанию",
+                "Sans Serif", "Sans Serif Light", "Sans Serif Thin",
+                "Sans Serif Medium", "Sans Serif Black",
+                "Sans Serif Condensed", "Sans Serif Condensed Light",
+                "Sans Serif Condensed Medium", "Sans Serif Rounded",
+                "Sans Serif Small Caps",
+                "Serif", "Serif Monospace", "Monospace",
                 "Casual", "Cursive", "Fantasy"
         };
-        final String[] families = { null, "sans-serif", "serif", "monospace",
-                "casual", "cursive", "fantasy" };
+        final String[] families = {
+                null,
+                "sans-serif", "sans-serif-light", "sans-serif-thin",
+                "sans-serif-medium", "sans-serif-black",
+                "sans-serif-condensed", "sans-serif-condensed-light",
+                "sans-serif-condensed-medium", "sans-serif-rounded",
+                "sans-serif-smallcaps",
+                "serif", "serif-monospace", "monospace",
+                "casual", "cursive", "fantasy"
+        };
         ArrayAdapter<String> adapter = new ArrayAdapter<String>(
                 state.root.getContext(), android.R.layout.simple_list_item_1, labels) {
             @Override public View getView(int position, View convertView, ViewGroup parent) {

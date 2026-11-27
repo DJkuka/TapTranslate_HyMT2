@@ -526,14 +526,21 @@ jobs:
           fonts="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/PanelFontStore.smali)"
           editor="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor.smali)"
           manager="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager.smali)"
+          settings="$(find_one_smali com/tap_to_translate/snap_translate/hymt2/OcrSettingsActivity.smali)"
           widget="$(find_one_smali com/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget.smali)"
           renderer_f="$(find_one_smali rh/f.smali)"
           renderer_g="$(find_one_smali rh/g.smali)"
           grep -q 'FloatingScreenshotButton;->attach' "$widget"
-          grep -q 'setOnLongClickListener' "$floating"
-          grep -q 'showToggleMenu' "$floating"
+          if grep -q 'setOnLongClickListener' "$floating"; then
+            echo "Floating screenshot helper must preserve the host long-press gesture" >&2
+            exit 1
+          fi
+          grep -q 'updateEnabled' "$floating"
           grep -q 'captureFromService' "$floating"
           grep -q 'floating_screenshot_button_enabled' "$floating"
+          grep -q 'floating_screenshot_button_enabled' "$settings"
+          grep -q 'screenshot_jpeg_quality' "$settings"
+          grep -q 'screenshot_jpeg_quality' "$manager"
           grep -q 'PanelFontStore;->setFont' "$editor"
           grep -q 'choosePanelFont' "$editor"
           grep -q 'PanelFontStore;->apply' "$renderer_f"

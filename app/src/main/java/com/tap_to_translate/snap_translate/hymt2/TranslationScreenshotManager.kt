@@ -29,7 +29,8 @@ object TranslationScreenshotManager {
     private const val KEY_FORMAT = "screenshot_format"
     private const val FORMAT_PNG = "png"
     private const val FORMAT_JPEG = "jpeg"
-    private const val JPEG_QUALITY = 92
+    private const val KEY_JPEG_QUALITY = "screenshot_jpeg_quality"
+    private const val DEFAULT_JPEG_QUALITY = 92
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val ioExecutor = Executors.newSingleThreadExecutor { task ->
@@ -76,9 +77,10 @@ object TranslationScreenshotManager {
 
             val output = composeFrame(source, textLayer)
             val format = prefs.getString(KEY_FORMAT, FORMAT_PNG) ?: FORMAT_PNG
+            val jpegQuality = prefs.getInt(KEY_JPEG_QUALITY, DEFAULT_JPEG_QUALITY).coerceIn(50, 100)
             val treeUri = Uri.parse(treeValue)
             ioExecutor.execute {
-                saveToTree(root.context.applicationContext, output, treeUri, format)
+                saveToTree(root.context.applicationContext, output, treeUri, format, jpegQuality)
             }
         } catch (t: Throwable) {
             Log.e(TAG, "Screenshot capture failed", t)
@@ -125,9 +127,10 @@ object TranslationScreenshotManager {
 
             val output = composeFrame(source, textLayer)
             val format = prefs.getString(KEY_FORMAT, FORMAT_PNG) ?: FORMAT_PNG
+            val jpegQuality = prefs.getInt(KEY_JPEG_QUALITY, DEFAULT_JPEG_QUALITY).coerceIn(50, 100)
             val treeUri = Uri.parse(treeValue)
             ioExecutor.execute {
-                saveToTree(context.applicationContext, output, treeUri, format)
+                saveToTree(context.applicationContext, output, treeUri, format, jpegQuality)
             }
         } catch (t: Throwable) {
             Log.e(TAG, "Floating screenshot capture failed", t)
@@ -241,7 +244,13 @@ object TranslationScreenshotManager {
         }
     }
 
-    private fun saveToTree(context: Context, bitmap: Bitmap, treeUri: Uri, format: String) {
+    private fun saveToTree(
+        context: Context,
+        bitmap: Bitmap,
+        treeUri: Uri,
+        format: String,
+        jpegQuality: Int
+    ) {
         var created: Uri? = null
         try {
             synchronized(this) {
@@ -262,7 +271,7 @@ object TranslationScreenshotManager {
                 val stream = resolver.openOutputStream(created!!, "w")
                     ?: throw IOException("Не удалось открыть файл " + fileName)
                 val compressed = stream.use {
-                    if (isJpeg) bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, it)
+                    if (isJpeg) bitmap.compress(Bitmap.CompressFormat.JPEG, jpegQuality, it)
                     else bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
                 }
                 if (!compressed) throw IOException("Не удалось записать изображение")

@@ -9,7 +9,6 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageView;
-import android.widget.PopupMenu;
 import android.widget.Toast;
 
 import java.lang.reflect.Field;
@@ -27,15 +26,17 @@ public final class FloatingScreenshotButton {
     private static final String KEY_ENABLED = "floating_screenshot_button_enabled";
     private static final String BUTTON_TAG = "taptranslate_floating_screenshot_button";
     private static final int ICON_CONTAINER_ID = 0x7f0a04dc;
-    private static final int MAIN_ICON_ID = 0x7f0a01af;
     private static final Map<Object, TouchState> TOUCHES =
             Collections.synchronizedMap(new WeakHashMap<Object, TouchState>());
+    private static final Map<View, Boolean> WIDGETS =
+            Collections.synchronizedMap(new WeakHashMap<View, Boolean>());
 
     private FloatingScreenshotButton() { }
 
     /** Add a passive sibling. It must never become a touch target itself. */
     public static void attach(View widget, Object ignoredRegister) {
         if (widget == null) return;
+        WIDGETS.put(widget, Boolean.TRUE);
         try {
             View container = widget.findViewById(ICON_CONTAINER_ID);
             if (container == null || !(container.getParent() instanceof ViewGroup)) {
@@ -75,16 +76,6 @@ public final class FloatingScreenshotButton {
                 camera = image;
             }
             camera.setVisibility(isEnabled(widget.getContext()) ? View.VISIBLE : View.GONE);
-
-            // Long press toggles the extra control; short taps continue to use
-            // the original host OnClickListener.
-            View mainIcon = widget.findViewById(MAIN_ICON_ID);
-            if (mainIcon != null) {
-                mainIcon.setOnLongClickListener(v -> {
-                    showToggleMenu(widget);
-                    return true;
-                });
-            }
         } catch (Throwable error) {
             Log.e(TAG, "Could not attach floating screenshot button", error);
         }
@@ -149,33 +140,22 @@ public final class FloatingScreenshotButton {
         return true;
     }
 
-    public static void showToggleMenu(View widget) {
-        if (widget == null) return;
-        try {
-            Context context = widget.getContext();
-            View anchor = widget.findViewById(MAIN_ICON_ID);
-            if (anchor == null) anchor = widget;
-            PopupMenu menu = new PopupMenu(context, anchor);
-            boolean enabled = isEnabled(context);
-            android.view.MenuItem toggle = menu.getMenu().add("Показывать кнопку снимка");
-            toggle.setCheckable(true);
-            toggle.setChecked(enabled);
-            menu.setOnMenuItemClickListener(item -> {
-                boolean next = !isEnabled(context);
-                context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                        .edit().putBoolean(KEY_ENABLED, next).apply();
-                View camera = findButton(widget);
-                if (camera != null) camera.setVisibility(next ? View.VISIBLE : View.GONE);
-                Toast.makeText(context.getApplicationContext(),
-                        next ? "Кнопка снимка включена" : "Кнопка снимка отключена",
-                        Toast.LENGTH_SHORT).show();
-                return true;
-            });
-            menu.show();
-        } catch (Throwable error) {
-            Log.e(TAG, "Could not show screenshot-button menu", error);
-            Toast.makeText(widget.getContext().getApplicationContext(),
-                    "Не удалось открыть меню кнопки снимка", Toast.LENGTH_SHORT).show();
+    /** Persist the OCR-settings switch and refresh already-created floating widgets. */
+    public static void updateEnabled(Context context, boolean enabled) {
+        if (context == null) return;
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putBoolean(KEY_ENABLED, enabled).apply();
+
+        synchronized (WIDGETS) {
+            for (View widget : WIDGETS.keySet()) {
+                if (widget == null) continue;
+                widget.post(() -> {
+                    View camera = findButton(widget);
+                    if (camera != null) {
+                        camera.setVisibility(enabled ? View.VISIBLE : View.GONE);
+                    }
+                });
+            }
         }
     }
 
