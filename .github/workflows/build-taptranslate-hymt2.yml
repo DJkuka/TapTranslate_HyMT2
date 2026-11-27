@@ -572,7 +572,13 @@ jobs:
           grep -q 'PanelFontStore;->apply' "$renderer_f"
           grep -q 'PanelFontStore;->apply' "$renderer_g"
           grep -q 'captureFromService' "$manager"
-          echo "Verified floating screenshot button, persisted toggle, save entry point and per-panel font hooks."
+          capture_callback="$(find_one_smali xh/a.smali)"
+          service="$(find_one_smali com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali)"
+          grep -q 'consumePendingFrame' "$capture_callback"
+          grep -q 'onProjectionPermissionReady' "$service"
+          grep -q 'consumePendingFrame' "$manager"
+          grep -q 'onProjectionPermissionReady' "$manager"
+          echo "Verified source-only MediaProjection capture before OCR, permission resume, floating screenshot button and per-panel font hooks."
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
