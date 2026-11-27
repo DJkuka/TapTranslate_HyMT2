@@ -1832,9 +1832,13 @@ def patch_manual_selection_drag_release(base: Path) -> None:
 
     if-nez v0, :hymt2_manual_selection_translate
 
-    const/4 v5, 0x1
+    invoke-virtual {p2}, Landroid/view/MotionEvent;->getAction()I
 
-    if-ne p1, v5, :cond_10
+    move-result v5
+
+    const/4 v0, 0x1
+
+    if-ne v5, v0, :cond_10
 
     iget v0, p0, Lsh/b;->f:F
 
