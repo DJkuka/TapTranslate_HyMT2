@@ -1755,7 +1755,7 @@ def patch_fixed_font_size_renderers(base: Path) -> None:
 
 def patch_font_display_names(base: Path) -> None:
     """Show readable names in Settings while retaining loadable font aliases."""
-    helper_source = Path(__file__).resolve().parent / (
+    helper_source = Path(__file__).resolve().parent.parent / (
         "app/src/main/java/com/tap_to_translate/snap_translate/hymt2/FontDisplayNames.java"
     )
     source_text = helper_source.read_text(encoding="utf-8")
