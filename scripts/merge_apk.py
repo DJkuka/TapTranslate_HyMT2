@@ -1383,10 +1383,9 @@ def patch_floating_screenshot_button(base: Path) -> None:
         text = text[:start] + body + text[end:]
         widget.write_text(text, encoding="utf-8")
 
-    print("Installed floating screenshot control with host touch routing")
+    print("Installed passive floating screenshot control")
 
-    # Route the same touch stream through the original listener after native
-    # drag/snap processing; do not install competing child click listeners.
+    # Record icon touch before original listener handles it; never consume it.
     touch = base / "smali_classes3/sh/b.smali"
     t = touch.read_text(encoding="utf-8")
     method = ".method public final onTouch(Landroid/view/View;Landroid/view/MotionEvent;)Z"
@@ -1395,34 +1394,32 @@ def patch_floating_screenshot_button(base: Path) -> None:
     if ts < 0 or te < 0:
         raise RuntimeError("Could not locate floating icon touch listener")
     body = t[ts:te]
-    hook = """    invoke-static {p0, p2}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->handleTouch(Ljava/lang/Object;Landroid/view/MotionEvent;)Z
+    pre_hook = "    invoke-static {p0, p2}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->onHostTouch(Ljava/lang/Object;Landroid/view/MotionEvent;)V"
+    if pre_hook not in body:
+        marker = "    invoke-virtual {p2}, Landroid/view/MotionEvent;->getAction()I\\n\\n    move-result p1\\n"
+        if body.count(marker) != 1:
+            raise RuntimeError("Could not find start of original floating touch method")
+        body = body.replace(marker, marker + "\\n" + pre_hook + "\\n", 1)
+
+    # Native sh/b completes movement and edge snapping before camera taps are consumed.
+    detector = "    iget-object p1, p0, Lsh/b;->b:Landroid/view/GestureDetector;\\n\\n    invoke-virtual {p1, p2}, Landroid/view/GestureDetector;->onTouchEvent(Landroid/view/MotionEvent;)Z\\n\\n    move-result p1\\n\\n    return p1"
+    if detector not in body:
+        raise RuntimeError("Could not locate final GestureDetector dispatch")
+    replacement = """    invoke-static {p0, p2}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->consumeCameraGesture(Ljava/lang/Object;Landroid/view/MotionEvent;)Z
+
     move-result v0
 
-    if-eqz v0, :hymt2_original_touch_result
+    if-eqz v0, :hymt2_keep_gesture_detector
 
     const/4 p1, 0x1
 
     return p1
 
-    :hymt2_original_touch_result
-"""
-    if "FloatingScreenshotButton;->handleTouch" not in body:
-        end_anchor = "    invoke-virtual {p1, p2}, Landroid/view/GestureDetector;->onTouchEvent(Landroid/view/MotionEvent;)Z\\n\\n    move-result p1\\n"
-        if body.count(end_anchor) != 1:
-            raise RuntimeError("Could not find end of original floating touch processing")
-        body = body.replace(end_anchor, hook + end_anchor, 1)
-        t = t[:ts] + body + t[te:]
-        touch.write_text(t, encoding="utf-8")
-
-    # Child views must not consume the floating window touch stream.
-    widget = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget.smali"
-    wt = widget.read_text(encoding="utf-8")
-    wt = wt.replace(
-        "    invoke-static {p0, p1}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->attach(Landroid/view/View;Ljava/lang/Object;)V",
-        "    invoke-static {p0, p1}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->attach(Landroid/view/View;Ljava/lang/Object;)V"
-    )
-    widget.write_text(wt, encoding="utf-8")
-
+    :hymt2_keep_gesture_detector
+""" + detector
+    body = body.replace(detector, replacement, 1)
+    t = t[:ts] + body + t[te:]
+    touch.write_text(t, encoding="utf-8")
 
 
 def patch_per_panel_fonts(base: Path) -> None:
