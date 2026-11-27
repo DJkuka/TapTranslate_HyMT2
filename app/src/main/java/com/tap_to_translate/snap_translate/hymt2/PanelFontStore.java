@@ -17,10 +17,25 @@ public final class PanelFontStore {
             Collections.synchronizedMap(new WeakHashMap<Object, Typeface>());
     private static final Map<String, Typeface> ASSET_TYPEFACES =
             Collections.synchronizedMap(new java.util.HashMap<String, Typeface>());
-    private static final Map<TextPaint, Typeface> ORIGINAL_TYPEFACES =
-            Collections.synchronizedMap(new WeakHashMap<TextPaint, Typeface>());
+    /*
+     * A renderer reuses its TextPaint for every overlay. Remember the last
+     * typeface applied by this class separately from the host's current base
+     * typeface. The old implementation cached the first typeface forever,
+     * which caused every subsequent draw to undo changes made in app settings.
+     */
+    private static final Map<TextPaint, FontState> FONT_STATES =
+            Collections.synchronizedMap(new WeakHashMap<TextPaint, FontState>());
 
     private PanelFontStore() { }
+
+    private static final class FontState {
+        Typeface baseTypeface;
+        Typeface lastAppliedOverride;
+
+        FontState(Typeface base) {
+            baseTypeface = base;
+        }
+    }
 
     public static void setFont(Object region, Typeface typeface) {
         if (region == null) return;
@@ -42,17 +57,36 @@ public final class PanelFontStore {
         }
     }
 
-    /** Called once for each region immediately before its StaticLayout is measured. */
+    /**
+     * Apply a per-panel override without freezing the global font. If the host
+     * changes TextPaint while this renderer is active, that new typeface becomes
+     * the baseline. When a panel has no override, restore that current baseline
+     * after a preceding panel's override instead of restoring the first-ever font.
+     */
     public static void apply(TextPaint paint, Object region) {
         if (paint == null) return;
-        Typeface original;
-        synchronized (ORIGINAL_TYPEFACES) {
-            if (!ORIGINAL_TYPEFACES.containsKey(paint)) {
-                ORIGINAL_TYPEFACES.put(paint, paint.getTypeface());
+        synchronized (FONT_STATES) {
+            Typeface current = paint.getTypeface();
+            FontState state = FONT_STATES.get(paint);
+            if (state == null) {
+                state = new FontState(current);
+                FONT_STATES.put(paint, state);
+            } else if (state.lastAppliedOverride == null
+                    || current != state.lastAppliedOverride) {
+                // The host has supplied a new global typeface since our last
+                // override (or since the previous draw). Keep it as the baseline.
+                state.baseTypeface = current;
             }
-            original = ORIGINAL_TYPEFACES.get(paint);
+
+            Typeface override = region == null ? null : FONT_OVERRIDES.get(region);
+            if (override != null) {
+                if (current != override) paint.setTypeface(override);
+                state.lastAppliedOverride = override;
+            } else {
+                Typeface base = state.baseTypeface;
+                if (current != base) paint.setTypeface(base);
+                state.lastAppliedOverride = null;
+            }
         }
-        Typeface override = region == null ? null : FONT_OVERRIDES.get(region);
-        paint.setTypeface(override == null ? original : override);
     }
 }
