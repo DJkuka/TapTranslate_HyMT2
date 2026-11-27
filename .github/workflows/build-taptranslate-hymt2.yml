@@ -358,6 +358,8 @@ jobs:
           set -euo pipefail
           java -jar tools/apktool.jar d -f -o build/ocr-final-check build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
           decoded="build/ocr-final-check"
+          rm -rf "$decoded"
+          java -jar tools/apktool.jar d -f build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk -o "$decoded" >/dev/null
           find_one_smali() {
             local rel="$1"
             local -a matches
