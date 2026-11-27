@@ -380,7 +380,8 @@ class OcrSettingsActivity : Activity() {
                     ", recBatchSize=" + currentString(KEY_REC_BATCH_SIZE, "1") +
                     ", ortThreads=" + currentString(KEY_ORT_THREADS, "2") +
                     ", recPreprocessScale=" + currentString(KEY_REC_PREPROCESS_SCALE, "1.0") +
-                    ". PP-OCRv6 применит их после полного перезапуска. Формат скриншотов: " +\n                    screenshotFormatLabel + "."
+                    ". PP-OCRv6 применит их после полного перезапуска. Формат скриншотов: " +
+                    screenshotFormatLabel + "."
                 Toast.makeText(this@OcrSettingsActivity,
                     "Настройки сохранены", Toast.LENGTH_SHORT).show()
             }
