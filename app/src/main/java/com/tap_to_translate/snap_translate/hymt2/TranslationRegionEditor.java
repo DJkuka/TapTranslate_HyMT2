@@ -370,30 +370,71 @@ public final class TranslationRegionEditor {
         if (!state.editing || state.selected.isEmpty()) return;
         final String[] labels = {
                 "По умолчанию",
-                "Sans Serif", "Sans Serif Light", "Sans Serif Thin",
-                "Sans Serif Medium", "Sans Serif Black",
-                "Sans Serif Condensed", "Sans Serif Condensed Light",
-                "Sans Serif Condensed Medium", "Sans Serif Rounded",
-                "Sans Serif Small Caps",
-                "Serif", "Serif Monospace", "Monospace",
-                "Casual", "Cursive", "Fantasy"
+                "TroubleSide",
+                "Bubble Sans",
+                "QR Ames Beta",
+                "Angeme Bold",
+                "Angeme Regular",
+                "QR Comic Beta",
+                "ChillSide Comic",
+                "BadaBoom BB Cyrillic",
+                "Caveat Bold",
+                "Comic Relief",
+                "Helsinki",
+                "Noto Sans Bold",
+                "Noto Sans Medium",
+                "Noto Sans Regular",
+                "Noto Sans SemiBold",
+                "Roboto Bold",
+                "Roboto Medium",
+                "Roboto Regular",
+                "Takezo Black",
+                "Takezo Bold",
+                "Takezo Condensed",
+                "Takezo Extra Black",
+                "Takezo ExtraTilt",
+                "Takezo Italic",
+                "Takezo Regular",
+                "Takezo Tilt"
         };
-        final String[] families = {
+        // These are the exact bundled font files whose cmap contains every
+        // Russian letter, including Ё/ё. Ukrainian letters are not required.
+        final String[] assets = {
                 null,
-                "sans-serif", "sans-serif-light", "sans-serif-thin",
-                "sans-serif-medium", "sans-serif-black",
-                "sans-serif-condensed", "sans-serif-condensed-light",
-                "sans-serif-condensed-medium", "sans-serif-rounded",
-                "sans-serif-smallcaps",
-                "serif", "serif-monospace", "monospace",
-                "casual", "cursive", "fantasy"
+                "1Troubleside-Yq5W2.ttf",
+                "2Bubble Sans 1.01.ttf",
+                "3QrAmesBetaRegular-E4xAWKommercial.ttf",
+                "4Angeme-Bold.ttf",
+                "4Angeme-Regular.ttf",
+                "5QrComicBetaRegular-ARAgm.ttf",
+                "6ChillsideComic-7OAyK.ttf",
+                "7BadaBoomBBCyrillic.ttf",
+                "Caveat-Bold.ttf",
+                "ComicRelief.ttf",
+                "Helsinki.ttf",
+                "NotoSans-Bold.ttf",
+                "NotoSans-Medium.ttf",
+                "NotoSans-Regular.ttf",
+                "NotoSans-SemiBold.ttf",
+                "Roboto-Bold.ttf",
+                "Roboto-Medium.ttf",
+                "Roboto-Regular.ttf",
+                "TakezoBlack-wo8w8.ttf",
+                "TakezoBold-xRdK0.ttf",
+                "TakezoCondensed-BLVVx.ttf",
+                "TakezoExtraBlack-lxX9X.ttf",
+                "TakezoExtratilt-XGz8d.ttf",
+                "TakezoItalic-6R5qM.ttf",
+                "TakezoRegular-pga01.ttf",
+                "TakezoTilt-ovdZ0.ttf"
         };
         ArrayAdapter<String> adapter = new ArrayAdapter<String>(
                 state.root.getContext(), android.R.layout.simple_list_item_1, labels) {
             @Override public View getView(int position, View convertView, ViewGroup parent) {
                 TextView view = (TextView) super.getView(position, convertView, parent);
-                view.setTypeface(families[position] == null
-                        ? Typeface.DEFAULT : Typeface.create(families[position], Typeface.NORMAL));
+                view.setTypeface(assets[position] == null
+                        ? Typeface.DEFAULT
+                        : PanelFontStore.loadTypeface(state.root.getContext(), assets[position]));
                 view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
                 view.setPadding(Math.round(dp(state.root.getContext(), 18)),
                         Math.round(dp(state.root.getContext(), 10)),
@@ -405,9 +446,10 @@ public final class TranslationRegionEditor {
         AlertDialog dialog = new AlertDialog.Builder(state.root.getContext())
                 .setTitle("Шрифт выбранных панелей")
                 .setAdapter(adapter, (d, which) -> {
-                    String family = families[which];
+                    Typeface typeface = assets[which] == null ? null
+                            : PanelFontStore.loadTypeface(state.root.getContext(), assets[which]);
                     for (Object region : new ArrayList<Object>(state.selected.keySet())) {
-                        PanelFontStore.setFont(region, family);
+                        PanelFontStore.setFont(region, typeface);
                     }
                     refreshRenderers(state);
                     toast(state.root, state.selected.size() == 1
