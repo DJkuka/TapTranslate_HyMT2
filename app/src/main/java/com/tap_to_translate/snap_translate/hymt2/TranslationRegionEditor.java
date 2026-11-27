@@ -369,36 +369,14 @@ public final class TranslationRegionEditor {
     private static void choosePanelFont(State state) {
         if (!state.editing || state.selected.isEmpty()) return;
         final String[] labels = {
-                "По умолчанию",
-                "TroubleSide",
-                "Bubble Sans",
-                "QR Ames Beta",
-                "Angeme Bold",
-                "Angeme Regular",
-                "QR Comic Beta",
-                "ChillSide Comic",
-                "BadaBoom BB Cyrillic",
-                "Caveat Bold",
-                "Comic Relief",
-                "Helsinki",
-                "Noto Sans Bold",
-                "Noto Sans Medium",
-                "Noto Sans Regular",
-                "Noto Sans SemiBold",
-                "Roboto Bold",
-                "Roboto Medium",
-                "Roboto Regular",
-                "Takezo Black",
-                "Takezo Bold",
-                "Takezo Condensed",
-                "Takezo Extra Black",
-                "Takezo ExtraTilt",
-                "Takezo Italic",
-                "Takezo Regular",
-                "Takezo Tilt"
+                "По умолчанию", "TroubleSide", "Bubble Sans", "QR Ames Beta",
+                "Angeme Bold", "Angeme Regular", "QR Comic Beta", "ChillSide Comic",
+                "BadaBoom BB Cyrillic", "Caveat Bold", "Comic Relief", "Helsinki",
+                "Noto Sans Bold", "Noto Sans Medium", "Noto Sans Regular", "Noto Sans SemiBold",
+                "Roboto Bold", "Roboto Medium", "Roboto Regular",
+                "Takezo Black", "Takezo Bold", "Takezo Condensed", "Takezo Extra Black",
+                "Takezo ExtraTilt", "Takezo Italic", "Takezo Regular", "Takezo Tilt"
         };
-        // These are the exact bundled font files whose cmap contains every
-        // Russian letter, including Ё/ё. Ukrainian letters are not required.
         final String[] assets = {
                 null,
                 "1Troubleside-Yq5W2.ttf",
