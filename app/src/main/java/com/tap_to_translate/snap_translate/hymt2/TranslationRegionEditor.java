@@ -1532,7 +1532,7 @@ public final class TranslationRegionEditor {
                         startLineSpacing + (dy / sensitivity) * availableRange));
             } else {
                 final float minScale = 0.25f;
-                final float maxScale = 2.50f;
+                final float maxScale = 5.00f;
                 float outward = (dragMode == DragMode.NW || dragMode == DragMode.SW)
                         ? -dx : dx;
                 float availableRange = outward >= 0f
