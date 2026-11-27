@@ -1,5 +1,6 @@
 package com.tap_to_translate.snap_translate.hymt2;
 
+import android.content.Context;
 import android.graphics.Typeface;
 import android.text.TextPaint;
 
@@ -12,21 +13,33 @@ import java.util.WeakHashMap;
  * to preferences or style presets and disappear with their region objects.
  */
 public final class PanelFontStore {
-    private static final Map<Object, String> FONT_OVERRIDES =
-            Collections.synchronizedMap(new WeakHashMap<Object, String>());
+    private static final Map<Object, Typeface> FONT_OVERRIDES =
+            Collections.synchronizedMap(new WeakHashMap<Object, Typeface>());
+    private static final Map<String, Typeface> ASSET_TYPEFACES =
+            Collections.synchronizedMap(new java.util.HashMap<String, Typeface>());
     private static final Map<TextPaint, Typeface> ORIGINAL_TYPEFACES =
             Collections.synchronizedMap(new WeakHashMap<TextPaint, Typeface>());
 
     private PanelFontStore() { }
 
-    public static void setFont(Object region, String family) {
+    public static void setFont(Object region, Typeface typeface) {
         if (region == null) return;
-        if (family == null || family.length() == 0) FONT_OVERRIDES.remove(region);
-        else FONT_OVERRIDES.put(region, family);
+        if (typeface == null) FONT_OVERRIDES.remove(region);
+        else FONT_OVERRIDES.put(region, typeface);
     }
 
-    public static String getFont(Object region) {
-        return region == null ? null : FONT_OVERRIDES.get(region);
+    /** Loads one of the original Tap Translate fonts bundled in assets/fonts. */
+    public static Typeface loadTypeface(Context context, String assetPath) {
+        if (context == null || assetPath == null || assetPath.length() == 0) {
+            return Typeface.DEFAULT;
+        }
+        synchronized (ASSET_TYPEFACES) {
+            Typeface cached = ASSET_TYPEFACES.get(assetPath);
+            if (cached != null) return cached;
+            Typeface loaded = Typeface.createFromAsset(context.getAssets(), "fonts/" + assetPath);
+            ASSET_TYPEFACES.put(assetPath, loaded);
+            return loaded;
+        }
     }
 
     /** Called once for each region immediately before its StaticLayout is measured. */
@@ -39,7 +52,7 @@ public final class PanelFontStore {
             }
             original = ORIGINAL_TYPEFACES.get(paint);
         }
-        String family = getFont(region);
-        paint.setTypeface(family == null ? original : Typeface.create(family, Typeface.NORMAL));
+        Typeface override = region == null ? null : FONT_OVERRIDES.get(region);
+        paint.setTypeface(override == null ? original : override);
     }
 }
