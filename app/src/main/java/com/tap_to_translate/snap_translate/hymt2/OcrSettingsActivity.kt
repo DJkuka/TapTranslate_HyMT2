@@ -7,10 +7,6 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
-import android.content.Intent
-import android.net.Uri
-import android.os.Build
-import android.provider.DocumentsContract
 import android.os.Bundle
 import android.util.Log
 import android.view.ViewGroup
@@ -36,11 +32,6 @@ class OcrSettingsActivity : Activity() {
     private lateinit var diagnosticsButton: Button
     private lateinit var diagnosticsOutput: TextView
     private lateinit var status: TextView
-    private lateinit var screenshotFormatSpinner: Spinner
-    private lateinit var screenshotFolderLabel: TextView
-    private lateinit var floatingScreenshotSwitch: Switch
-    private lateinit var screenshotJpegQualitySeek: SeekBar
-    private lateinit var screenshotJpegQualityLabel: TextView
     private val floatControls = LinkedHashMap<String, FloatControlSpec>()
     private val intControls = LinkedHashMap<String, IntControlSpec>()
     private val spinnerControls = LinkedHashMap<String, SpinnerControlSpec>()
@@ -271,86 +262,8 @@ class OcrSettingsActivity : Activity() {
         }
         root.addView(bubbleWrapSwitch, matchWrap(dp(14)))
 
-        addText(root, "СКРИНШОТЫ ПЕРЕВОДА", 16f, true, dp(8))
-        addText(root,
-            "Снимок сохраняет исходную страницу вместе с наложенным переводом, без верхней панели управления. Нумерация продолжается по порядку добавления: 001, 002, 003 и далее.",
-            13f, false, dp(8))
-
-        val screenshotPrefs = getSharedPreferences(SCREENSHOT_PREFS, MODE_PRIVATE)
-        floatingScreenshotSwitch = Switch(this).apply {
-            text = "Показывать плавающую кнопку камеры"
-            isChecked = screenshotPrefs.getBoolean(KEY_FLOATING_SCREENSHOT_ENABLED, false)
-        }
-        root.addView(floatingScreenshotSwitch, matchWrap(dp(6)))
-        addText(root,
-            "Кнопка камеры отображается рядом с плавающей иконкой. Долгое нажатие на основную иконку остаётся штатным жестом выбора режима перевода.",
-            12f, false, dp(10))
-
-        val screenshotFormats = listOf("PNG · без потерь", "JPEG · компактнее")
-        screenshotFormatSpinner = Spinner(this).apply {
-            adapter = ArrayAdapter(
-                this@OcrSettingsActivity,
-                android.R.layout.simple_spinner_item,
-                screenshotFormats
-            ).also {
-                it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-            }
-            setSelection(
-                if (screenshotPrefs.getString(KEY_SCREENSHOT_FORMAT, "png") == "jpeg") 1 else 0
-            )
-        }
-        root.addView(screenshotFormatSpinner, matchWrap(dp(6)))
-
-        val savedJpegQuality = screenshotPrefs
-            .getInt(KEY_SCREENSHOT_JPEG_QUALITY, 92).coerceIn(50, 100)
-        screenshotJpegQualityLabel = addText(
-            root, "Качество JPEG: ${savedJpegQuality}%", 13f, false, dp(2)
-        )
-        screenshotJpegQualitySeek = SeekBar(this).apply {
-            max = 50
-            progress = savedJpegQuality - 50
-        }
-        root.addView(screenshotJpegQualitySeek, matchWrap(dp(4)))
-        addText(root,
-            "Диапазон 50–100%. Выше качество — больше файл. Ползунок применяется только к JPEG; PNG сохраняется без потерь.",
-            12f, false, dp(12))
-        screenshotJpegQualitySeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                screenshotJpegQualityLabel.text = "Качество JPEG: ${progress + 50}%"
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
-        })
-
-        screenshotFolderLabel = addText(root, "", 13f, false, dp(6))
-        updateScreenshotFolderLabel()
-
-        val chooseFolder = Button(this).apply {
-            text = "Выбрать папку для скриншотов"
-            setOnClickListener {
-                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-                    addFlags(
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
-                    )
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        screenshotPrefs.getString(KEY_SCREENSHOT_TREE_URI, null)?.let {
-                            putExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.parse(it))
-                        }
-                    }
-                }
-                try {
-                    startActivityForResult(intent, REQUEST_SCREENSHOT_FOLDER)
-                } catch (t: Throwable) {
-                    status.text = "Не удалось открыть выбор папки: " + (t.message ?: "ошибка")
-                }
-            }
-        }
-        root.addView(chooseFolder, matchWrap(dp(18)))
-
         val save = Button(this).apply {
-            text = "Сохранить настройки OCR и скриншотов"
+            text = "Сохранить настройки OCR"
             setOnClickListener {
                 val selectedLimit = currentInt(KEY_MAX_SIDE, 4000)
                 val editor = prefs.edit()
@@ -368,18 +281,6 @@ class OcrSettingsActivity : Activity() {
                 }
                 switchControls.forEach { (key, control) -> editor.putBoolean(key, control.isChecked) }
                 editor.apply()
-                screenshotPrefs.edit()
-                    .putString(
-                        KEY_SCREENSHOT_FORMAT,
-                        if (screenshotFormatSpinner.selectedItemPosition == 1) "jpeg" else "png"
-                    )
-                    .putInt(KEY_SCREENSHOT_JPEG_QUALITY, screenshotJpegQualitySeek.progress + 50)
-                    .apply()
-                FloatingScreenshotButton.updateEnabled(
-                    this@OcrSettingsActivity, floatingScreenshotSwitch.isChecked
-                )
-                val screenshotFormatLabel =
-                    if (screenshotFormatSpinner.selectedItemPosition == 1) "JPEG" else "PNG"
                 status.text = "Сохранено: detThresh=" + currentFloat(KEY_DET_THRESH, 0.20f) +
                     ", detBoxThresh=" + currentFloat(KEY_DET_BOX_THRESH, 0.45f) +
                     ", detUnclipRatio=" + currentFloat(KEY_DET_UNCLIP_RATIO, 1.40f) +
@@ -393,8 +294,7 @@ class OcrSettingsActivity : Activity() {
                     ", recBatchSize=" + currentString(KEY_REC_BATCH_SIZE, "1") +
                     ", ortThreads=" + currentString(KEY_ORT_THREADS, "2") +
                     ", recPreprocessScale=" + currentString(KEY_REC_PREPROCESS_SCALE, "1.0") +
-                    ". PP-OCRv6 применит их после полного перезапуска. Формат скриншотов: " +
-                    screenshotFormatLabel + "."
+                    ". PP-OCRv6 применит их после полного перезапуска."
                 Toast.makeText(this@OcrSettingsActivity,
                     "Настройки сохранены", Toast.LENGTH_SHORT).show()
             }
@@ -402,27 +302,6 @@ class OcrSettingsActivity : Activity() {
         root.addView(save, matchWrap(dp(10)))
 
         status = addText(root, "", 13f, false, 0)
-    }
-
-    @Deprecated("Legacy activity result is used for compatibility with the host application")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQUEST_SCREENSHOT_FOLDER || resultCode != RESULT_OK) return
-        val uri = data?.data ?: return
-        val grantFlags = (data.flags and
-            (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION))
-        try {
-            if (grantFlags != 0) {
-                contentResolver.takePersistableUriPermission(uri, grantFlags)
-            }
-            getSharedPreferences(SCREENSHOT_PREFS, MODE_PRIVATE).edit()
-                .putString(KEY_SCREENSHOT_TREE_URI, uri.toString())
-                .apply()
-            updateScreenshotFolderLabel()
-            status.text = "Папка для скриншотов сохранена."
-        } catch (t: Throwable) {
-            status.text = "Не удалось сохранить доступ к папке: " + (t.message ?: "ошибка")
-        }
     }
 
     private fun runDiagnostics() {
@@ -671,22 +550,6 @@ class OcrSettingsActivity : Activity() {
     private fun currentBoolean(key: String, fallback: Boolean): Boolean =
         switchControls[key]?.isChecked ?: fallback
 
-    private fun updateScreenshotFolderLabel() {
-        val value = getSharedPreferences(SCREENSHOT_PREFS, MODE_PRIVATE)
-            .getString(KEY_SCREENSHOT_TREE_URI, null)
-        if (value.isNullOrBlank()) {
-            screenshotFolderLabel.text = "Папка для скриншотов не выбрана."
-            return
-        }
-        val folder = try {
-            val id = DocumentsContract.getTreeDocumentId(Uri.parse(value))
-            id.substringAfter(':', id)
-        } catch (_: Throwable) {
-            "выбранная папка"
-        }
-        screenshotFolderLabel.text = "Папка для скриншотов: " + folder
-    }
-
     private fun updateAlphaLabel() {
         val percent = alphaSeek.progress.coerceIn(0, 100)
         alphaValue.text = "Непрозрачность фона свободного текста: " + percent +
@@ -753,11 +616,5 @@ class OcrSettingsActivity : Activity() {
         private const val KEY_REC_BATCH_SIZE = "ocr_rec_batch_size"
         private const val KEY_ORT_THREADS = "ocr_ort_threads"
         private const val KEY_REC_PREPROCESS_SCALE = "ocr_rec_preprocess_scale"
-        private const val SCREENSHOT_PREFS = "taptranslate_screenshot_settings"
-        private const val KEY_SCREENSHOT_TREE_URI = "screenshot_tree_uri"
-        private const val KEY_SCREENSHOT_FORMAT = "screenshot_format"
-        private const val KEY_SCREENSHOT_JPEG_QUALITY = "screenshot_jpeg_quality"
-        private const val KEY_FLOATING_SCREENSHOT_ENABLED = "floating_screenshot_button_enabled"
-        private const val REQUEST_SCREENSHOT_FOLDER = 4107
     }
 }
