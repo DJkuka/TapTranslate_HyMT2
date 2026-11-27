@@ -146,7 +146,7 @@ jobs:
           echo "PP-OCRv6 models and matching 18,708-character dictionary are ready."
 
       - name: Fetch pinned BubblePop page-mask model
-        if: (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || (github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset' || (github.ref == 'refs/heads/taptranslate-1.127-ppocr-settings-diagnostics' || (github.ref == 'refs/heads/taptranslate-1.128-ppocr-219-rec-upscale' || github.ref == 'refs/heads/taptranslate-1.129-font-scaling-free-text' || github.ref == 'refs/heads/taptranslate-1.131-bubblepop-alpha-capture-fix' || github.ref == 'refs/heads/taptranslate-1.131-free-text-checkbox-fix'))))
+        if: (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || (github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset' || (github.ref == 'refs/heads/taptranslate-1.127-ppocr-settings-diagnostics' || (github.ref == 'refs/heads/taptranslate-1.128-ppocr-219-rec-upscale' || github.ref == 'refs/heads/taptranslate-1.129-font-scaling-free-text' || github.ref == 'refs/heads/taptranslate-1.131-bubblepop-alpha-capture-fix' || github.ref == 'refs/heads/taptranslate-1.131-free-text-checkbox-fix' || github.ref == 'refs/heads/taptranslate-1.132-selection-camera-font-fix'))))
         shell: bash
         run: |
           set -euo pipefail
@@ -295,7 +295,7 @@ jobs:
           ls -lh build/out/TapTranslate_1.125_FontFit_AutoFill_HyMT2_Vulkan_unsigned.apk
 
       - name: Verify BubblePop rendering and PP-OCRv6 live handoff
-        if: (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || (github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset' || (github.ref == 'refs/heads/taptranslate-1.127-ppocr-settings-diagnostics' || (github.ref == 'refs/heads/taptranslate-1.128-ppocr-219-rec-upscale' || github.ref == 'refs/heads/taptranslate-1.129-font-scaling-free-text' || github.ref == 'refs/heads/taptranslate-1.131-bubblepop-alpha-capture-fix' || github.ref == 'refs/heads/taptranslate-1.131-free-text-checkbox-fix'))))
+        if: (github.ref == 'refs/heads/bubblepop-text-regions-apk219' || github.ref == 'refs/heads/apk219-bubblepop-preserve-hymt' || github.ref == 'refs/heads/taptranslate-1.125-smooth-font-resize' || (github.ref == 'refs/heads/taptranslate-1.126-line-spacing-mask-inset' || (github.ref == 'refs/heads/taptranslate-1.127-ppocr-settings-diagnostics' || (github.ref == 'refs/heads/taptranslate-1.128-ppocr-219-rec-upscale' || github.ref == 'refs/heads/taptranslate-1.129-font-scaling-free-text' || github.ref == 'refs/heads/taptranslate-1.131-bubblepop-alpha-capture-fix' || github.ref == 'refs/heads/taptranslate-1.131-free-text-checkbox-fix' || github.ref == 'refs/heads/taptranslate-1.132-selection-camera-font-fix'))))
         shell: bash
         run: |
           set -euo pipefail
@@ -319,6 +319,7 @@ jobs:
           renderer_f="$(find_one_smali rh/f.smali)"
           renderer_g="$(find_one_smali rh/g.smali)"
           test -s "$decoded/assets/models/bubblepop/model_fp16.onnx"
+          test -s "$decoded/assets/models/bubblepop/LICENSE.bubble-pop"
           test -s "$decoded/assets/models/det/inference.onnx"
           test -s "$decoded/assets/models/rec/inference.onnx"
           test -s "$decoded/assets/models/rec/inference.yml"
