@@ -1379,17 +1379,17 @@ def patch_floating_screenshot_button(base: Path) -> None:
         anchor = "    invoke-direct {p0}, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->getAndUpdateUI()V"
         if body.count(anchor) != 1:
             raise RuntimeError("Could not find floating widget initialization point")
-        body = body.replace(anchor, anchor + "\\n\\n" + attach_hook, 1)
+        body = body.replace(anchor, anchor + "\n\n" + attach_hook, 1)
 
     # The very same listener instance must see touches that begin on the
     # clickable main ImageView; otherwise its OnClickListener hides the root
     # LinearLayout from Android's touch dispatcher and drag cannot start there.
-    root_listener = "    invoke-virtual {p0, p2}, Landroid/view/View;->setOnTouchListener(Landroid/view/View\\$OnTouchListener;)V"
-    icon_listener = """    invoke-virtual {p0, p2}, Landroid/view/View;->setOnTouchListener(Landroid/view/View\\$OnTouchListener;)V
+    root_listener = "    invoke-virtual {p0, p2}, Landroid/view/View;->setOnTouchListener(Landroid/view/View$OnTouchListener;)V"
+    icon_listener = """    invoke-virtual {p0, p2}, Landroid/view/View;->setOnTouchListener(Landroid/view/View$OnTouchListener;)V
 
     iget-object v2, p0, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->j:Landroid/widget/ImageView;
 
-    invoke-virtual {v2, p2}, Landroid/view/View;->setOnTouchListener(Landroid/view/View\\$OnTouchListener;)V"""
+    invoke-virtual {v2, p2}, Landroid/view/View;->setOnTouchListener(Landroid/view/View$OnTouchListener;)V"""
     if "iget-object v2, p0, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->j:Landroid/widget/ImageView;" not in body:
         if body.count(root_listener) != 1:
             raise RuntimeError("Could not find original floating root OnTouchListener registration")
@@ -1410,10 +1410,10 @@ def patch_floating_screenshot_button(base: Path) -> None:
     tb = tt[ts:te]
     before = "    invoke-static {p0, p2}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->onHostTouch(Ljava/lang/Object;Landroid/view/MotionEvent;)V"
     if before not in tb:
-        local_decl = "    .locals 11\\n"
+        local_decl = "    .locals 11\n"
         if tb.count(local_decl) != 1:
             raise RuntimeError("Could not identify sh/b.onTouch local register declaration")
-        tb = tb.replace(local_decl, local_decl + "\\n" + before + "\\n", 1)
+        tb = tb.replace(local_decl, local_decl + "\n" + before + "\n", 1)
 
     detector_anchor = "    iget-object p1, p0, Lsh/b;->b:Landroid/view/GestureDetector;"
     if "FloatingScreenshotButton;->consumeCameraGesture" not in tb:
