@@ -1666,6 +1666,205 @@ def patch_screenshot_button(base: Path) -> None:
 
 
 
+
+def patch_manual_selection_drag_release(base: Path) -> None:
+    """Finish a manual selection on release after an actual drag.
+
+    The original handler uses D as a two-stage confirmation flag. When the
+    user double-taps and drags during the second press, the first ACTION_UP
+    only sets D and leaves the selection waiting. If the drag moved beyond
+    the app's own 10 px movement threshold, finish translation on that release.
+    Also measure the selection from the main icon ImageView, not the enlarged
+    parent LinearLayout which now also contains the camera button.
+    """
+    gesture = base / "smali_classes2/lb/b.smali"
+    if not gesture.exists():
+        gesture = base / "smali_classes3/lb/b.smali"
+    if not gesture.exists():
+        raise RuntimeError("Could not locate floating-icon GestureDetector listener lb/b.smali")
+
+    gesture_text = gesture.read_text(encoding="utf-8")
+    double_tap_header = ".method public onDoubleTap(Landroid/view/MotionEvent;)Z"
+    double_start = gesture_text.find(double_tap_header)
+    double_end = gesture_text.find(".end method", double_start)
+    if double_start < 0 or double_end < 0:
+        raise RuntimeError("Could not isolate lb/b.onDoubleTap")
+    double_method = gesture_text[double_start:double_end]
+
+    icon_field = "Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->j:Landroid/widget/ImageView;"
+    old_anchor = """    iget-object v2, v0, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->i:[I
+
+    invoke-virtual {v0, v2}, Landroid/view/View;->getLocationOnScreen([I)V"""
+    new_anchor = """    iget-object v2, v0, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->i:[I
+
+    iget-object v6, v0, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->j:Landroid/widget/ImageView;
+
+    invoke-virtual {v6, v2}, Landroid/view/View;->getLocationOnScreen([I)V"""
+    if "invoke-virtual {v6, v2}, Landroid/view/View;->getLocationOnScreen([I)V" not in double_method:
+        if double_method.count(old_anchor) != 1:
+            raise RuntimeError("Could not find the original root-based double-tap selection origin")
+        double_method = double_method.replace(old_anchor, new_anchor, 1)
+
+    old_width = "    invoke-virtual {v0}, Landroid/view/View;->getWidth()I"
+    new_width = "    invoke-virtual {v6}, Landroid/view/View;->getWidth()I"
+    if new_width not in double_method:
+        if double_method.count(old_width) != 1:
+            raise RuntimeError("Could not find the original double-tap selection width")
+        double_method = double_method.replace(old_width, new_width, 1)
+    if icon_field not in double_method or new_width not in double_method:
+        raise RuntimeError("Double-tap origin is not anchored to the main floating icon")
+
+    gesture_text = gesture_text[:double_start] + double_method + gesture_text[double_end:]
+    gesture.write_text(gesture_text, encoding="utf-8")
+
+    touch = base / "smali_classes3/sh/b.smali"
+    if not touch.exists():
+        raise RuntimeError("Could not locate floating-icon touch listener sh/b.smali")
+    touch_text = touch.read_text(encoding="utf-8")
+    touch_header = ".method public final onTouch(Landroid/view/View;Landroid/view/MotionEvent;)Z"
+    touch_start = touch_text.find(touch_header)
+    touch_end = touch_text.find(".end method", touch_start)
+    if touch_start < 0 or touch_end < 0:
+        raise RuntimeError("Could not isolate sh/b.onTouch")
+    touch_method = touch_text[touch_start:touch_end]
+
+    # Keep the moving end of the selection anchored to the same main icon.
+    old_move_anchor = """    iget-object p1, v3, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->h:[I
+
+    invoke-virtual {v3, p1}, Landroid/view/View;->getLocationOnScreen([I)V
+
+    aget v5, p1, v4
+
+    invoke-virtual {v3}, Landroid/view/View;->getWidth()I"""
+    new_move_anchor = """    iget-object p1, v3, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->h:[I
+
+    iget-object v9, v3, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->j:Landroid/widget/ImageView;
+
+    invoke-virtual {v9, p1}, Landroid/view/View;->getLocationOnScreen([I)V
+
+    aget v5, p1, v4
+
+    invoke-virtual {v9}, Landroid/view/View;->getWidth()I"""
+    if "invoke-virtual {v9, p1}, Landroid/view/View;->getLocationOnScreen([I)V" not in touch_method:
+        if touch_method.count(old_move_anchor) != 1:
+            raise RuntimeError("Could not find root-based moving selection coordinate calculation")
+        touch_method = touch_method.replace(old_move_anchor, new_move_anchor, 1)
+
+    # Reset drag distance at each new press. Preserve the greatest displacement
+    # across MOVE events, including vertical-only movement and returning near
+    # the starting point before release.
+    down_anchor = """    invoke-virtual {p2}, Landroid/view/MotionEvent;->getY()F
+
+    move-result p1
+
+    iput p1, p0, Lsh/b;->e:F"""
+    down_reset = down_anchor + """
+
+    const/4 p1, 0x0
+
+    iput p1, p0, Lsh/b;->f:F"""
+    if "iput p1, p0, Lsh/b;->f:F" not in touch_method[:touch_method.find("if-eqz v3, :cond_21")]:
+        if touch_method.count(down_anchor) != 1:
+            raise RuntimeError("Could not find ACTION_DOWN coordinates to reset drag distance")
+        touch_method = touch_method.replace(down_anchor, down_reset, 1)
+
+    old_distance = """    invoke-static {p1}, Ljava/lang/Math;->abs(F)F
+
+    move-result p1
+
+    iput p1, p0, Lsh/b;->f:F
+
+    invoke-virtual {p2}, Landroid/view/MotionEvent;->getY()F
+
+    move-result p1
+
+    iget v0, p0, Lsh/b;->e:F
+
+    sub-float/2addr p1, v0
+
+    invoke-static {p1}, Ljava/lang/Math;->abs(F)F
+
+    move-result p1
+
+    iget v0, p0, Lsh/b;->f:F
+
+    invoke-static {v0, p1}, Ljava/lang/Math;->max(FF)F
+
+    move-result p1"""
+    new_distance = """    invoke-static {p1}, Ljava/lang/Math;->abs(F)F
+
+    move-result v5
+
+    invoke-virtual {p2}, Landroid/view/MotionEvent;->getY()F
+
+    move-result p1
+
+    iget v0, p0, Lsh/b;->e:F
+
+    sub-float/2addr p1, v0
+
+    invoke-static {p1}, Ljava/lang/Math;->abs(F)F
+
+    move-result p1
+
+    iget v0, p0, Lsh/b;->f:F
+
+    invoke-static {v0, v5}, Ljava/lang/Math;->max(FF)F
+
+    move-result v0
+
+    invoke-static {v0, p1}, Ljava/lang/Math;->max(FF)F
+
+    move-result p1
+
+    iput p1, p0, Lsh/b;->f:F"""
+    if new_distance not in touch_method:
+        if touch_method.count(old_distance) != 1:
+            raise RuntimeError("Could not find movement threshold calculation to preserve drag distance")
+        touch_method = touch_method.replace(old_distance, new_distance, 1)
+
+    old_release = """    iget-boolean v0, v3, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->D:Z
+
+    if-eqz v0, :cond_10
+
+    iget-boolean v0, v3, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->C:Z"""
+    new_release = """    iget-boolean v0, v3, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->D:Z
+
+    if-nez v0, :hymt2_manual_selection_translate
+
+    const/4 v5, 0x1
+
+    if-ne p1, v5, :cond_10
+
+    iget v0, p0, Lsh/b;->f:F
+
+    const/high16 v5, 0x41200000    # 10.0f
+
+    cmpl-float v0, v0, v5
+
+    if-lez v0, :cond_10
+
+    :hymt2_manual_selection_translate
+    iget-boolean v0, v3, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->C:Z"""
+    if ":hymt2_manual_selection_translate" not in touch_method:
+        if touch_method.count(old_release) != 1:
+            raise RuntimeError("Could not find release-time manual-selection state transition")
+        touch_method = touch_method.replace(old_release, new_release, 1)
+
+    required = [
+        "invoke-virtual {v9, p1}, Landroid/view/View;->getLocationOnScreen([I)V",
+        "iput p1, p0, Lsh/b;->f:F",
+        ":hymt2_manual_selection_translate",
+        "if-ne p1, v5, :cond_10"
+    ]
+    missing = [item for item in required if item not in touch_method]
+    if missing:
+        raise RuntimeError("Manual-selection release/coordinate patch incomplete: " + ", ".join(missing))
+
+    touch_text = touch_text[:touch_start] + touch_method + touch_text[touch_end:]
+    touch.write_text(touch_text, encoding="utf-8")
+    print("Verified manual selection: translate on drag release; anchor both ends to the main icon")
+
 def patch_manual_selection_touch_routing(base: Path) -> None:
     """Keep the full-screen result overlay from intercepting manual icon-drag selection."""
     helper = base / "smali_classes2/me/c.smali"
@@ -2490,6 +2689,7 @@ def main() -> int:
     patch_home_ocr_quick_selector(base)
     patch_remove_nurik_attribution(base)
     patch_manual_selection_touch_routing(base)
+    patch_manual_selection_drag_release(base)
     patch_paddle_child_constructor(base)
     patch_picker_callbacks(base)
     patch_settings_click(base)
