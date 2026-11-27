@@ -251,6 +251,29 @@ jobs:
           for rel in ids.xml public.xml; do
             [ -f "$decoded/res/values/$rel" ] && cp "$decoded/res/values/$rel" "$trace/res/values/$rel"
           done
+          # Export the original Tap Translate font chooser implementation and bundled font files.
+          mkdir -p "$trace/font-source"
+          find "$decoded" -type f \( -iname '*.ttf' -o -iname '*.otf' -o -iname '*.ttc' \) -print | while IFS= read -r file; do
+            rel="${file#"$decoded/"}"
+            mkdir -p "$trace/font-source/$(dirname "$rel")"
+            cp "$file" "$trace/font-source/$rel"
+          done
+          : > "$trace/font-class-candidates.txt"
+          grep -RIlE 'Typeface;->create|Typeface;->createFromAsset|fontFamily|font_name|fontName|fonts' "$decoded"/smali* 2>/dev/null | while IFS= read -r file; do
+            rel="${file#"$decoded/"}"
+            printf '%s\\n' "$rel" >> "$trace/font-class-candidates.txt"
+            mkdir -p "$trace/font-source/$(dirname "$rel")"
+            cp "$file" "$trace/font-source/$rel"
+          done
+          for dir in "$decoded"/res/values*; do
+            [ -d "$dir" ] || continue
+            grep -RIlE 'font|typeface' "$dir" 2>/dev/null | while IFS= read -r file; do
+              rel="${file#"$decoded/"}"
+              mkdir -p "$trace/font-source/$(dirname "$rel")"
+              cp "$file" "$trace/font-source/$rel"
+            done
+          done
+          echo "Original font chooser candidates exported."
           echo "Trace files:"
           find "$trace" -type f -printf '%p %s bytes\n' | sort
 
