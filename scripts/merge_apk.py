@@ -138,7 +138,7 @@ OCR_ROW_ID = "0x7f0a04f2"
 OCR_SETTINGS_ACTIVITY = "com.tap_to_translate.snap_translate.hymt2.OcrSettingsActivity"
 PROFILE_ACTIVITY = "com.tap_to_translate.snap_translate.hymt2.DisplayProfilesActivity"
 PROFILE_ROW_ID_NAME = "display_profiles_row"
-PROFILE_ROW_ID = "0x7f0a04f4"
+PROFILE_ROW_ID = "0x7f0a04f3"
 PADDLE_OCR_NAME = "PP-OCRv6 (Comics)"
 MLKIT_OCR_NAME = "ML Kit (Device Text Recognition)"
 
@@ -1157,15 +1157,15 @@ def patch_translation_region_editor(base: Path) -> None:
     """Add edit/delete controls and bind the live translated-region editor."""
     layout = base / "res/layout/container_widget.xml"
     xml = layout.read_text(encoding="utf-8")
-    screenshot = 'android:id="@id/container_widget_iv_screenshot"'
-    if screenshot not in xml:
-        raise RuntimeError("Screenshot toolbar control must exist before region editor")
+    ocr_icon = 'android:id="@id/container_widget_iv_ocr"'
+    if ocr_icon not in xml:
+        raise RuntimeError("Original OCR toolbar control must exist before region editor")
     if 'android:id="@id/container_widget_iv_edit_regions"' not in xml:
-        marker = 'android:id="@id/container_widget_iv_screenshot"'
+        marker = 'android:id="@id/container_widget_iv_ocr"'
         pos = xml.find(marker)
         end = xml.find("/>", pos)
         if pos < 0 or end < 0:
-            raise RuntimeError("Could not isolate screenshot toolbar button")
+            raise RuntimeError("Could not isolate original OCR toolbar button")
         button = '''
             <ImageView android:id="@id/container_widget_iv_edit_regions" android:contentDescription="Редактировать области" android:background="@drawable/bg_circle_black" android:padding="6.0dip" android:layout_width="32.0dip" android:layout_height="32.0dip" android:layout_marginRight="10.0dip" android:src="@drawable/ic_edit_regions" android:alpha="0.55" />
             <ImageView android:id="@id/container_widget_iv_delete_regions" android:contentDescription="Удалить выбранные области" android:background="@drawable/bg_circle_black" android:padding="6.0dip" android:layout_width="32.0dip" android:layout_height="32.0dip" android:layout_marginRight="10.0dip" android:src="@drawable/ic_delete_regions" android:alpha="0.35" android:visibility="gone" />
@@ -1364,139 +1364,6 @@ def patch_floating_icon_z_order(base: Path) -> None:
         service.write_text(source, encoding="utf-8")
     print("Added floating icon re-stack after translation window creation")
 
-def patch_standalone_screenshot_capture(base: Path) -> None:
-    """Consume a fresh MediaProjection frame for camera-only captures before OCR."""
-    capture_callback = base / "smali_classes3/xh/a.smali"
-    callback_text = capture_callback.read_text(encoding="utf-8")
-    callback_method = ".method public final run()V"
-    method_start = callback_text.find(callback_method)
-    method_end = callback_text.find(".end method", method_start)
-    if method_start < 0 or method_end < 0:
-        raise RuntimeError("Could not locate xh/a capture callback")
-    method = callback_text[method_start:method_end]
-    anchor = "    iget-boolean v2, v1, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->s:Z"
-    hook = """    invoke-static {v1, v0}, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager;->consumePendingFrame(Ljava/lang/Object;Landroid/graphics/Bitmap;)Z
-
-    move-result v2
-
-    if-eqz v2, :hymt2_continue_capture_to_ocr
-
-    return-void
-
-    :hymt2_continue_capture_to_ocr
-
-"""
-    if "TranslationScreenshotManager;->consumePendingFrame" not in method:
-        if method.count(anchor) != 1:
-            raise RuntimeError("Could not locate xh/a pre-OCR service-enabled guard")
-        method = method.replace(anchor, hook + anchor, 1)
-        callback_text = callback_text[:method_start] + method + callback_text[method_end:]
-        capture_callback.write_text(callback_text, encoding="utf-8")
-
-    # If Android had to show the MediaProjection permission activity, the original
-    # host ignores its callback while translation is disabled. Resume only our
-    # pending source-only capture; do not change the normal OCR/translation path.
-    service = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali"
-    service_text = service.read_text(encoding="utf-8")
-    permission_method = ".method public onPermission(Loh/i;)V"
-    ps = service_text.find(permission_method)
-    pe = service_text.find(".end method", ps)
-    if ps < 0 or pe < 0:
-        raise RuntimeError("Could not locate ScreenTranslateService.onPermission")
-    body = service_text[ps:pe]
-    permission_anchor = "    iget-boolean p1, p0, Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;->s:Z"
-    permission_hook = "    invoke-static {p0}, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager;->onProjectionPermissionReady(Ljava/lang/Object;)V\n\n"
-    if "TranslationScreenshotManager;->onProjectionPermissionReady" not in body:
-        if body.count(permission_anchor) != 1:
-            raise RuntimeError("Could not locate projection-permission callback guard")
-        body = body.replace(permission_anchor, permission_hook + permission_anchor, 1)
-        service_text = service_text[:ps] + body + service_text[pe:]
-        service.write_text(service_text, encoding="utf-8")
-
-    if "TranslationScreenshotManager;->consumePendingFrame" not in capture_callback.read_text(encoding="utf-8"):
-        raise RuntimeError("Standalone screenshot frame-consumption hook was not installed")
-    if "TranslationScreenshotManager;->onProjectionPermissionReady" not in service.read_text(encoding="utf-8"):
-        raise RuntimeError("Standalone screenshot permission-resume hook was not installed")
-    print("Installed standalone MediaProjection screenshot capture before OCR dispatch")
-
-
-def patch_floating_screenshot_button(base: Path) -> None:
-    """Add a passive camera button while preserving the host floating touch listener."""
-    widget = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget.smali"
-    wt = widget.read_text(encoding="utf-8")
-    ctor = ".method public constructor <init>(Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;Lme/c;)V"
-    cs = wt.find(ctor)
-    ce = wt.find(".end method", cs)
-    if cs < 0 or ce < 0:
-        raise RuntimeError("Could not locate FloatingIconWidget service constructor")
-    body = wt[cs:ce]
-    attach_hook = "    invoke-static {p0, p1}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->attach(Landroid/view/View;Ljava/lang/Object;)V"
-    if attach_hook not in body:
-        anchor = "    invoke-direct {p0}, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->getAndUpdateUI()V"
-        if body.count(anchor) != 1:
-            raise RuntimeError("Could not find floating widget initialization point")
-        body = body.replace(anchor, anchor + "\n\n" + attach_hook, 1)
-
-    # The very same listener instance must see touches that begin on the
-    # clickable main ImageView; otherwise its OnClickListener hides the root
-    # LinearLayout from Android's touch dispatcher and drag cannot start there.
-    root_listener = "    invoke-virtual {p0, p2}, Landroid/view/View;->setOnTouchListener(Landroid/view/View$OnTouchListener;)V"
-    icon_listener = """    invoke-virtual {p0, p2}, Landroid/view/View;->setOnTouchListener(Landroid/view/View$OnTouchListener;)V
-
-    iget-object v2, p0, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->j:Landroid/widget/ImageView;
-
-    invoke-virtual {v2, p2}, Landroid/view/View;->setOnTouchListener(Landroid/view/View$OnTouchListener;)V"""
-    if "iget-object v2, p0, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->j:Landroid/widget/ImageView;" not in body:
-        if body.count(root_listener) != 1:
-            raise RuntimeError("Could not find original floating root OnTouchListener registration")
-        body = body.replace(root_listener, icon_listener, 1)
-
-    wt = wt[:cs] + body + wt[ce:]
-    widget.write_text(wt, encoding="utf-8")
-
-    # Keep the original sh/b algorithm intact: record camera touch before it
-    # runs and suppress GestureDetector only after native movement/snap handling.
-    touch = base / "smali_classes3/sh/b.smali"
-    tt = touch.read_text(encoding="utf-8")
-    method = ".method public final onTouch(Landroid/view/View;Landroid/view/MotionEvent;)Z"
-    ts = tt.find(method)
-    te = tt.find(".end method", ts)
-    if ts < 0 or te < 0:
-        raise RuntimeError("Could not locate original sh/b.onTouch")
-    tb = tt[ts:te]
-    before = "    invoke-static {p0, p2}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->onHostTouch(Ljava/lang/Object;Landroid/view/MotionEvent;)V"
-    if before not in tb:
-        local_decl = "    .locals 11\n"
-        if tb.count(local_decl) != 1:
-            raise RuntimeError("Could not identify sh/b.onTouch local register declaration")
-        tb = tb.replace(local_decl, local_decl + "\n" + before + "\n", 1)
-
-    detector_anchor = "    iget-object p1, p0, Lsh/b;->b:Landroid/view/GestureDetector;"
-    if "FloatingScreenshotButton;->consumeCameraGesture" not in tb:
-        pos = tb.rfind(detector_anchor)
-        if pos < 0:
-            raise RuntimeError("Could not locate final GestureDetector call in sh/b.onTouch")
-        suppress = """    invoke-static {p0, p2}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->consumeCameraGesture(Ljava/lang/Object;Landroid/view/MotionEvent;)Z
-
-    move-result v0
-
-    if-eqz v0, :hymt2_keep_native_gesture
-
-    const/4 v0, 0x1
-
-    return v0
-
-    :hymt2_keep_native_gesture
-
-"""
-        tb = tb[:pos] + suppress + tb[pos:]
-
-    tt = tt[:ts] + tb + tt[te:]
-    touch.write_text(tt, encoding="utf-8")
-    print("Installed passive camera touch routing and preserved native floating drag logic")
-
-
-
 def patch_per_panel_fonts(base: Path) -> None:
     """Apply transient per-region typefaces before the existing auto-fit layout."""
     for rel, owner in (
@@ -1517,358 +1384,6 @@ def patch_per_panel_fonts(base: Path) -> None:
             path.write_text(text, encoding="utf-8")
     print("Installed per-panel font hooks in both APK219 text renderers")
 
-
-def patch_screenshot_button(base: Path) -> None:
-    """Add a screenshot button to the result toolbar and wire it to the helper saver."""
-    layout = base / "res/layout/container_widget.xml"
-    xml_text = layout.read_text(encoding="utf-8")
-    button_id = "container_widget_iv_screenshot"
-    if button_id not in xml_text:
-        pattern = re.compile(r'(<ImageView\b(?=[^>]*android:id="@id/container_widget_iv_ocr")[^>]*/>)')
-        button = (
-            '            <ImageView android:id="@id/container_widget_iv_screenshot" '
-            'android:contentDescription="Скриншот перевода" '
-            'android:background="@drawable/bg_circle_black" android:padding="6.0dip" '
-            'android:layout_width="32.0dip" android:layout_height="32.0dip" '
-            'android:layout_marginRight="10.0dip" android:src="@drawable/ic_screenshot_camera" '
-            'android:alpha="0.5" />'
-        )
-        xml_text, count = pattern.subn(lambda match: match.group(1) + "\n" + button, xml_text, count=1)
-        if count != 1:
-            raise RuntimeError("Could not find OCR icon in container_widget.xml")
-        layout.write_text(xml_text, encoding="utf-8")
-
-    ids = base / "res/values/ids.xml"
-    ids_text = ids.read_text(encoding="utf-8")
-    if button_id not in ids_text:
-        anchor = '    <item type="id" name="container_widget_iv_ocr" />\n'
-        if ids_text.count(anchor) != 1:
-            raise RuntimeError("Could not register screenshot button in ids.xml")
-        ids.write_text(ids_text.replace(anchor, anchor + f'    <item type="id" name="{button_id}" />\n', 1), encoding="utf-8")
-
-    public = base / "res/values/public.xml"
-    public_text = public.read_text(encoding="utf-8")
-    if button_id not in public_text:
-        if re.search(r'id="0x7f0a04f3"', public_text):
-            raise RuntimeError("Resource ID 0x7f0a04f3 is already in use")
-        anchor = '    <public type="id" name="ocr_settings_row" id="0x7f0a04f2" />\n'
-        if public_text.count(anchor) != 1:
-            raise RuntimeError("Could not register screenshot resource ID after OCR settings row")
-        public.write_text(
-            public_text.replace(
-                anchor,
-                anchor + f'    <public type="id" name="{button_id}" id="0x7f0a04f3" />\n',
-                1,
-            ),
-            encoding="utf-8",
-        )
-
-    # A small vector camera remains sharp at the 32 dp toolbar size.
-    icon = base / "res/drawable/ic_screenshot_camera.xml"
-    icon.parent.mkdir(parents=True, exist_ok=True)
-    icon.write_text('''<?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="24dp"
-    android:height="24dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
-    <path
-        android:fillColor="@android:color/transparent"
-        android:strokeColor="#FFFFFFFF"
-        android:strokeWidth="1.8"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:pathData="M9,4 L7.2,6 H4.5 C3.4,6 2.5,6.9 2.5,8 V18 C2.5,19.1 3.4,20 4.5,20 H19.5 C20.6,20 21.5,19.1 21.5,18 V8 C21.5,6.9 20.6,6 19.5,6 H16.8 L15,4 Z" />
-    <path
-        android:fillColor="@android:color/transparent"
-        android:strokeColor="#FFFFFFFF"
-        android:strokeWidth="1.8"
-        android:pathData="M12,9 A3.5,3.5 0,1 0,12 16 A3.5,3.5 0,1 0,12 9 Z" />
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M18,8.5 A0.9,0.9 0,1 0,18 10.3 A0.9,0.9 0,1 0,18 8.5 Z" />
-</vector>
-''', encoding="utf-8")
-
-    service = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService.smali"
-    service_text = service.read_text(encoding="utf-8")
-    method_start = service_text.find(".method public final h()Lrh/c;")
-    if method_start < 0:
-        raise RuntimeError("ScreenTranslateService.h() result-overlay constructor was not found")
-    method_end = service_text.find(".end method", method_start)
-    if method_end < 0:
-        raise RuntimeError("Could not isolate ScreenTranslateService.h()")
-    method = service_text[method_start:method_end]
-    if "TranslationScreenshotClickListener" not in method:
-        if "    .locals 14\n" not in method:
-            raise RuntimeError("Unexpected local-register layout in ScreenTranslateService.h()")
-        # Keep the original register count so p0 remains encodable as v14.
-        # v1/v2 are dead after the preceding listener is attached.
-        click_anchor = '''    invoke-virtual {v2, v1}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
-
-    new-instance v1, Lrh/b;'''
-        click_hook = '''    invoke-virtual {v2, v1}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
-
-    const v1, 0x7f0a04f3
-
-    invoke-virtual {v0, v1}, Landroid/view/View;->findViewById(I)Landroid/view/View;
-
-    move-result-object v1
-
-    check-cast v1, Landroid/widget/ImageView;
-
-    new-instance v2, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;
-
-    invoke-direct {v2, v0}, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;-><init>(Lrh/c;)V
-
-    invoke-virtual {v1, v2}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
-
-    new-instance v1, Lrh/b;'''
-        if method.count(click_anchor) != 1:
-            raise RuntimeError("Could not locate the OCR toolbar listener insertion point")
-        method = method.replace(click_anchor, click_hook, 1)
-        service_text = service_text[:method_start] + method + service_text[method_end:]
-        service.write_text(service_text, encoding="utf-8")
-
-    listener = base / "smali_classes5/com/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener.smali"
-    listener.parent.mkdir(parents=True, exist_ok=True)
-    listener.write_text('''.class public final Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;
-.super Ljava/lang/Object;
-
-# interfaces
-.implements Landroid/view/View$OnClickListener;
-
-.field private final a:Lrh/c;
-
-.method public constructor <init>(Lrh/c;)V
-    .locals 0
-    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
-    iput-object p1, p0, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;->a:Lrh/c;
-    return-void
-.end method
-
-.method public final onClick(Landroid/view/View;)V
-    .locals 1
-    iget-object v0, p0, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;->a:Lrh/c;
-    invoke-static {v0}, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager;->captureFromOverlay(Ljava/lang/Object;)V
-    return-void
-.end method
-''', encoding="utf-8")
-
-    # Verify the resource, icon, and host callback are all included.
-    if button_id not in layout.read_text(encoding="utf-8"):
-        raise RuntimeError("Screenshot button is absent from container_widget.xml")
-    if "TranslationScreenshotClickListener" not in service.read_text(encoding="utf-8"):
-        raise RuntimeError("Screenshot toolbar button has no click listener")
-    if not icon.is_file() or not listener.is_file():
-        raise RuntimeError("Screenshot icon or click listener was not created")
-    print("Added translation screenshot toolbar button and helper callback")
-
-
-
-
-def patch_manual_selection_drag_release(base: Path) -> None:
-    """Finish a manual selection on release after an actual drag.
-
-    The original handler uses D as a two-stage confirmation flag. When the
-    user double-taps and drags during the second press, the first ACTION_UP
-    only sets D and leaves the selection waiting. If the drag moved beyond
-    the app's own 10 px movement threshold, finish translation on that release.
-    Also measure the selection from the main icon ImageView, not the enlarged
-    parent LinearLayout which now also contains the camera button.
-    """
-    gesture = base / "smali_classes2/lb/b.smali"
-    if not gesture.exists():
-        gesture = base / "smali_classes3/lb/b.smali"
-    if not gesture.exists():
-        raise RuntimeError("Could not locate floating-icon GestureDetector listener lb/b.smali")
-
-    gesture_text = gesture.read_text(encoding="utf-8")
-    double_tap_header = ".method public onDoubleTap(Landroid/view/MotionEvent;)Z"
-    double_start = gesture_text.find(double_tap_header)
-    double_end = gesture_text.find(".end method", double_start)
-    if double_start < 0 or double_end < 0:
-        raise RuntimeError("Could not isolate lb/b.onDoubleTap")
-    double_method = gesture_text[double_start:double_end]
-
-    icon_field = "Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->j:Landroid/widget/ImageView;"
-    old_anchor = """    iget-object v2, v0, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->i:[I
-
-    invoke-virtual {v0, v2}, Landroid/view/View;->getLocationOnScreen([I)V"""
-    new_anchor = """    iget-object v2, v0, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->i:[I
-
-    iget-object v6, v0, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->j:Landroid/widget/ImageView;
-
-    invoke-virtual {v6, v2}, Landroid/view/View;->getLocationOnScreen([I)V"""
-    if "invoke-virtual {v6, v2}, Landroid/view/View;->getLocationOnScreen([I)V" not in double_method:
-        if double_method.count(old_anchor) != 1:
-            raise RuntimeError("Could not find the original root-based double-tap selection origin")
-        double_method = double_method.replace(old_anchor, new_anchor, 1)
-
-    old_width = "    invoke-virtual {v0}, Landroid/view/View;->getWidth()I"
-    new_width = "    invoke-virtual {v6}, Landroid/view/View;->getWidth()I"
-    if new_width not in double_method:
-        if double_method.count(old_width) != 1:
-            raise RuntimeError("Could not find the original double-tap selection width")
-        double_method = double_method.replace(old_width, new_width, 1)
-    if icon_field not in double_method or new_width not in double_method:
-        raise RuntimeError("Double-tap origin is not anchored to the main floating icon")
-
-    gesture_text = gesture_text[:double_start] + double_method + gesture_text[double_end:]
-    gesture.write_text(gesture_text, encoding="utf-8")
-
-    touch = base / "smali_classes3/sh/b.smali"
-    if not touch.exists():
-        raise RuntimeError("Could not locate floating-icon touch listener sh/b.smali")
-    touch_text = touch.read_text(encoding="utf-8")
-    touch_header = ".method public final onTouch(Landroid/view/View;Landroid/view/MotionEvent;)Z"
-    touch_start = touch_text.find(touch_header)
-    touch_end = touch_text.find(".end method", touch_start)
-    if touch_start < 0 or touch_end < 0:
-        raise RuntimeError("Could not isolate sh/b.onTouch")
-    touch_method = touch_text[touch_start:touch_end]
-
-    # Keep the moving end of the selection anchored to the same main icon.
-    old_move_anchor = """    iget-object p1, v3, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->h:[I
-
-    invoke-virtual {v3, p1}, Landroid/view/View;->getLocationOnScreen([I)V
-
-    aget v5, p1, v4
-
-    invoke-virtual {v3}, Landroid/view/View;->getWidth()I"""
-    new_move_anchor = """    iget-object p1, v3, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->h:[I
-
-    iget-object v9, v3, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->j:Landroid/widget/ImageView;
-
-    invoke-virtual {v9, p1}, Landroid/view/View;->getLocationOnScreen([I)V
-
-    aget v5, p1, v4
-
-    invoke-virtual {v9}, Landroid/view/View;->getWidth()I"""
-    if "invoke-virtual {v9, p1}, Landroid/view/View;->getLocationOnScreen([I)V" not in touch_method:
-        if touch_method.count(old_move_anchor) != 1:
-            raise RuntimeError("Could not find root-based moving selection coordinate calculation")
-        touch_method = touch_method.replace(old_move_anchor, new_move_anchor, 1)
-
-    # Reset drag distance at each new press. Preserve the greatest displacement
-    # across MOVE events, including vertical-only movement and returning near
-    # the starting point before release.
-    down_anchor = """    invoke-virtual {p2}, Landroid/view/MotionEvent;->getY()F
-
-    move-result p1
-
-    iput p1, p0, Lsh/b;->e:F"""
-    down_reset = down_anchor + """
-
-    const/4 p1, 0x0
-
-    iput p1, p0, Lsh/b;->f:F"""
-    if "iput p1, p0, Lsh/b;->f:F" not in touch_method[:touch_method.find("if-eqz v3, :cond_21")]:
-        if touch_method.count(down_anchor) != 1:
-            raise RuntimeError("Could not find ACTION_DOWN coordinates to reset drag distance")
-        touch_method = touch_method.replace(down_anchor, down_reset, 1)
-
-    old_distance = """    invoke-static {p1}, Ljava/lang/Math;->abs(F)F
-
-    move-result p1
-
-    iput p1, p0, Lsh/b;->f:F
-
-    invoke-virtual {p2}, Landroid/view/MotionEvent;->getY()F
-
-    move-result p1
-
-    iget v0, p0, Lsh/b;->e:F
-
-    sub-float/2addr p1, v0
-
-    invoke-static {p1}, Ljava/lang/Math;->abs(F)F
-
-    move-result p1
-
-    iget v0, p0, Lsh/b;->f:F
-
-    invoke-static {v0, p1}, Ljava/lang/Math;->max(FF)F
-
-    move-result p1"""
-    new_distance = """    invoke-static {p1}, Ljava/lang/Math;->abs(F)F
-
-    move-result v5
-
-    invoke-virtual {p2}, Landroid/view/MotionEvent;->getY()F
-
-    move-result p1
-
-    iget v0, p0, Lsh/b;->e:F
-
-    sub-float/2addr p1, v0
-
-    invoke-static {p1}, Ljava/lang/Math;->abs(F)F
-
-    move-result p1
-
-    iget v0, p0, Lsh/b;->f:F
-
-    invoke-static {v0, v5}, Ljava/lang/Math;->max(FF)F
-
-    move-result v0
-
-    invoke-static {v0, p1}, Ljava/lang/Math;->max(FF)F
-
-    move-result p1
-
-    iput p1, p0, Lsh/b;->f:F"""
-    if new_distance not in touch_method:
-        if touch_method.count(old_distance) != 1:
-            raise RuntimeError("Could not find movement threshold calculation to preserve drag distance")
-        touch_method = touch_method.replace(old_distance, new_distance, 1)
-
-    old_release = """    iget-boolean v0, v3, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->D:Z
-
-    if-eqz v0, :cond_10
-
-    iget-boolean v0, v3, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->C:Z"""
-    new_release = """    iget-boolean v0, v3, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->D:Z
-
-    if-nez v0, :hymt2_manual_selection_translate
-
-    invoke-virtual {p2}, Landroid/view/MotionEvent;->getAction()I
-
-    move-result v5
-
-    const/4 v0, 0x1
-
-    if-ne v5, v0, :cond_10
-
-    iget v0, p0, Lsh/b;->f:F
-
-    const/high16 v5, 0x41200000    # 10.0f
-
-    cmpl-float v0, v0, v5
-
-    if-lez v0, :cond_10
-
-    :hymt2_manual_selection_translate
-    iget-boolean v0, v3, Lcom/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget;->C:Z"""
-    if ":hymt2_manual_selection_translate" not in touch_method:
-        if touch_method.count(old_release) != 1:
-            raise RuntimeError("Could not find release-time manual-selection state transition")
-        touch_method = touch_method.replace(old_release, new_release, 1)
-
-    required = [
-        "invoke-virtual {v9, p1}, Landroid/view/View;->getLocationOnScreen([I)V",
-        "iput p1, p0, Lsh/b;->f:F",
-        ":hymt2_manual_selection_translate",
-        "invoke-virtual {p2}, Landroid/view/MotionEvent;->getAction()I",
-        "if-ne v5, v0, :cond_10"
-    ]
-    missing = [item for item in required if item not in touch_method]
-    if missing:
-        raise RuntimeError("Manual-selection release/coordinate patch incomplete: " + ", ".join(missing))
-
-    touch_text = touch_text[:touch_start] + touch_method + touch_text[touch_end:]
-    touch.write_text(touch_text, encoding="utf-8")
-    print("Verified manual selection: translate on drag release; anchor both ends to the main icon")
 
 def patch_manual_selection_touch_routing(base: Path) -> None:
     """Keep the full-screen result overlay from intercepting manual icon-drag selection."""
@@ -2275,19 +1790,19 @@ def patch_display_profiles(base: Path) -> None:
     ids = base / "res/values/ids.xml"
     ids_text = ids.read_text(encoding="utf-8")
     if PROFILE_ROW_ID_NAME not in ids_text:
-        anchor = f'    <item type="id" name="container_widget_iv_screenshot" />\n'
+        anchor = f'    <item type="id" name="{OCR_ROW_ID_NAME}" />\n'
         if anchor not in ids_text:
-            raise RuntimeError("Could not locate last allocated resource id for profile manager")
+            raise RuntimeError("Could not locate OCR settings row ID for profile manager")
         ids.write_text(ids_text.replace(anchor, anchor + f'    <item type="id" name="{PROFILE_ROW_ID_NAME}" />\n', 1), encoding="utf-8")
 
     public = base / "res/values/public.xml"
     public_text = public.read_text(encoding="utf-8")
     if PROFILE_ROW_ID_NAME not in public_text:
-        if re.search(r'id="0x7f0a04f4"', public_text):
-            raise RuntimeError("Resource ID 0x7f0a04f4 is already occupied")
-        anchor = '    <public type="id" name="container_widget_iv_screenshot" id="0x7f0a04f3" />\n'
+        if re.search(r'id="0x7f0a04f3"', public_text):
+            raise RuntimeError("Resource ID 0x7f0a04f3 is already occupied")
+        anchor = f'    <public type="id" name="{OCR_ROW_ID_NAME}" id="{OCR_ROW_ID}" />\n'
         if public_text.count(anchor) != 1:
-            raise RuntimeError("Could not locate screenshot button resource ID")
+            raise RuntimeError("Could not locate OCR settings resource ID")
         public.write_text(
             public_text.replace(
                 anchor,
@@ -2473,8 +1988,6 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
                 allowed_classes = (
                     "com/tap_to_translate/snap_translate/hymt2/OcrSettingsActivity",
                     "com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor",
-                    "com/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager",
-                    "com/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton",
                     "com/tap_to_translate/snap_translate/hymt2/PanelFontStore",
                     "com/tap_to_translate/snap_translate/hymt2/FloatingIconZOrderFix",
                     "com/tap_to_translate/snap_translate/hymt2/DisplayProfilesActivity",
@@ -2694,16 +2207,12 @@ def main() -> int:
     patch_home_ocr_quick_selector(base)
     patch_remove_nurik_attribution(base)
     patch_manual_selection_touch_routing(base)
-    patch_manual_selection_drag_release(base)
     patch_paddle_child_constructor(base)
     patch_picker_callbacks(base)
     patch_settings_click(base)
     patch_ocr_settings_click(base)
     patch_resources(base)
     patch_ocr_resources(base)
-    patch_screenshot_button(base)
-    patch_floating_screenshot_button(base)
-    patch_standalone_screenshot_capture(base)
     patch_per_panel_fonts(base)
     patch_translation_region_editor(base)
     patch_floating_icon_z_order(base)
