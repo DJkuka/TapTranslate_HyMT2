@@ -85,7 +85,7 @@ public final class BubbleTextLayout {
         if (area.width() < 4 || area.height() < 4) return false;
 
         float originalSize = paint.getTextSize();
-        float safeScale = Math.max(0.25f, Math.min(2.50f, fontScale));
+        float safeScale = Math.max(0.25f, Math.min(5.00f, fontScale));
         // Fit the natural text size first. Apply the user's scale to that real
         // fitted size, not to maxTextSize (which made large maxima appear stuck).
         float upper = Math.max(minTextSize, maxTextSize);
