@@ -7,13 +7,11 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
-import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.widget.ImageView;
-import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.Toast;
 
@@ -23,8 +21,8 @@ import java.util.Map;
 import java.util.WeakHashMap;
 
 /**
- * Floating camera button integrated with the host floating window's touch
- * stream. Both icons remain part of one draggable WindowManager view.
+ * Optional camera button that shares the host floating window's touch stream.
+ * The host sh/b listener remains responsible for all movement and edge snapping.
  */
 public final class FloatingScreenshotButton {
     private static final String TAG = "TapTranslateFloatShot";
@@ -40,8 +38,8 @@ public final class FloatingScreenshotButton {
 
     private FloatingScreenshotButton() { }
 
-    /** Called after the host has installed its original click listener. */
-    public static void attach(View widget, Object ignoredHostRegister) {
+    /** Add the camera as a passive child; it must not consume the host's touch stream. */
+    public static void attach(View widget, Object ignoredRegister) {
         if (widget == null) return;
         try {
             View iconContainer = widget.findViewById(ICON_CONTAINER_ID);
@@ -49,7 +47,6 @@ public final class FloatingScreenshotButton {
                 Log.w(TAG, "Floating icon container is not ready");
                 return;
             }
-
             ViewGroup row = (ViewGroup) iconContainer.getParent();
             View button = row.findViewWithTag(BUTTON_TAG);
             if (button == null) {
@@ -72,100 +69,105 @@ public final class FloatingScreenshotButton {
                 camera.setBackground(background);
                 camera.setAlpha(0.9f);
 
-                // Important: neither child consumes the host touch stream.
-                // sh/b remains the single source of drag, edge-snap and tap handling.
+                // Critical: this child must never become the touch target.
+                // Its events then bubble to the host FloatingIconWidget listener.
                 camera.setClickable(false);
-                camera.setFocusable(false);
                 camera.setLongClickable(false);
-                if (android.os.Build.VERSION.SDK_INT >= 26) {
-                    camera.setTooltipText("Скриншот экрана перевода");
-                }
-                LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(size, size);
-                params.gravity = Gravity.CENTER_VERTICAL;
-                params.leftMargin = dp(context, 5);
+                camera.setFocusable(false);
+                camera.setFocusableInTouchMode(false);
+                ViewGroup.LayoutParams params = new ViewGroup.LayoutParams(size, size);
                 row.addView(camera, params);
                 button = camera;
             }
-
             button.setVisibility(isEnabled(widget.getContext()) ? View.VISIBLE : View.GONE);
-
-            // Keep the original click listener attached, but let pointer events
-            // bubble to FloatingIconWidget so dragging also works from the icon.
         } catch (Throwable error) {
             Log.e(TAG, "Could not attach floating screenshot button", error);
         }
     }
 
     /**
-     * Receives the same MotionEvents as the host sh/b listener, after its native
-     * drag/snap processing. Returning true suppresses the host tap detector for
-     * gestures which began on one of our two icon surfaces.
+     * Called at the beginning of sh/b.onTouch. Only records the touched region;
+     * always lets the host perform its original movement, snapping and state logic.
      */
-    public static boolean handleTouch(Object touchListener, MotionEvent event) {
-        if (touchListener == null || event == null) return false;
+    public static void onHostTouch(Object listener, MotionEvent event) {
+        if (listener == null || event == null) return;
         try {
-            View widget = (View) readField(touchListener, "c");
-            if (widget == null) return false;
+            View widget = (View) readField(listener, "c");
+            if (widget == null) return;
             int action = event.getActionMasked();
-            TouchState state;
 
             if (action == MotionEvent.ACTION_DOWN) {
                 View camera = findButton(widget);
                 View mainIcon = widget.findViewById(MAIN_ICON_ID);
-                View target = isInside(camera, event) ? camera : null;
-                if (target == null) {
-                    TOUCHES.remove(touchListener);
-                    return false;
+                int kind = isInside(camera, event) ? TouchState.CAMERA
+                        : (isInside(mainIcon, event) ? TouchState.MAIN_ICON : TouchState.OTHER);
+                if (kind == TouchState.OTHER) {
+                    TOUCHES.remove(listener);
+                    return;
                 }
-                int kind = TouchState.CAMERA;
-                state = new TouchState(widget, target, kind,
+
+                TouchState state = new TouchState(widget, kind,
                         event.getRawX(), event.getRawY());
-                TOUCHES.put(touchListener, state);
-                return true;
-            }
-
-            state = TOUCHES.get(touchListener);
-            if (state == null) return false;
-
-            if (action == MotionEvent.ACTION_MOVE) {
-                float dx = Math.abs(event.getRawX() - state.downX);
-                float dy = Math.abs(event.getRawY() - state.downY);
-                int slop = ViewConfiguration.get(widget.getContext()).getScaledTouchSlop();
-                if (dx > slop || dy > slop) {
-                    state.moved = true;
-                    cancelLongPress(state);
-                }
-                return true;
-            }
-
-            if (action == MotionEvent.ACTION_UP) {
-                TOUCHES.remove(touchListener);
-                cancelLongPress(state);
-                if (!state.moved && !state.longPressed) {
-                    if (state.kind == TouchState.CAMERA) {
-                        Object service = resolveService(widget);
-                        if (service != null) {
-                            TranslationScreenshotManager.captureFromService(service);
-                        } else {
-                            Toast.makeText(widget.getContext().getApplicationContext(),
-                                    "Не удалось получить службу перевода",
-                                    Toast.LENGTH_SHORT).show();
+                TOUCHES.put(listener, state);
+                if (kind == TouchState.MAIN_ICON) {
+                    state.longPress = () -> {
+                        if (TOUCHES.get(listener) == state && !state.moved) {
+                            state.longPressed = true;
+                            showToggleMenu(widget);
                         }
-                    }
+                    };
+                    MAIN.postDelayed(state.longPress,
+                            ViewConfiguration.getLongPressTimeout());
                 }
-                return true;
+            } else {
+                TouchState state = TOUCHES.get(listener);
+                if (state == null) return;
+                if (action == MotionEvent.ACTION_MOVE) {
+                    float dx = Math.abs(event.getRawX() - state.downX);
+                    float dy = Math.abs(event.getRawY() - state.downY);
+                    int slop = ViewConfiguration.get(widget.getContext()).getScaledTouchSlop();
+                    if (dx > slop || dy > slop) {
+                        state.moved = true;
+                        cancelLongPress(state);
+                    }
+                } else if (action == MotionEvent.ACTION_CANCEL) {
+                    cancelLongPress(state);
+                    TOUCHES.remove(listener);
+                }
             }
-
-            if (action == MotionEvent.ACTION_CANCEL) {
-                TOUCHES.remove(touchListener);
-                cancelLongPress(state);
-                return true;
-            }
-            return true;
         } catch (Throwable error) {
-            Log.e(TAG, "Floating icon touch routing failed", error);
-            return false;
+            Log.e(TAG, "Could not track floating icon touch", error);
         }
+    }
+
+    /**
+     * Called after the host has processed each event but immediately before
+     * GestureDetector. Camera gestures skip only GestureDetector's icon action;
+     * host drag/edge snapping always runs. A tap saves the current frame.
+     */
+    public static boolean consumeCameraGesture(Object listener, MotionEvent event) {
+        if (listener == null || event == null) return false;
+        TouchState state = TOUCHES.get(listener);
+        if (state == null || state.kind != TouchState.CAMERA) return false;
+
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_UP) {
+            TOUCHES.remove(listener);
+            cancelLongPress(state);
+            if (!state.moved) {
+                Object service = resolveService(state.widget);
+                if (service != null) {
+                    TranslationScreenshotManager.captureFromService(service);
+                } else {
+                    Toast.makeText(state.widget.getContext().getApplicationContext(),
+                            "Не удалось получить службу перевода", Toast.LENGTH_SHORT).show();
+                }
+            }
+        } else if (action == MotionEvent.ACTION_CANCEL) {
+            TOUCHES.remove(listener);
+            cancelLongPress(state);
+        }
+        return true;
     }
 
     public static void showToggleMenu(View widget) {
@@ -239,7 +241,7 @@ public final class FloatingScreenshotButton {
             } catch (NoSuchFieldException missing) {
                 type = type.getSuperclass();
             } catch (Throwable error) {
-                Log.w(TAG, "Could not read " + name + " from " + instance.getClass().getName(), error);
+                Log.w(TAG, "Could not read " + name, error);
                 return null;
             }
         }
@@ -256,10 +258,10 @@ public final class FloatingScreenshotButton {
     }
 
     private static final class TouchState {
+        static final int OTHER = 0;
         static final int MAIN_ICON = 1;
         static final int CAMERA = 2;
         final View widget;
-        final View target;
         final int kind;
         final float downX;
         final float downY;
@@ -267,9 +269,8 @@ public final class FloatingScreenshotButton {
         boolean longPressed;
         Runnable longPress;
 
-        TouchState(View widget, View target, int kind, float downX, float downY) {
+        TouchState(View widget, int kind, float downX, float downY) {
             this.widget = widget;
-            this.target = target;
             this.kind = kind;
             this.downX = downX;
             this.downY = downY;
