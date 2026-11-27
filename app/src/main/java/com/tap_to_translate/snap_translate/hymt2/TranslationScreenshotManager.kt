@@ -238,6 +238,22 @@ object TranslationScreenshotManager {
         method.invoke(capture, null)
     }
 
+    /** Resume a pending source-only screenshot after Android grants projection access. */
+    @JvmStatic
+    fun onProjectionPermissionReady(service: Any?) {
+        if (service == null) return
+        val request = synchronized(pendingCaptures) { pendingCaptures[service] } ?: return
+        try {
+            val capture = resolveCaptureController(service)
+                ?: throw IllegalStateException("Контроллер захвата экрана недоступен")
+            requestFreshFrame(capture)
+            Log.i(TAG, "Resumed pending source-only screenshot after projection permission")
+        } catch (t: Throwable) {
+            Log.e(TAG, "Could not resume screenshot after projection permission", t)
+            toast(request.context, "Не удалось продолжить снимок: " + (t.message ?: "ошибка"))
+        }
+    }
+
     private fun findScreenTranslateService(root: Any): Any? {
         val visited = java.util.Collections.newSetFromMap(
             java.util.IdentityHashMap<Any, Boolean>()
