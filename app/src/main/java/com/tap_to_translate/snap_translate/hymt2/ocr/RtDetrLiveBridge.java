@@ -163,7 +163,11 @@ public final class RtDetrLiveBridge {
         final boolean paddleEnabled = isPaddleSelected();
         final boolean classifyForFreeTextOpacity = isSeparateFreeTextAlphaEnabled(context);
         final boolean pageMaskEnabled = isBubblePopPageMaskEnabled(context);
-        if (!paddleEnabled && !classifyForFreeTextOpacity && !pageMaskEnabled) {
+        // A manually forced free-text panel needs a fresh BubblePop contour even
+        // when the optional page-mask preference is off. Generate it on the next
+        // screenshot rather than silently keeping rectangular-only occlusion.
+        final boolean pageMaskRequired = pageMaskEnabled || hasForcedFreeTextOverlays();
+        if (!paddleEnabled && !classifyForFreeTextOpacity && !pageMaskRequired) {
             synchronized (LOCK) {
                 PendingFrame previous = PENDING.remove(owner);
                 if (previous != null && !previous.task.isDone()) previous.task.cancel(true);
@@ -210,7 +214,7 @@ public final class RtDetrLiveBridge {
                                         detectorError);
                             }
 
-                            if (isBubblePopPageMaskEnabled(context)) {
+                            if (pageMaskRequired) {
                                 try {
                                     DetectedRegion pageMask = getPageMaskDetector(context).detect(snapshot);
                                     if (pageMask != null) {
@@ -269,7 +273,8 @@ public final class RtDetrLiveBridge {
         final boolean paddleEnabled = isPaddleSelected();
         final boolean freeAlphaEnabled = isSeparateFreeTextAlphaEnabled(context);
         final boolean pageMaskEnabled = isBubblePopPageMaskEnabled(context);
-        if (!paddleEnabled && !freeAlphaEnabled && !pageMaskEnabled) {
+        final boolean pageMaskRequired = pageMaskEnabled || hasForcedFreeTextOverlays();
+        if (!paddleEnabled && !freeAlphaEnabled && !pageMaskRequired) {
             synchronized (LOCK) { ACTIVE_REGIONS.remove(owner); }
             return;
         }
@@ -305,7 +310,7 @@ public final class RtDetrLiveBridge {
             ACTIVE_REGIONS.put(owner, new ArrayList<>(regions));
         }
         Log.i(TAG, "region association ready: regions=" + regions.size()
-                + " paddle=" + paddleEnabled + " bubblepop=" + pageMaskEnabled);
+                + " paddle=" + paddleEnabled + " bubblepop=" + pageMaskRequired);
 
         if (!paddleEnabled) return;
 
@@ -524,6 +529,16 @@ public final class RtDetrLiveBridge {
             Log.w(TAG, "Could not read BubblePop page-mask preference; feature disabled", error);
             return false;
         }
+    }
+
+    /** True while at least one editor panel explicitly requires contour occlusion. */
+    private static boolean hasForcedFreeTextOverlays() {
+        synchronized (FORCED_FREE_TEXT) {
+            for (Boolean enabled : FORCED_FREE_TEXT.values()) {
+                if (Boolean.TRUE.equals(enabled)) return true;
+            }
+        }
+        return false;
     }
 
     private static BubblePopPageMaskDetector getPageMaskDetector(Context context) throws Exception {
@@ -884,9 +899,13 @@ public final class RtDetrLiveBridge {
             FORCED_FREE_TEXT.put(overlay, Boolean.TRUE);
             enforceForcedFreeText(overlay);
             DetectedRegion pageMask = findPageBubbleMaskForOverlay(overlay);
-            if (pageMask != null) FORCED_FREE_TEXT_OCCLUSION_MASKS.put(overlay, pageMask);
-            else FORCED_FREE_TEXT_OCCLUSION_MASKS.remove(overlay);
-            Log.i(TAG, "Panel forced to independent free-text rendering with BubblePop contour occlusion");
+            if (pageMask != null) {
+                FORCED_FREE_TEXT_OCCLUSION_MASKS.put(overlay, pageMask);
+                Log.i(TAG, "Panel forced to free-text; BubblePop contour is ready");
+            } else {
+                FORCED_FREE_TEXT_OCCLUSION_MASKS.remove(overlay);
+                Log.i(TAG, "Panel forced to free-text; BubblePop contour will be generated on the next screenshot");
+            }
         } else {
             FORCED_FREE_TEXT.remove(overlay);
             FORCED_FREE_TEXT_OCCLUSION_MASKS.remove(overlay);
@@ -1236,6 +1255,19 @@ public final class RtDetrLiveBridge {
      * transparent and the original balloon contour, not its bounding rectangle,
      * defines the occlusion.
      */
+    private static final Map<Object, Boolean> CONTOUR_FALLBACK_LOGGED =
+            Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
+
+    private static void logContourFallback(Object overlay, String reason) {
+        if (overlay == null) return;
+        synchronized (CONTOUR_FALLBACK_LOGGED) {
+            if (CONTOUR_FALLBACK_LOGGED.containsKey(overlay)) return;
+            CONTOUR_FALLBACK_LOGGED.put(overlay, Boolean.TRUE);
+        }
+        Log.w(TAG, "Contour occlusion unavailable for forced free-text panel: " + reason
+                + "; rectangular free-text rendering is being used until a valid mask is available");
+    }
+
     private static boolean drawFreeTextWithBubbleOcclusion(
             android.graphics.Canvas canvas, Object overlay, Rect bounds, CharSequence text,
             android.text.TextPaint paint, float minTextSize, float maxTextSize, int padding,
@@ -1243,17 +1275,20 @@ public final class RtDetrLiveBridge {
             float rotationDegrees) {
         DetectedRegion region = FORCED_FREE_TEXT_OCCLUSION_MASKS.get(overlay);
         if (region == null || region.maskDataView() == null) {
+            logContourFallback(overlay, "page mask is not attached; take a new screenshot");
             return FreeTextLayout.draw(canvas, bounds, text, paint, minTextSize, maxTextSize,
                     padding, offsetX, offsetY, fontScale, lineSpacing, rotationDegrees);
         }
         Bitmap maskBitmap = BubbleTextLayout.getMaskBitmap(region);
         if (maskBitmap == null || maskBitmap.isRecycled()) {
+            logContourFallback(overlay, "mask bitmap could not be created");
             return FreeTextLayout.draw(canvas, bounds, text, paint, minTextSize, maxTextSize,
                     padding, offsetX, offsetY, fontScale, lineSpacing, rotationDegrees);
         }
         Rect maskBounds = region.getBounds();
         Rect overlap = new Rect(bounds);
         if (!overlap.intersect(maskBounds)) {
+            logContourFallback(overlay, "panel does not overlap the detected mask");
             return FreeTextLayout.draw(canvas, bounds, text, paint, minTextSize, maxTextSize,
                     padding, offsetX, offsetY, fontScale, lineSpacing, rotationDegrees);
         }
