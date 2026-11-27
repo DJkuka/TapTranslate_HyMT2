@@ -1532,16 +1532,15 @@ public final class TranslationRegionEditor {
                         startLineSpacing + (dy / sensitivity) * availableRange));
             } else {
                 final float minScale = 0.25f;
-                final float maxScale = 5.00f;
                 float outward = (dragMode == DragMode.NW || dragMode == DragMode.SW)
                         ? -dx : dx;
-                float availableRange = outward >= 0f
-                        ? maxScale - textTransformStart[2]
-                        : textTransformStart[2] - minScale;
                 float sensitivity = Math.max(dp(getContext(), 80.0f),
                         Math.min(dp(getContext(), 160.0f), dragStart.width() * 0.80f));
-                nextScale = Math.max(minScale, Math.min(maxScale,
-                        textTransformStart[2] + (outward / sensitivity) * availableRange));
+                // Manual resizing is deliberately unbounded above. The configured
+                // automatic font-size maximum does not apply to this editor gesture.
+                float startScale = Math.max(minScale, textTransformStart[2]);
+                nextScale = Math.max(minScale,
+                        startScale + (outward / sensitivity) * Math.max(1.0f, startScale));
             }
             setTextTransform(state.transformTarget, nextX, nextY, nextScale, nextLineSpacing);
             refreshRenderers(state);
