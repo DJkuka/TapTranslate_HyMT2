@@ -78,6 +78,16 @@ def verify_final_host_payload(base_apk: Path, final_apk: Path) -> None:
     with zipfile.ZipFile(base_apk) as original, zipfile.ZipFile(final_apk) as built:
         original_names = set(original.namelist())
         built_names = set(built.namelist())
+
+        original_font_assets = {name for name in original_names if name.startswith("assets/fonts/")}
+        built_font_assets = {name for name in built_names if name.startswith("assets/fonts/")}
+        if built_font_assets != original_font_assets:
+            missing_fonts = sorted(original_font_assets - built_font_assets)
+            extra_fonts = sorted(built_font_assets - original_font_assets)
+            raise RuntimeError(
+                "Font assets must remain one-to-one with the base APK; "
+                + "missing=" + str(missing_fonts) + "; extra=" + str(extra_fonts)
+            )
         for rel in (METADATA_PATH, TESSERACT_SO_PATH):
             if rel not in original_names or rel not in built_names:
                 raise RuntimeError(f"Original host payload missing after merge: {rel}")
@@ -1754,7 +1764,7 @@ def patch_fixed_font_size_renderers(base: Path) -> None:
 
 
 def patch_font_display_names(base: Path) -> None:
-    """Show readable names in Settings while retaining loadable font aliases."""
+    """Keep original font asset IDs for loading; map them only at display boundaries."""
     helper_source = Path(__file__).resolve().parent.parent / (
         "app/src/main/java/com/tap_to_translate/snap_translate/hymt2/FontDisplayNames.java"
     )
@@ -1763,20 +1773,29 @@ def patch_font_display_names(base: Path) -> None:
     if not pairs:
         raise RuntimeError("FontDisplayNames.java has no readable-name mappings")
     source_names = [source for source, _ in pairs]
-    display_names = [display for _, display in pairs]
+    if len(source_names) != len(set(source_names)):
+        raise RuntimeError("FontDisplayNames.java contains duplicate source font IDs")
 
+    font_dir = base / "assets/fonts"
+    for source_name, display_name in pairs:
+        source = font_dir / (source_name + ".ttf")
+        alias = font_dir / (display_name + ".ttf")
+        if not source.is_file():
+            raise RuntimeError("Missing original source font asset: " + source.name)
+        if source_name != display_name and alias.exists():
+            raise RuntimeError(
+                "Unexpected display-name font alias already exists in base APK: " + alias.name
+            )
+
+    # Preference/list values must remain original asset identifiers. The same
+    # strings are used by HAWK_FONT_FULL, Typeface loading and click handling.
     settings_list = base / "smali_classes3/sh/d.smali"
-    smali = settings_list.read_text(encoding="utf-8")
+    settings_smali = settings_list.read_text(encoding="utf-8")
     source_list = ", ".join(source_names)
-    display_list = ", ".join(display_names)
-    if source_list in smali:
-        smali = smali.replace(source_list, display_list, 1)
-        settings_list.write_text(smali, encoding="utf-8")
-    elif display_list not in smali:
-        raise RuntimeError("Could not locate the original Settings font list")
+    if source_list not in settings_smali:
+        raise RuntimeError("Original source font IDs are missing from Settings font list")
 
-    # Keep existing HAWK_FONT_FULL values and Typeface lookup keys intact.
-    # Only the visible label is mapped to its friendly name.
+    # The selected-font label is display-only; v6 remains the original asset ID.
     fragment = base / "smali_classes3/mh/l.smali"
     fragment_text = fragment.read_text(encoding="utf-8")
     append_anchor = (
@@ -1797,19 +1816,34 @@ def patch_font_display_names(base: Path) -> None:
         fragment_text = fragment_text.replace(append_anchor, append_display, 1)
         fragment.write_text(fragment_text, encoding="utf-8")
 
-    font_dir = base / "assets/fonts"
-    for source_name, display_name in pairs:
-        source = font_dir / (source_name + ".ttf")
-        alias = font_dir / (display_name + ".ttf")
-        if not source.is_file():
-            raise RuntimeError("Missing source font asset: " + source.name)
-        if alias.exists():
-            if alias.read_bytes() != source.read_bytes():
-                raise RuntimeError("Font alias collision: " + alias.name)
-        else:
-            shutil.copy2(source, alias)
-    print("Settings font names normalized; verified " + str(len(pairs)) + " aliases")
+    # RecyclerView rows display friendly names, but backing values remain IDs.
+    adapter = base / "smali_classes3/kh/b.smali"
+    adapter_text = adapter.read_text(encoding="utf-8")
+    row_anchor = """    invoke-virtual {v1, p2}, Ljava/util/ArrayList;->get(I)Ljava/lang/Object;
 
+    move-result-object v2
+
+    check-cast v2, Ljava/lang/CharSequence;
+
+    invoke-virtual {v0, v2}, Landroid/widget/TextView;->setText(Ljava/lang/CharSequence;)V"""
+    row_display = """    invoke-virtual {v1, p2}, Ljava/util/ArrayList;->get(I)Ljava/lang/Object;
+
+    move-result-object v2
+
+    check-cast v2, Ljava/lang/String;
+
+    invoke-static {v2}, Lcom/tap_to_translate/snap_translate/hymt2/FontDisplayNames;->displayName(Ljava/lang/String;)Ljava/lang/String;
+
+    move-result-object v2
+
+    invoke-virtual {v0, v2}, Landroid/widget/TextView;->setText(Ljava/lang/CharSequence;)V"""
+    if "FontDisplayNames;->displayName" not in adapter_text:
+        if adapter_text.count(row_anchor) != 1:
+            raise RuntimeError("Could not locate the font-picker row label")
+        adapter_text = adapter_text.replace(row_anchor, row_display, 1)
+
+    adapter.write_text(adapter_text, encoding="utf-8")
+    print("Font picker keeps all " + str(len(pairs)) + " original asset IDs; friendly labels are display-only")
 
 def patch_max_font_size(base: Path) -> None:
     """Raise the translated-font size selector maximum from 40dp to 72dp."""
@@ -2201,6 +2235,31 @@ def copy_helper_payload(helper: Path, base: Path) -> None:
             shutil.copy2(source, destination)
             copied_assets += 1
     print(f"Copied {copied_assets} helper assets into final APK")
+
+    # BubblePop is a required part of this APK line, not an optional feature.
+    # Fail the merge immediately if either its model or license was omitted
+    # from the helper payload or failed to reach the host APK.
+    bubblepop_model = base / "assets/models/bubblepop/model_fp16.onnx"
+    bubblepop_license = base / "assets/models/bubblepop/LICENSE.bubble-pop"
+    if not bubblepop_model.is_file() or bubblepop_model.stat().st_size <= 100000:
+        raise RuntimeError("Required BubblePop page-mask model is missing from final APK merge")
+    if not bubblepop_license.is_file() or bubblepop_license.stat().st_size == 0:
+        raise RuntimeError("Required BubblePop model license is missing from final APK merge")
+    bubblepop_classes = list(base.glob(
+        "smali*/com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopPageMaskDetector.smali"
+    ))
+    segmenter_classes = list(base.glob(
+        "smali*/com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopSegmenter.smali"
+    ))
+    if len(bubblepop_classes) != 1 or len(segmenter_classes) != 1:
+        raise RuntimeError(
+            "Required BubblePop DEX classes are missing or duplicated: "
+            f"detector={len(bubblepop_classes)}, segmenter={len(segmenter_classes)}"
+        )
+    print(
+        "Verified required BubblePop model, license, page-mask detector and segmenter "
+        "are present exactly once in the merged APK."
+    )
 
     # Coroutines can discover Android's Main dispatcher via META-INF service files.
     helper_services = helper / "unknown/META-INF/services"
