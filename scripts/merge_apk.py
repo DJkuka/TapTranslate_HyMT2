@@ -1409,7 +1409,7 @@ def patch_floating_screenshot_button(base: Path) -> None:
     # Bitmap in xh/c.j. Consume explicitly requested screenshots before OCR starts.
     callback = base / "smali_classes3/xh/a.smali"
     callback_text = callback.read_text(encoding="utf-8")
-    pattern = re.compile(r"(?ms)^\.method public run\(\)V\n.*?^\.end method")
+    pattern = re.compile(r"(?ms)^\.method [^\n]*\brun\(\)V\n.*?^\.end method")
     match = pattern.search(callback_text)
     if not match:
         raise RuntimeError("Could not locate xh/a.run screenshot-to-OCR callback")
