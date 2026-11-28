@@ -5,12 +5,17 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Rect
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.DocumentsContract
+import android.util.DisplayMetrics
 import android.util.Log
 import android.view.View
+import android.view.WindowInsets
+import android.view.WindowManager
 import android.widget.Toast
 import com.tap_to_translate.snap_translate.hymt2.ocr.RtDetrLiveBridge
 import java.io.IOException
@@ -233,7 +238,7 @@ object TranslationScreenshotManager {
                         it.visibility == View.VISIBLE && it.width > 0 && it.height > 0
                     }
 
-                output = composeFrame(snapshot, textLayer)
+                output = composeFrame(request.context, snapshot, textLayer)
                 val prepared = output
                     ?: throw IOException("Не удалось собрать изображение")
                 ioExecutor.execute {
@@ -367,7 +372,89 @@ object TranslationScreenshotManager {
         }
     }
 
-    private fun composeFrame(source: Bitmap, textLayer: View?): Bitmap {
+    /**
+     * Returns the visible system-bar insets in the same pixel coordinate space
+     * as the MediaProjection frame. Insets are read at capture time so rotation
+     * and the current navigation mode are respected.
+     *
+     * Android 11+ exposes status/navigation insets separately. Older versions
+     * keep the previous full-frame behavior instead of guessing bar dimensions.
+     */
+    private fun resolveSystemBarCrop(
+        context: Context,
+        overlay: View?,
+        frameWidth: Int,
+        frameHeight: Int
+    ): Rect {
+        val fullFrame = Rect(0, 0, frameWidth, frameHeight)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return fullFrame
+
+        return try {
+            val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+                ?: return fullFrame
+            val metrics = windowManager.currentWindowMetrics
+            val systemBars = WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars()
+            val metricInsets = metrics.windowInsets.getInsets(systemBars)
+            val viewInsets = try {
+                overlay?.rootWindowInsets?.getInsets(systemBars)
+            } catch (_: Throwable) {
+                null
+            }
+
+            // Some overlay windows do not receive a complete root WindowInsets
+            // snapshot. Prefer the larger value per edge, without adding the
+            // same system bar twice.
+            val leftInset = maxOf(metricInsets.left, viewInsets?.left ?: 0)
+            val topInset = maxOf(metricInsets.top, viewInsets?.top ?: 0)
+            val rightInset = maxOf(metricInsets.right, viewInsets?.right ?: 0)
+            val bottomInset = maxOf(metricInsets.bottom, viewInsets?.bottom ?: 0)
+
+            if (leftInset == 0 && topInset == 0 && rightInset == 0 && bottomInset == 0) {
+                Log.i(TAG, "No visible status/navigation bars reported; keeping full screenshot frame")
+                return fullFrame
+            }
+
+            val displayMetrics = DisplayMetrics()
+            @Suppress("DEPRECATION")
+            (overlay?.display ?: windowManager.defaultDisplay).getRealMetrics(displayMetrics)
+
+            val referenceWidth = displayMetrics.widthPixels
+                .takeIf { it > 0 } ?: metrics.bounds.width()
+            val referenceHeight = displayMetrics.heightPixels
+                .takeIf { it > 0 } ?: metrics.bounds.height()
+            if (referenceWidth <= 0 || referenceHeight <= 0) return fullFrame
+
+            val scaleX = frameWidth.toFloat() / referenceWidth.toFloat()
+            val scaleY = frameHeight.toFloat() / referenceHeight.toFloat()
+            val left = (leftInset * scaleX).toInt().coerceIn(0, frameWidth)
+            val top = (topInset * scaleY).toInt().coerceIn(0, frameHeight)
+            val right = (rightInset * scaleX).toInt().coerceIn(0, frameWidth)
+            val bottom = (bottomInset * scaleY).toInt().coerceIn(0, frameHeight)
+
+            val crop = Rect(
+                left,
+                top,
+                (frameWidth - right).coerceAtLeast(left),
+                (frameHeight - bottom).coerceAtLeast(top)
+            )
+            if (crop.width() < 1 || crop.height() < 1) {
+                Log.w(TAG, "System-bar crop would remove the full frame; keeping original screenshot")
+                return fullFrame
+            }
+
+            Log.i(
+                TAG,
+                "Cropping visible system bars: left=$left top=$top right=$right bottom=$bottom " +
+                    "frame=${frameWidth}x${frameHeight} display=${referenceWidth}x${referenceHeight}"
+            )
+            crop
+        } catch (t: Throwable) {
+            Log.w(TAG, "Could not resolve system-bar insets; keeping full screenshot frame", t)
+            fullFrame
+        }
+    }
+
+    private fun composeFrame(context: Context, source: Bitmap, textLayer: View?): Bitmap {
         // ImageReader may reuse the host bitmap while the next frame is arriving.
         // Work from an immutable snapshot to avoid a partially updated screenshot.
         val sourceCopy = source.copy(Bitmap.Config.ARGB_8888, false)
@@ -376,13 +463,17 @@ object TranslationScreenshotManager {
             val width = readHostDimension("a", sourceCopy.width).coerceIn(1, sourceCopy.width)
             val height = readHostDimension("b", sourceCopy.height).coerceIn(1, sourceCopy.height)
 
-            val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val cropRect = resolveSystemBarCrop(context, textLayer, width, height)
+            val outputWidth = cropRect.width()
+            val outputHeight = cropRect.height()
+            val output = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
+            val destinationRect = Rect(0, 0, outputWidth, outputHeight)
             val canvas = Canvas(output)
             val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
             canvas.drawBitmap(
                 sourceCopy,
-                android.graphics.Rect(0, 0, width, height),
-                android.graphics.Rect(0, 0, width, height),
+                cropRect,
+                destinationRect,
                 bitmapPaint
             )
 
@@ -402,7 +493,10 @@ object TranslationScreenshotManager {
 
                     val clipped = RtDetrLiveBridge.clipBubbleOverlay(overlay, 0, 0)
                     Log.i(TAG, "Screenshot translation layer rendered; BubblePop masks applied=$clipped")
-                    canvas.drawBitmap(overlay, 0f, 0f, bitmapPaint)
+                    // Apply the exact same crop as the source frame. Drawing the
+                    // overlay in full-frame coordinates first prevents translated
+                    // text from shifting when status/navigation bars are removed.
+                    canvas.drawBitmap(overlay, cropRect, destinationRect, bitmapPaint)
                 } finally {
                     if (!overlay.isRecycled) overlay.recycle()
                 }
