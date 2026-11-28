@@ -226,7 +226,36 @@ public final class TranslationRegionEditor {
             ViewParent parent = current.getParent();
             current = parent instanceof View ? (View) parent : null;
         }
+        if (current == null || current == root) return current;
+
+        // The host puts the left-side editor actions and the right-side
+        // AutoText/close actions into sibling groups inside one top row.
+        // Hide that row as a whole, not just the left group shared by the
+        // screenshot and edit buttons. Never hide the translated content view.
+        ViewParent rowParent = current.getParent();
+        if (rowParent instanceof ViewGroup && rowParent != root) {
+            View row = (View) rowParent;
+            View translatedContent = root.findViewById(CONTENT_ID);
+            boolean containsTranslatedContent = translatedContent != null
+                    && isDescendantOf(translatedContent, row);
+            int rowHeight = row.getHeight();
+            int maxToolbarHeight = Math.round(dp(root.getContext(), 120.0f));
+            if (!containsTranslatedContent
+                    && (rowHeight <= 0 || rowHeight <= maxToolbarHeight)) {
+                return row;
+            }
+        }
         return current;
+    }
+
+    private static boolean isDescendantOf(View child, View possibleAncestor) {
+        View current = child;
+        while (current != null) {
+            if (current == possibleAncestor) return true;
+            ViewParent parent = current.getParent();
+            current = parent instanceof View ? (View) parent : null;
+        }
+        return false;
     }
 
     /** Called when the host closes the translation panel. */
