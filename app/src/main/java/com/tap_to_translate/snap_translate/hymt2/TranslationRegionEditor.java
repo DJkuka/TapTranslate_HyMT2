@@ -58,8 +58,8 @@ public final class TranslationRegionEditor {
     private static final String BRIDGE = "com.tap_to_translate.snap_translate.hymt2.ocr.RtDetrLiveBridge";
     private static final Map<View, State> STATES =
             Collections.synchronizedMap(new WeakHashMap<View, State>());
-    private static final Map<View, Integer> CAPTURE_HIDDEN_TOOLBARS =
-            Collections.synchronizedMap(new WeakHashMap<View, Integer>());
+    private static final Map<View, Map<View, Integer>> CAPTURE_HIDDEN_CONTROLS =
+            Collections.synchronizedMap(new WeakHashMap<View, Map<View, Integer>>());
 
     private TranslationRegionEditor() {}
 
@@ -182,70 +182,83 @@ public final class TranslationRegionEditor {
      * Temporarily hide the editor toolbar so MediaProjection does not include it.
      * The translated-text layer is a separate child and remains visible for composition.
      */
+    /**
+     * Temporarily hide every actionable control attached to the result overlay.
+     *
+     * The host places controls in multiple sibling groups, so locating one
+     * toolbar ancestor by the screenshot/edit button IDs can miss the right-side
+     * AutoText and close actions. Walk the whole overlay hierarchy instead.
+     * The translated content layer and all of its descendants are excluded.
+     */
     public static void setCaptureUiHidden(View root, boolean hidden) {
         if (root == null) return;
-        synchronized (CAPTURE_HIDDEN_TOOLBARS) {
+        synchronized (CAPTURE_HIDDEN_CONTROLS) {
             if (!hidden) {
-                Integer previous = CAPTURE_HIDDEN_TOOLBARS.remove(root);
+                Map<View, Integer> previous = CAPTURE_HIDDEN_CONTROLS.remove(root);
                 if (previous != null) {
-                    View toolbar = findEditorToolbar(root);
-                    if (toolbar != null) toolbar.setVisibility(previous);
+                    for (Map.Entry<View, Integer> entry : previous.entrySet()) {
+                        View control = entry.getKey();
+                        if (control != null) {
+                            control.setVisibility(entry.getValue());
+                            control.invalidate();
+                        }
+                    }
+                    root.invalidate();
                 }
                 return;
             }
-            if (CAPTURE_HIDDEN_TOOLBARS.containsKey(root)) return;
-            View toolbar = findEditorToolbar(root);
-            if (toolbar == null || toolbar == root) {
-                Log.w(TAG, "Could not safely identify editor toolbar for screenshot hiding");
-                return;
+            if (CAPTURE_HIDDEN_CONTROLS.containsKey(root)) return;
+
+            View translatedContent = root.findViewById(CONTENT_ID);
+            Map<View, Integer> previous = new IdentityHashMap<>();
+            collectCaptureControls(root, root, translatedContent, previous);
+
+            for (View control : previous.keySet()) {
+                control.setVisibility(View.INVISIBLE);
+                control.invalidate();
             }
-            CAPTURE_HIDDEN_TOOLBARS.put(root, toolbar.getVisibility());
-            toolbar.setVisibility(View.INVISIBLE);
-            toolbar.invalidate();
+            CAPTURE_HIDDEN_CONTROLS.put(root, previous);
+            Log.i(TAG, "Temporarily hidden overlay controls=" + previous.size());
+            root.invalidate();
         }
     }
 
-    private static View findEditorToolbar(View root) {
-        View screenshot = root.findViewById(0x7f0a04f3);
-        View edit = root.findViewById(0x7f0a04f5);
-        if (screenshot == null || edit == null) return null;
-        java.util.Set<View> ancestors = Collections.newSetFromMap(
-                new java.util.IdentityHashMap<View, Boolean>());
-        View current = screenshot;
-        while (current != null) {
-            ancestors.add(current);
-            ViewParent parent = current.getParent();
-            current = parent instanceof View ? (View) parent : null;
-        }
-        current = edit;
-        while (current != null && !ancestors.contains(current)) {
-            ViewParent parent = current.getParent();
-            current = parent instanceof View ? (View) parent : null;
-        }
-        if (current == screenshot || current == edit) {
-            ViewParent parent = current.getParent();
-            current = parent instanceof View ? (View) parent : null;
-        }
-        if (current == null || current == root) return current;
+    private static void collectCaptureControls(
+            View view,
+            View root,
+            View translatedContent,
+            Map<View, Integer> previous) {
+        if (view == null) return;
 
-        // The host puts the left-side editor actions and the right-side
-        // AutoText/close actions into sibling groups inside one top row.
-        // Hide that row as a whole, not just the left group shared by the
-        // screenshot and edit buttons. Never hide the translated content view.
-        ViewParent rowParent = current.getParent();
-        if (rowParent instanceof ViewGroup && rowParent != root) {
-            View row = (View) rowParent;
-            View translatedContent = root.findViewById(CONTENT_ID);
-            boolean containsTranslatedContent = translatedContent != null
-                    && isDescendantOf(translatedContent, row);
-            int rowHeight = row.getHeight();
-            int maxToolbarHeight = Math.round(dp(root.getContext(), 120.0f));
-            if (!containsTranslatedContent
-                    && (rowHeight <= 0 || rowHeight <= maxToolbarHeight)) {
-                return row;
+        // Keep the translated-text renderer and its editor-selection overlay intact.
+        if (translatedContent != null
+                && (view == translatedContent || isDescendantOf(view, translatedContent))) {
+            return;
+        }
+
+        // A container that also owns the translated content must remain visible.
+        // Continue into it so its toolbar siblings can still be found and hidden.
+        boolean containsTranslatedContent = translatedContent != null
+                && isDescendantOf(translatedContent, view);
+
+        if (view != root && !containsTranslatedContent && isCaptureControl(view)) {
+            previous.put(view, view.getVisibility());
+            return;
+        }
+
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int index = 0; index < group.getChildCount(); index++) {
+                collectCaptureControls(group.getChildAt(index), root, translatedContent, previous);
             }
         }
-        return current;
+    }
+
+    private static boolean isCaptureControl(View view) {
+        return view.isClickable()
+                || view.hasOnClickListeners()
+                || view.isLongClickable()
+                || view.isFocusable();
     }
 
     private static boolean isDescendantOf(View child, View possibleAncestor) {
