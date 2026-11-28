@@ -2236,6 +2236,31 @@ def copy_helper_payload(helper: Path, base: Path) -> None:
             copied_assets += 1
     print(f"Copied {copied_assets} helper assets into final APK")
 
+    # BubblePop is a required part of this APK line, not an optional feature.
+    # Fail the merge immediately if either its model or license was omitted
+    # from the helper payload or failed to reach the host APK.
+    bubblepop_model = base / "assets/models/bubblepop/model_fp16.onnx"
+    bubblepop_license = base / "assets/models/bubblepop/LICENSE.bubble-pop"
+    if not bubblepop_model.is_file() or bubblepop_model.stat().st_size <= 100000:
+        raise RuntimeError("Required BubblePop page-mask model is missing from final APK merge")
+    if not bubblepop_license.is_file() or bubblepop_license.stat().st_size == 0:
+        raise RuntimeError("Required BubblePop model license is missing from final APK merge")
+    bubblepop_classes = list(base.glob(
+        "smali*/com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopPageMaskDetector.smali"
+    ))
+    segmenter_classes = list(base.glob(
+        "smali*/com/tap_to_translate/snap_translate/hymt2/ocr/BubblePopSegmenter.smali"
+    ))
+    if len(bubblepop_classes) != 1 or len(segmenter_classes) != 1:
+        raise RuntimeError(
+            "Required BubblePop DEX classes are missing or duplicated: "
+            f"detector={len(bubblepop_classes)}, segmenter={len(segmenter_classes)}"
+        )
+    print(
+        "Verified required BubblePop model, license, page-mask detector and segmenter "
+        "are present exactly once in the merged APK."
+    )
+
     # Coroutines can discover Android's Main dispatcher via META-INF service files.
     helper_services = helper / "unknown/META-INF/services"
     base_services = base / "unknown/META-INF/services"
