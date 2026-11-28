@@ -1465,7 +1465,7 @@ def patch_floating_screenshot_button(base: Path) -> None:
         )
         if method.count(anchor) != 1:
             raise RuntimeError("Could not locate screenshot listener's translation-overlay field")
-        method = method.replace(anchor, anchor + "\\n\\n" + register_hook, 1)
+        method = method.replace(anchor, anchor + "\n\n" + register_hook, 1)
         listener_text = listener_text[:start] + method + listener_text[end:]
         listener.write_text(listener_text, encoding="utf-8")
 
