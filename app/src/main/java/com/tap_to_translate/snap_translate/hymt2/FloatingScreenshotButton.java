@@ -46,6 +46,8 @@ public final class FloatingScreenshotButton {
             Collections.synchronizedMap(new WeakHashMap<View, Boolean>());
     private static final Map<View, ButtonState> BUTTONS =
             Collections.synchronizedMap(new WeakHashMap<View, ButtonState>());
+    private static final Map<View, Integer> CAPTURE_HIDDEN_VIEWS =
+            Collections.synchronizedMap(new WeakHashMap<View, Integer>());
 
     private FloatingScreenshotButton() { }
 
@@ -96,13 +98,38 @@ public final class FloatingScreenshotButton {
 
     private static void setCaptureVisibility(Context context, boolean visible) {
         if (context == null) return;
-        ArrayList<ButtonState> snapshot;
+        ArrayList<View> snapshot = new ArrayList<>();
         synchronized (BUTTONS) {
-            snapshot = new ArrayList<>(BUTTONS.values());
+            for (ButtonState state : BUTTONS.values()) {
+                if (state != null && state.service.getApplicationContext() == context.getApplicationContext()) {
+                    snapshot.add(state.button);
+                }
+            }
         }
-        for (ButtonState state : snapshot) {
-            if (state == null || state.service.getApplicationContext() != context.getApplicationContext()) continue;
-            state.button.post(() -> state.button.setVisibility(visible ? View.VISIBLE : View.INVISIBLE));
+        synchronized (WIDGETS) {
+            for (View widget : WIDGETS.keySet()) {
+                if (widget != null && widget.getContext().getApplicationContext() == context.getApplicationContext()) {
+                    snapshot.add(widget);
+                }
+            }
+        }
+        for (View view : snapshot) {
+            view.post(() -> {
+                if (!visible) {
+                    synchronized (CAPTURE_HIDDEN_VIEWS) {
+                        if (!CAPTURE_HIDDEN_VIEWS.containsKey(view)) {
+                            CAPTURE_HIDDEN_VIEWS.put(view, view.getVisibility());
+                        }
+                    }
+                    view.setVisibility(View.INVISIBLE);
+                } else {
+                    Integer previous;
+                    synchronized (CAPTURE_HIDDEN_VIEWS) {
+                        previous = CAPTURE_HIDDEN_VIEWS.remove(view);
+                    }
+                    if (previous != null) view.setVisibility(previous);
+                }
+            });
         }
     }
 

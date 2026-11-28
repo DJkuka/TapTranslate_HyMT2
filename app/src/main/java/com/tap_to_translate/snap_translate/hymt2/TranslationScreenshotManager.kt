@@ -74,50 +74,22 @@ object TranslationScreenshotManager {
             toast(null, "Не удалось получить окно перевода")
             return
         }
-
         try {
             registerOverlay(resultOverlay)
-            val prefs = root.context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            val treeValue = prefs.getString(KEY_TREE_URI, null)
-            if (treeValue.isNullOrBlank()) {
-                toast(root.context, "Сначала выберите папку для скриншотов в настройках")
-                return
-            }
-
             val service = findScreenTranslateService(resultOverlay)
             if (service == null) {
                 toast(root.context, "Не удалось получить службу перевода")
                 return
             }
-            val capture = readField(service, "c")
-            val source = readField(capture, "j") as? Bitmap
-            if (source == null || source.isRecycled) {
-                toast(root.context, "Исходный кадр ещё не готов. Повторите снимок")
-                return
-            }
-
-            // n is the transparent full-screen translation layer. The top
-            // toolbar is its sibling, so it is omitted by design.
-            val textLayer = readField(resultOverlay, "n") as? View
-            if (textLayer == null || textLayer.visibility != View.VISIBLE ||
-                textLayer.width <= 0 || textLayer.height <= 0) {
-                toast(root.context, "Слой перевода сейчас недоступен")
-                return
-            }
-
-            val output = composeFrame(source, textLayer)
-            val format = prefs.getString(KEY_FORMAT, FORMAT_PNG) ?: FORMAT_PNG
-            val jpegQuality = prefs.getInt(KEY_JPEG_QUALITY, DEFAULT_JPEG_QUALITY).coerceIn(50, 100)
-            val treeUri = Uri.parse(treeValue)
-            ioExecutor.execute {
-                saveToTree(root.context.applicationContext, output, treeUri, format, jpegQuality)
-            }
+            // Use the same fresh-frame path as the independent camera button.
+            // This lets us hide the editor toolbar and floating controls before
+            // MediaProjection captures the page.
+            captureFromService(service)
         } catch (t: Throwable) {
-            Log.e(TAG, "Screenshot capture failed", t)
+            Log.e(TAG, "Screenshot capture from editor failed", t)
             toast(root.context, "Не удалось подготовить скриншот: " + (t.message ?: "ошибка"))
         }
     }
-
 
     /**
      * Entry point for the independent floating screenshot button.
@@ -177,7 +149,7 @@ object TranslationScreenshotManager {
                 }
                 if (stillPending) {
                     request.timedOut = true
-                    FloatingScreenshotButton.onCaptureFinished(request.context)
+                    restoreCaptureUi(request)
                     Log.w(TAG, "Timed out waiting for the independent MediaProjection frame")
                     toast(appContext, "Кадр экрана пока не получен. Повторите снимок")
                 }
@@ -186,11 +158,32 @@ object TranslationScreenshotManager {
             mainHandler.postDelayed(timeout, 60_000L)
 
             try {
+                activeOverlay?.get()?.let {
+                    TranslationRegionEditor.setCaptureUiHidden(it, true)
+                }
                 FloatingScreenshotButton.onCaptureStarted(context)
-                requestFreshFrame(capture)
+                // Allow the hidden toolbar and host floating icon to leave the
+                // composed display frame before requesting the next projection frame.
+                mainHandler.postDelayed({
+                    val stillPending = synchronized(pendingCaptures) {
+                        pendingCaptures[service] === request && !request.timedOut
+                    }
+                    if (!stillPending) return@postDelayed
+                    try {
+                        requestFreshFrame(capture)
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "Could not request clean screenshot frame", t)
+                        mainHandler.removeCallbacks(timeout)
+                        synchronized(pendingCaptures) {
+                            if (pendingCaptures[service] === request) pendingCaptures.remove(service)
+                        }
+                        restoreCaptureUi(request)
+                        toast(context, "Не удалось запросить снимок: " + (t.message ?: "ошибка"))
+                    }
+                }, 120L)
                 toast(context, "Создаю снимок экрана…")
             } catch (t: Throwable) {
-                FloatingScreenshotButton.onCaptureFinished(context)
+                restoreCaptureUi(request)
                 mainHandler.removeCallbacks(timeout)
                 synchronized(pendingCaptures) {
                     if (pendingCaptures[service] === request) pendingCaptures.remove(service)
@@ -223,11 +216,12 @@ object TranslationScreenshotManager {
                 ?: throw IOException("Не удалось скопировать исходный кадр")
         } catch (t: Throwable) {
             Log.e(TAG, "Could not snapshot source frame", t)
+            restoreCaptureUi(request)
             toast(request.context, "Не удалось подготовить скриншот: " + (t.message ?: "ошибка"))
             return true
         }
 
-        FloatingScreenshotButton.onCaptureFinished(request.context)
+        restoreCaptureUi(request)
         val finishCapture = Runnable {
             var output: Bitmap? = null
             try {
@@ -268,6 +262,18 @@ object TranslationScreenshotManager {
         }
         // Consume only this explicitly requested frame; do not start OCR/translation.
         return true
+    }
+
+    private fun restoreCaptureUi(request: PendingCapture) {
+        try {
+            request.overlay?.get()?.let {
+                TranslationRegionEditor.setCaptureUiHidden(it, false)
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Could not restore editor toolbar after screenshot", t)
+        } finally {
+            FloatingScreenshotButton.onCaptureFinished(request.context)
+        }
     }
 
     private fun resolveCaptureController(service: Any): Any? {

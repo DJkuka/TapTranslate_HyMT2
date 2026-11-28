@@ -17,6 +17,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.ArrayAdapter;
@@ -57,6 +58,8 @@ public final class TranslationRegionEditor {
     private static final String BRIDGE = "com.tap_to_translate.snap_translate.hymt2.ocr.RtDetrLiveBridge";
     private static final Map<View, State> STATES =
             Collections.synchronizedMap(new WeakHashMap<View, State>());
+    private static final Map<View, Integer> CAPTURE_HIDDEN_TOOLBARS =
+            Collections.synchronizedMap(new WeakHashMap<View, Integer>());
 
     private TranslationRegionEditor() {}
 
@@ -173,6 +176,57 @@ public final class TranslationRegionEditor {
             STATES.put(root, state);
             Log.i(TAG, "Region editor attached: selection, geometry and text editing enabled");
         }
+    }
+
+    /**
+     * Temporarily hide the editor toolbar so MediaProjection does not include it.
+     * The translated-text layer is a separate child and remains visible for composition.
+     */
+    public static void setCaptureUiHidden(View root, boolean hidden) {
+        if (root == null) return;
+        synchronized (CAPTURE_HIDDEN_TOOLBARS) {
+            if (!hidden) {
+                Integer previous = CAPTURE_HIDDEN_TOOLBARS.remove(root);
+                if (previous != null) {
+                    View toolbar = findEditorToolbar(root);
+                    if (toolbar != null) toolbar.setVisibility(previous);
+                }
+                return;
+            }
+            if (CAPTURE_HIDDEN_TOOLBARS.containsKey(root)) return;
+            View toolbar = findEditorToolbar(root);
+            if (toolbar == null || toolbar == root) {
+                Log.w(TAG, "Could not safely identify editor toolbar for screenshot hiding");
+                return;
+            }
+            CAPTURE_HIDDEN_TOOLBARS.put(root, toolbar.getVisibility());
+            toolbar.setVisibility(View.INVISIBLE);
+            toolbar.invalidate();
+        }
+    }
+
+    private static View findEditorToolbar(View root) {
+        View screenshot = root.findViewById(0x7f0a04f3);
+        View edit = root.findViewById(0x7f0a04f5);
+        if (screenshot == null || edit == null) return null;
+        java.util.Set<View> ancestors = Collections.newSetFromMap(
+                new java.util.IdentityHashMap<View, Boolean>());
+        View current = screenshot;
+        while (current != null) {
+            ancestors.add(current);
+            ViewParent parent = current.getParent();
+            current = parent instanceof View ? (View) parent : null;
+        }
+        current = edit;
+        while (current != null && !ancestors.contains(current)) {
+            ViewParent parent = current.getParent();
+            current = parent instanceof View ? (View) parent : null;
+        }
+        if (current == screenshot || current == edit) {
+            ViewParent parent = current.getParent();
+            current = parent instanceof View ? (View) parent : null;
+        }
+        return current;
     }
 
     /** Called when the host closes the translation panel. */
