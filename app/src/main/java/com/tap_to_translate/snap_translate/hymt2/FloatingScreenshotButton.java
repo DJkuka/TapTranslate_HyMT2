@@ -84,6 +84,28 @@ public final class FloatingScreenshotButton {
         }
     }
 
+    /** Hide the secure overlay before asking MediaProjection for a frame. */
+    public static void onCaptureStarted(Context context) {
+        setCaptureVisibility(context, false);
+    }
+
+    /** Restore the button as soon as the requested frame has been copied. */
+    public static void onCaptureFinished(Context context) {
+        setCaptureVisibility(context, true);
+    }
+
+    private static void setCaptureVisibility(Context context, boolean visible) {
+        if (context == null) return;
+        ArrayList<ButtonState> snapshot;
+        synchronized (BUTTONS) {
+            snapshot = new ArrayList<>(BUTTONS.values());
+        }
+        for (ButtonState state : snapshot) {
+            if (state == null || state.service.getApplicationContext() != context.getApplicationContext()) continue;
+            state.button.post(() -> state.button.setVisibility(visible ? View.VISIBLE : View.INVISIBLE));
+        }
+    }
+
     /** Re-clamp the movable button after a display rotation or size change. */
     public static void refresh(Context context) {
         if (context == null) return;

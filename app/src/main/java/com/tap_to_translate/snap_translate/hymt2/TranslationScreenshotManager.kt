@@ -177,6 +177,7 @@ object TranslationScreenshotManager {
                 }
                 if (stillPending) {
                     request.timedOut = true
+                    FloatingScreenshotButton.onCaptureFinished(request.context)
                     Log.w(TAG, "Timed out waiting for the independent MediaProjection frame")
                     toast(appContext, "Кадр экрана пока не получен. Повторите снимок")
                 }
@@ -185,9 +186,11 @@ object TranslationScreenshotManager {
             mainHandler.postDelayed(timeout, 60_000L)
 
             try {
+                FloatingScreenshotButton.onCaptureStarted(context)
                 requestFreshFrame(capture)
                 toast(context, "Создаю снимок экрана…")
             } catch (t: Throwable) {
+                FloatingScreenshotButton.onCaptureFinished(context)
                 mainHandler.removeCallbacks(timeout)
                 synchronized(pendingCaptures) {
                     if (pendingCaptures[service] === request) pendingCaptures.remove(service)
@@ -224,6 +227,7 @@ object TranslationScreenshotManager {
             return true
         }
 
+        FloatingScreenshotButton.onCaptureFinished(request.context)
         val finishCapture = Runnable {
             var output: Bitmap? = null
             try {
@@ -297,6 +301,7 @@ object TranslationScreenshotManager {
         if (service == null) return
         val request = synchronized(pendingCaptures) { pendingCaptures[service] } ?: return
         try {
+            FloatingScreenshotButton.onCaptureStarted(request.context)
             val capture = resolveCaptureController(service)
                 ?: throw IllegalStateException("Контроллер захвата экрана недоступен")
             requestFreshFrame(capture)
