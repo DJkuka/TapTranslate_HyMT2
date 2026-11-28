@@ -14,6 +14,7 @@ import android.view.View
 import android.widget.Toast
 import com.tap_to_translate.snap_translate.hymt2.ocr.RtDetrLiveBridge
 import java.io.IOException
+import java.lang.ref.WeakReference
 import java.util.Locale
 import java.util.Collections
 import java.util.WeakHashMap
@@ -44,6 +45,7 @@ object TranslationScreenshotManager {
         val treeUri: Uri,
         val format: String,
         val jpegQuality: Int,
+        val overlay: WeakReference<View>?,
         var timeout: Runnable? = null,
         @Volatile var timedOut: Boolean = false
     )
@@ -52,6 +54,17 @@ object TranslationScreenshotManager {
     private val pendingCaptures = Collections.synchronizedMap(
         WeakHashMap<Any, PendingCapture>()
     )
+    @Volatile private var activeOverlayRef: WeakReference<View>? = null
+
+    /** Remember the current translation window without keeping it alive. */
+    @JvmStatic
+    fun registerOverlay(resultOverlay: Any?) {
+        val view = resultOverlay as? View ?: return
+        activeOverlayRef = WeakReference(view)
+    }
+
+    private fun isOverlayVisible(view: View): Boolean =
+        view.isAttachedToWindow && view.visibility == View.VISIBLE
 
     /** Entry point used by the native result-overlay click listener. */
     @JvmStatic
@@ -63,6 +76,7 @@ object TranslationScreenshotManager {
         }
 
         try {
+            registerOverlay(resultOverlay)
             val prefs = root.context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val treeValue = prefs.getString(KEY_TREE_URI, null)
             if (treeValue.isNullOrBlank()) {
@@ -143,11 +157,15 @@ object TranslationScreenshotManager {
                 if (previous != null) pendingCaptures.remove(service)
             }
 
+            val activeOverlay = activeOverlayRef?.get()
+                ?.takeIf { isOverlayVisible(it) }
+                ?.let { WeakReference(it) }
             val request = PendingCapture(
                 appContext,
                 Uri.parse(treeValue),
                 prefs.getString(KEY_FORMAT, FORMAT_PNG) ?: FORMAT_PNG,
-                prefs.getInt(KEY_JPEG_QUALITY, DEFAULT_JPEG_QUALITY).coerceIn(50, 100)
+                prefs.getInt(KEY_JPEG_QUALITY, DEFAULT_JPEG_QUALITY).coerceIn(50, 100),
+                activeOverlay
             )
             synchronized(pendingCaptures) {
                 pendingCaptures[service] = request
@@ -195,26 +213,56 @@ object TranslationScreenshotManager {
         } ?: return false
         request.timeout?.let { mainHandler.removeCallbacks(it) }
 
-        try {
-            val output = composeFrame(source, null)
+        // ImageReader reuses its bitmap. Take an immutable snapshot before returning
+        // from the host callback, then draw the overlay on the main thread.
+        val snapshot = try {
+            source.copy(Bitmap.Config.ARGB_8888, false)
+                ?: throw IOException("Не удалось скопировать исходный кадр")
+        } catch (t: Throwable) {
+            Log.e(TAG, "Could not snapshot source frame", t)
+            toast(request.context, "Не удалось подготовить скриншот: " + (t.message ?: "ошибка"))
+            return true
+        }
+
+        val finishCapture = Runnable {
+            var output: Bitmap? = null
             try {
+                val overlay = request.overlay?.get()
+                val textLayer = overlay
+                    ?.takeIf { isOverlayVisible(it) }
+                    ?.let { readField(it, "n") as? View }
+                    ?.takeIf {
+                        it.visibility == View.VISIBLE && it.width > 0 && it.height > 0
+                    }
+
+                output = composeFrame(snapshot, textLayer)
+                val prepared = output
+                    ?: throw IOException("Не удалось собрать изображение")
                 ioExecutor.execute {
                     saveToTree(
                         request.context,
-                        output,
+                        prepared,
                         request.treeUri,
                         request.format,
                         request.jpegQuality
                     )
                 }
+                output = null // ownership transferred to the save task
             } catch (t: Throwable) {
-                if (!output.isRecycled) output.recycle()
-                throw t
+                Log.e(TAG, "Could not prepare screenshot frame", t)
+                output?.let { if (!it.isRecycled) it.recycle() }
+                toast(request.context, "Не удалось подготовить скриншот: " + (t.message ?: "ошибка"))
+            } finally {
+                if (!snapshot.isRecycled) snapshot.recycle()
             }
-        } catch (t: Throwable) {
-            Log.e(TAG, "Could not prepare source-only screenshot", t)
-            toast(request.context, "Не удалось подготовить скриншот: " + (t.message ?: "ошибка"))
         }
+
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            finishCapture.run()
+        } else {
+            mainHandler.post(finishCapture)
+        }
+        // Consume only this explicitly requested frame; do not start OCR/translation.
         return true
     }
 

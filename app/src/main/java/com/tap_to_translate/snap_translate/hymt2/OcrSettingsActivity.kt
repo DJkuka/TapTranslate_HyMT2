@@ -40,6 +40,7 @@ class OcrSettingsActivity : Activity() {
     private lateinit var screenshotFolderLabel: TextView
     private lateinit var screenshotJpegQualitySeek: SeekBar
     private lateinit var screenshotJpegQualityLabel: TextView
+    private lateinit var screenshotButtonSwitch: Switch
     private val floatControls = LinkedHashMap<String, FloatControlSpec>()
     private val intControls = LinkedHashMap<String, IntControlSpec>()
     private val spinnerControls = LinkedHashMap<String, SpinnerControlSpec>()
@@ -270,12 +271,17 @@ class OcrSettingsActivity : Activity() {
         }
         root.addView(bubbleWrapSwitch, matchWrap(dp(14)))
 
-        addText(root, "СКРИНШОТЫ ПЕРЕВОДА", 16f, true, dp(8))
+        addText(root, "СКРИНШОТЫ", 16f, true, dp(8))
         addText(root,
-            "Настройки формата и сохранения снимков страницы с наложенным переводом.",
+            "Настройки сохранения снимков страницы, в том числе до выполнения перевода.",
             13f, false, dp(8))
 
         val screenshotPrefs = getSharedPreferences(SCREENSHOT_PREFS, MODE_PRIVATE)
+        screenshotButtonSwitch = Switch(this).apply {
+            text = "Показывать плавающую кнопку скриншота"
+            isChecked = screenshotPrefs.getBoolean(KEY_SCREENSHOT_BUTTON_ENABLED, false)
+        }
+        root.addView(screenshotButtonSwitch, matchWrap(dp(12)))
         val screenshotFormats = listOf("PNG · без потерь", "JPEG · компактнее")
         screenshotFormatSpinner = Spinner(this).apply {
             adapter = ArrayAdapter(
@@ -359,12 +365,16 @@ class OcrSettingsActivity : Activity() {
                 switchControls.forEach { (key, control) -> editor.putBoolean(key, control.isChecked) }
                 editor.apply()
                 screenshotPrefs.edit()
+                    .putBoolean(KEY_SCREENSHOT_BUTTON_ENABLED, screenshotButtonSwitch.isChecked)
                     .putString(
                         KEY_SCREENSHOT_FORMAT,
                         if (screenshotFormatSpinner.selectedItemPosition == 1) "jpeg" else "png"
                     )
                     .putInt(KEY_SCREENSHOT_JPEG_QUALITY, screenshotJpegQualitySeek.progress + 50)
                     .apply()
+                FloatingScreenshotButton.updateEnabled(
+                    this@OcrSettingsActivity, screenshotButtonSwitch.isChecked
+                )
                 val screenshotFormatLabel =
                     if (screenshotFormatSpinner.selectedItemPosition == 1) "JPEG" else "PNG"
                 status.text = "Сохранено: detThresh=" + currentFloat(KEY_DET_THRESH, 0.20f) +
@@ -744,6 +754,7 @@ class OcrSettingsActivity : Activity() {
         private const val KEY_SCREENSHOT_TREE_URI = "screenshot_tree_uri"
         private const val KEY_SCREENSHOT_FORMAT = "screenshot_format"
         private const val KEY_SCREENSHOT_JPEG_QUALITY = "screenshot_jpeg_quality"
+        private const val KEY_SCREENSHOT_BUTTON_ENABLED = "floating_screenshot_button_enabled"
         private const val REQUEST_SCREENSHOT_FOLDER = 4107
     }
 }

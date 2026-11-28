@@ -1374,6 +1374,104 @@ def patch_floating_icon_z_order(base: Path) -> None:
         service.write_text(source, encoding="utf-8")
     print("Added floating icon re-stack after translation window creation")
 
+
+def patch_floating_screenshot_button(base: Path) -> None:
+    """Attach an independent secure camera overlay to the host floating-icon lifecycle."""
+    widget = base / "smali_classes3/com/tap_to_translate/snap_translate/domain/main/widgets/FloatingIconWidget.smali"
+    text = widget.read_text(encoding="utf-8")
+
+    for method_name, hook in (
+        (
+            "onAttachedToWindow",
+            "    invoke-static {p0}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->attach(Landroid/view/View;)V",
+        ),
+        (
+            "onDetachedFromWindow",
+            "    invoke-static {p0}, Lcom/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton;->detach(Landroid/view/View;)V",
+        ),
+    ):
+        pattern = re.compile(
+            r"(?ms)^\.method [^\\n]* " + method_name + r"\\(\\)V\\n.*?^\.end method"
+        )
+        match = pattern.search(text)
+        if not match:
+            raise RuntimeError("Could not locate FloatingIconWidget." + method_name)
+        method = match.group(0)
+        if hook not in method:
+            anchor = "    invoke-super {p0}, Landroid/view/View;->" + method_name + "()V"
+            if method.count(anchor) != 1:
+                raise RuntimeError("Unexpected FloatingIconWidget." + method_name + " body")
+            method = method.replace(anchor, anchor + "\\n\\n" + hook, 1)
+            text = text[:match.start()] + method + text[match.end():]
+    widget.write_text(text, encoding="utf-8")
+
+    # The callback is posted only after xh/c has created and stored the cropped
+    # Bitmap in xh/c.j. Consume explicitly requested screenshots before OCR starts.
+    callback = base / "smali_classes3/xh/a.smali"
+    callback_text = callback.read_text(encoding="utf-8")
+    pattern = re.compile(r"(?ms)^\.method public run\\(\\)V\\n.*?^\.end method")
+    match = pattern.search(callback_text)
+    if not match:
+        raise RuntimeError("Could not locate xh/a.run screenshot-to-OCR callback")
+    method = match.group(0)
+    if "TranslationScreenshotManager;->consumePendingFrame" not in method:
+        locals_match = re.search(r"(?m)^    \.locals (\\d+)$", method)
+        if not locals_match or int(locals_match.group(1)) < 3:
+            raise RuntimeError("Unexpected xh/a.run register layout")
+        hook = """    iget-object v0, p0, Lxh/a;->c:Lxh/c;
+
+    iget-object v1, v0, Lxh/c;->i:Lcom/tap_to_translate/snap_translate/domain/main/service/ScreenTranslateService;
+
+    iget-object v2, v0, Lxh/c;->j:Landroid/graphics/Bitmap;
+
+    invoke-static {v1, v2}, Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager;->consumePendingFrame(Ljava/lang/Object;Landroid/graphics/Bitmap;)Z
+
+    move-result v0
+
+    if-eqz v0, :taptranslate_screenshot_continue
+
+    return-void
+
+    :taptranslate_screenshot_continue
+"""
+        insert_at = locals_match.end()
+        method = method[:insert_at] + "\\n" + hook + method[insert_at:]
+        callback_text = callback_text[:match.start()] + method + callback_text[match.end():]
+        callback.write_text(callback_text, encoding="utf-8")
+
+    listeners = list(base.glob(
+        "smali*/com/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener.smali"
+    ))
+    if len(listeners) != 1:
+        raise RuntimeError(
+            "Expected exactly one TranslationScreenshotClickListener, found " + str(len(listeners))
+        )
+    listener = listeners[0]
+    listener_text = listener.read_text(encoding="utf-8")
+    constructor = ".method public constructor <init>(Lrh/c;)V"
+    start = listener_text.find(constructor)
+    end = listener_text.find(".end method", start)
+    if start < 0 or end < 0:
+        raise RuntimeError("Could not locate TranslationScreenshotClickListener constructor")
+    method = listener_text[start:end]
+    register_hook = (
+        "    invoke-static {p1}, "
+        "Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager;->registerOverlay(Ljava/lang/Object;)V"
+    )
+    if register_hook not in method:
+        anchor = (
+            "    iput-object p1, p0, "
+            "Lcom/tap_to_translate/snap_translate/hymt2/TranslationScreenshotClickListener;->a:Lrh/c;"
+        )
+        if method.count(anchor) != 1:
+            raise RuntimeError("Could not locate screenshot listener's translation-overlay field")
+        method = method.replace(anchor, anchor + "\\n\\n" + register_hook, 1)
+        listener_text = listener_text[:start] + method + listener_text[end:]
+        listener.write_text(listener_text, encoding="utf-8")
+
+    print("Added independent secure screenshot button, fresh-frame capture hook and active translation-overlay registration")
+
+
 def patch_per_panel_fonts(base: Path) -> None:
     """Apply transient per-region typefaces before the existing auto-fit layout."""
     for rel, owner in (
@@ -2081,6 +2179,7 @@ def copy_package(helper_dirs: list[Path], base: Path, rel_prefixes: tuple[str, .
                     "com/tap_to_translate/snap_translate/hymt2/OcrSettingsActivity",
                     "com/tap_to_translate/snap_translate/hymt2/TranslationRegionEditor",
                     "com/tap_to_translate/snap_translate/hymt2/TranslationScreenshotManager",
+                    "com/tap_to_translate/snap_translate/hymt2/FloatingScreenshotButton",
                     "com/tap_to_translate/snap_translate/hymt2/FontDisplayNames",
                     "com/tap_to_translate/snap_translate/hymt2/PanelFontStore",
                     "com/tap_to_translate/snap_translate/hymt2/FloatingIconZOrderFix",
@@ -2336,6 +2435,7 @@ def main() -> int:
     patch_per_panel_fonts(base)
     patch_translation_region_editor(base)
     patch_floating_icon_z_order(base)
+    patch_floating_screenshot_button(base)
     patch_display_profiles(base)
     patch_display_profiles_click(base)
     patch_profile_host_notifier(base)
