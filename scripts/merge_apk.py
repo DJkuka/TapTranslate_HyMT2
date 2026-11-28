@@ -1391,7 +1391,7 @@ def patch_floating_screenshot_button(base: Path) -> None:
         ),
     ):
         pattern = re.compile(
-            r"(?ms)^\.method [^\\n]* " + method_name + r"\\(\\)V\\n.*?^\.end method"
+            r"(?ms)^\.method [^\n]* " + method_name + r"\(\)V\n.*?^\.end method"
         )
         match = pattern.search(text)
         if not match:
@@ -1401,7 +1401,7 @@ def patch_floating_screenshot_button(base: Path) -> None:
             anchor = "    invoke-super {p0}, Landroid/view/View;->" + method_name + "()V"
             if method.count(anchor) != 1:
                 raise RuntimeError("Unexpected FloatingIconWidget." + method_name + " body")
-            method = method.replace(anchor, anchor + "\\n\\n" + hook, 1)
+            method = method.replace(anchor, anchor + "\n\n" + hook, 1)
             text = text[:match.start()] + method + text[match.end():]
     widget.write_text(text, encoding="utf-8")
 
@@ -1409,13 +1409,13 @@ def patch_floating_screenshot_button(base: Path) -> None:
     # Bitmap in xh/c.j. Consume explicitly requested screenshots before OCR starts.
     callback = base / "smali_classes3/xh/a.smali"
     callback_text = callback.read_text(encoding="utf-8")
-    pattern = re.compile(r"(?ms)^\.method public run\\(\\)V\\n.*?^\.end method")
+    pattern = re.compile(r"(?ms)^\.method public run\(\)V\n.*?^\.end method")
     match = pattern.search(callback_text)
     if not match:
         raise RuntimeError("Could not locate xh/a.run screenshot-to-OCR callback")
     method = match.group(0)
     if "TranslationScreenshotManager;->consumePendingFrame" not in method:
-        locals_match = re.search(r"(?m)^    \.locals (\\d+)$", method)
+        locals_match = re.search(r"(?m)^    \.locals (\d+)$", method)
         if not locals_match or int(locals_match.group(1)) < 3:
             raise RuntimeError("Unexpected xh/a.run register layout")
         hook = """    iget-object v0, p0, Lxh/a;->c:Lxh/c;
@@ -1435,7 +1435,7 @@ def patch_floating_screenshot_button(base: Path) -> None:
     :taptranslate_screenshot_continue
 """
         insert_at = locals_match.end()
-        method = method[:insert_at] + "\\n" + hook + method[insert_at:]
+        method = method[:insert_at] + "\n" + hook + method[insert_at:]
         callback_text = callback_text[:match.start()] + method + callback_text[match.end():]
         callback.write_text(callback_text, encoding="utf-8")
 
